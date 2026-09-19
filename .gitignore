@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+build/
+dist/
+*.spec
+.vscode/
+.idea/
+
+# Local Claude Code context — not for the public repo
+CLAUDE.md
+.atl/

@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-smoke-test:
+    name: Lint & smoke test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install system dependencies (Linux, for headless Qt)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libxkbcommon0 libgl1
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install ruff
+
+      - name: Lint with ruff
+        run: ruff check .
+
+      - name: Byte-compile all sources (catches syntax errors)
+        run: python -m compileall -q main.py app tests examples
+
+      - name: Smoke test (CLI & headless server)
+        shell: bash
+        run: |
+          python main.py --help
+          python main.py --headless --port 13199 &
+          SERVER_PID=$!
+          python -c "
+          import urllib.request, time
+          ready = False
+          for _ in range(40):
+              time.sleep(0.3)
+              try:
+                  res = urllib.request.urlopen('http://127.0.0.1:13199/health', timeout=1.0)
+                  if res.getcode() == 200:
+                      print('Desktop API server healthy:', res.read().decode())
+                      ready = True
+                      break
+              except Exception:
+                  pass
+          assert ready, 'Server failed to start in time'
+          "
+          kill $SERVER_PID

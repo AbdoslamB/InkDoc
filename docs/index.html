@@ -1,0 +1,678 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>InkDoc: Multi-Engine Document-to-Markdown Workbench</title>
+<meta name="description" content="InkDoc is a free, open-source multi-engine desktop and web workbench for converting documents to Markdown. Powered by Microsoft MarkItDown, IBM Docling, and Markit." />
+<link rel="icon" type="image/svg+xml" href="logo.svg" />
+<style>
+  :root {
+    --bg: #F1F3F0;
+    --bg-elevated: #FBFCFB;
+    --bg-muted: #E7EBE6;
+    --text: #1A211C;
+    --text-muted: #5E6A63;
+    --border: #C5CEC6;
+    --accent: #0F6E56;
+    --accent-hover: #0C5A47;
+    --accent-tint: #DCEBE4;
+    --accent-text: #F4FBF7;
+    --code-bg: #101614;
+    --code-text: #E6EDE8;
+    --shadow: 0 1px 2px rgba(16, 22, 20, 0.06), 0 12px 28px -8px rgba(16, 22, 20, 0.16);
+    --link-text: #0C5A47;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101614;
+      --bg-elevated: #181E1B;
+      --bg-muted: #0C110F;
+      --text: #E6EDE8;
+      --text-muted: #8A968E;
+      --border: #2A332E;
+      --accent: #3DAB86;
+      --accent-hover: #56C49C;
+      --accent-tint: #16352C;
+      --accent-text: #06241B;
+      --code-bg: #0A0F0D;
+      --code-text: #E6EDE8;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 16px 32px -8px rgba(0, 0, 0, 0.45);
+      --link-text: #56C49C;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #101614; --bg-elevated: #181E1B; --bg-muted: #0C110F; --text: #E6EDE8;
+    --text-muted: #8A968E; --border: #2A332E; --accent: #3DAB86; --accent-hover: #56C49C;
+    --accent-tint: #16352C; --accent-text: #06241B; --code-bg: #0A0F0D; --code-text: #E6EDE8;
+    --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 16px 32px -8px rgba(0,0,0,0.45);
+    --link-text: #56C49C;
+  }
+  :root[data-theme="light"] {
+    --bg: #F1F3F0; --bg-elevated: #FBFCFB; --bg-muted: #E7EBE6; --text: #1A211C;
+    --text-muted: #5E6A63; --border: #C5CEC6; --accent: #0F6E56; --accent-hover: #0C5A47;
+    --accent-tint: #DCEBE4; --accent-text: #F4FBF7; --code-bg: #101614; --code-text: #E6EDE8;
+    --shadow: 0 1px 2px rgba(16,22,20,0.06), 0 12px 28px -8px rgba(16,22,20,0.16);
+    --link-text: #0C5A47;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Ubuntu", "Noto Sans", sans-serif;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  main { max-width: 920px; margin: 0 auto; padding: 0 24px; }
+  a { color: var(--link-text); }
+  a:focus-visible, button:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px;
+  }
+
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .hero-animate { animation: rise 0.6s cubic-bezier(0.16, 1, 0.3, 1) both; }
+    .hero-animate:nth-child(2) { animation-delay: 0.05s; }
+    .hero-animate:nth-child(3) { animation-delay: 0.1s; }
+    .hero-animate:nth-child(4) { animation-delay: 0.15s; }
+
+    .reveal, .screenshot-frame { opacity: 0; transform: translateY(12px); }
+    .reveal.in-view, .screenshot-frame.in-view {
+      opacity: 1; transform: translateY(0);
+      transition: opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1), transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    #how-it-works .flow-step {
+      opacity: 0; transform: translateX(-28px);
+      transition: opacity 0.5s cubic-bezier(0.16, 1, 0.3, 1), transform 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    #how-it-works.in-view .flow-step { opacity: 1; transform: translateX(0); }
+    #how-it-works.in-view .flow-step:nth-child(1) { transition-delay: 0.05s; }
+    #how-it-works.in-view .flow-step:nth-child(2) { transition-delay: 0.18s; }
+    #how-it-works.in-view .flow-step:nth-child(3) { transition-delay: 0.31s; }
+  }
+
+  /* Nav */
+  .nav {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 20px 24px; max-width: 920px; margin: 0 auto;
+  }
+  .brand { display: flex; align-items: center; gap: 9px; font-weight: 600; font-size: 1.02rem; text-decoration: none; color: var(--text); }
+  .brand .dot { width: 9px; height: 9px; border-radius: 3px; background: var(--accent); display: inline-block; flex: none; }
+  .nav-links { display: flex; align-items: center; gap: 22px; font-size: 0.9rem; }
+  .nav-links a { color: var(--text-muted); text-decoration: none; transition: color 0.15s ease; }
+  .nav-links a:hover { color: var(--accent); }
+  .nav-star { display: inline-flex; align-items: center; gap: 3px; color: #c9972b !important; }
+  .nav-star:hover { color: #e0ac35 !important; }
+  .nav-star .star-count { font-variant-numeric: tabular-nums; }
+  @media (prefers-color-scheme: dark) { .nav-star { color: #e0ac35 !important; } .nav-star:hover { color: #f0c060 !important; } }
+  :root[data-theme="dark"] .nav-star { color: #e0ac35 !important; }
+  :root[data-theme="dark"] .nav-star:hover { color: #f0c060 !important; }
+  .lang-toggle {
+    background: var(--bg-elevated); border: 1px solid var(--border); color: var(--text-muted);
+    border-radius: 6px; padding: 4px 9px; font-size: 0.82rem; font-weight: 600; cursor: pointer;
+    transition: color 0.15s ease, background-color 0.15s ease;
+  }
+  .lang-toggle:hover { color: var(--accent); background: var(--bg-muted); }
+
+  /* Hero */
+  .hero { text-align: center; padding: 64px 0 44px; }
+  .hero h1 {
+    font-size: clamp(2.1rem, 5vw, 3.25rem);
+    font-weight: 700; letter-spacing: -0.03em; line-height: 1.1; margin: 0 0 18px;
+  }
+  .hero p.lead {
+    color: var(--text-muted); font-size: 1.12rem; max-width: 560px; margin: 0 auto 30px;
+  }
+  .badges { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin: 16px 0 0; opacity: 0.85; }
+  .badges img { display: block; height: 16px; }
+  .cta-row { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .cta-note { color: var(--text-muted); font-size: 0.82rem; margin: 14px 0 0; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 12px 22px; border-radius: 8px; font-weight: 600; font-size: 0.95rem;
+    text-decoration: none; border: 1px solid transparent; transition: background-color 0.15s ease, transform 0.15s ease;
+  }
+  .btn:active { transform: translateY(1px); }
+  .btn-primary { background: var(--accent); color: var(--accent-text); }
+  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-secondary { background: var(--bg-elevated); color: var(--text); border-color: var(--border); }
+  .btn-secondary:hover { background: var(--bg-muted); }
+
+  /* Screenshot */
+  .screenshot-frame {
+    margin: 8px 0 72px; border-radius: 14px; overflow: hidden;
+    border: 1px solid var(--border); box-shadow: var(--shadow);
+  }
+  .screenshot-frame img { display: block; width: 100%; height: auto; }
+
+  /* Sections */
+  section { margin-bottom: 72px; }
+  h2 { font-size: 1.55rem; letter-spacing: -0.015em; margin: 0 0 10px; }
+  .section-lead { color: var(--text-muted); margin: 0 0 32px; max-width: 620px; }
+
+  /* Features: one elevated primary feature + a tight list of the rest, not a card grid */
+  .feature-layout { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 20px; align-items: stretch; }
+  @media (max-width: 720px) { .feature-layout { grid-template-columns: 1fr; } }
+
+  .feature-primary {
+    background: var(--accent-tint); border: 1px solid var(--border); border-radius: 14px;
+    padding: 28px; display: flex; flex-direction: column; justify-content: center;
+  }
+  .feature-primary .path-chip {
+    display: inline-flex; align-items: center; gap: 6px; align-self: flex-start;
+    background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 7px;
+    padding: 5px 10px; font-size: 0.8rem; font-family: "Cascadia Code", Consolas, monospace;
+    color: var(--text-muted); margin-bottom: 16px;
+  }
+  .feature-primary h3 { font-size: 1.2rem; margin: 0 0 8px; letter-spacing: -0.01em; }
+  .feature-primary p { color: var(--text-muted); margin: 0; font-size: 0.96rem; }
+
+  .feature-list {
+    background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 14px;
+    padding: 6px 24px;
+  }
+  .feature-row { display: flex; gap: 14px; padding: 16px 0; }
+  .feature-row + .feature-row { border-top: 1px solid var(--border); }
+  .feature-row .mark { flex: none; width: 20px; text-align: center; font-size: 1rem; line-height: 1.6; }
+  .feature-row h3 { font-size: 0.96rem; margin: 0 0 3px; }
+  .feature-row p { color: var(--text-muted); font-size: 0.88rem; margin: 0; }
+
+  /* How it works: numbered cards */
+  .flow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  @media (max-width: 640px) { .flow { grid-template-columns: 1fr; } }
+  .flow-step {
+    background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 14px;
+    padding: 20px 20px 22px; min-width: 0;
+  }
+  .flow-num {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; border-radius: 50%; margin-bottom: 12px;
+    background: var(--text); color: var(--bg); font-weight: 700; font-size: 0.82rem;
+  }
+  .flow-step h3 { font-size: 1rem; margin: 0 0 6px; }
+  .flow-step p { margin: 0; color: var(--text-muted); font-size: 0.92rem; }
+
+  /* Formats */
+  .formats { display: flex; flex-wrap: wrap; gap: 8px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--bg-muted); border: 1px solid var(--border); color: var(--text);
+    padding: 6px 12px; border-radius: 999px; font-size: 0.85rem;
+    transition: border-color 0.15s ease, transform 0.15s ease;
+  }
+  .pill:hover { border-color: var(--text-muted); transform: translateY(-1px); }
+  .pill img { display: block; width: 15px; height: 15px; flex: none; }
+
+  /* Install tabs */
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+  .tab {
+    background: transparent; border: none; padding: 10px 16px; font-size: 0.92rem; font-weight: 600;
+    color: var(--text-muted); cursor: pointer; border-bottom: 2px solid transparent;
+  }
+  .tab[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+  @media (prefers-reduced-motion: no-preference) {
+    .tab-panel.active { opacity: 0; transition: opacity 0.15s ease; }
+    .tab-panel.active.in { opacity: 1; }
+  }
+
+  .source-heading { font-size: 1.1rem; color: var(--text-muted); margin: 0 0 4px; }
+  .source-note { color: var(--text-muted); font-size: 0.85rem; margin: 0 0 20px; }
+
+  .download-list {
+    background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 14px;
+    padding: 6px 24px; margin-bottom: 28px;
+  }
+  .download-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 16px 0;
+  }
+  .download-row + .download-row { border-top: 1px solid var(--border); }
+  .download-row .platform { font-weight: 600; font-size: 0.96rem; }
+  .download-row .platform-note { color: var(--text-muted); font-size: 0.85rem; margin: 2px 0 0; }
+  .download-row .btn { flex: none; padding: 9px 16px; font-size: 0.88rem; }
+  .download-row .btn:hover { background: var(--accent-tint); border-color: var(--accent); color: var(--accent); }
+  .platform-icon { display: inline-flex; vertical-align: middle; width: 18px; height: 18px; margin-left: 8px; }
+  .platform-icon img { display: block; width: 100%; height: 100%; }
+  .platform-icon-windows { width: 14px; height: 14px; }
+  .platform-icon-apple { position: relative; top: -2px; }
+  pre {
+    background: var(--code-bg); color: var(--code-text); border-radius: 8px;
+    padding: 16px; overflow-x: auto; font-size: 0.86rem; margin: 0 0 10px;
+    font-family: "Cascadia Code", Consolas, "SFMono-Regular", Menlo, monospace;
+  }
+  code { font-family: "Cascadia Code", Consolas, "SFMono-Regular", Menlo, monospace; }
+
+  /* Footer */
+  footer {
+    border-top: 1px solid var(--border); padding: 28px 0 48px;
+    color: var(--text-muted); font-size: 0.88rem; text-align: center;
+  }
+  footer p { margin: 0 0 6px; }
+  footer a { color: var(--text-muted); text-decoration: underline; transition: color 0.15s ease; }
+  .author-avatar { display: inline-block; margin-top: 12px; }
+  .author-avatar img { display: block; width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--border); }
+
+  .disclaimer {
+    background: var(--bg-muted); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 18px; font-size: 0.88rem; color: var(--text-muted); margin: 40px 0 32px;
+  }
+</style>
+</head>
+<body>
+
+<nav class="nav">
+  <a class="brand" href="#top"><img src="logo.svg" alt="InkDoc Logo" width="22" height="22" style="border-radius: 5px; vertical-align: middle; margin-right: 8px; display: inline-block;" />InkDoc</a>
+  <div class="nav-links">
+    <a href="#features" data-i18n="nav.features">Features</a>
+    <a href="#how-it-works" data-i18n="nav.how">How it works</a>
+    <a href="#formats" data-i18n="nav.formats">Formats</a>
+    <a href="#install" data-i18n="nav.install">Install</a>
+    <a href="https://github.com/AbdoslamB/inkdoc">GitHub</a>
+    <a class="nav-star" id="navStar" href="https://github.com/AbdoslamB/inkdoc" aria-label="Star this project on GitHub" data-i18n-aria-label="nav.starAriaLabel">
+      ★ <span class="star-count" id="starCount" aria-hidden="true"></span>
+    </a>
+    <button class="lang-toggle" id="langToggle" type="button" aria-label="Switch language"></button>
+  </div>
+</nav>
+
+<main id="top">
+
+  <section class="hero">
+    <h1 class="hero-animate" data-i18n="hero.title">Drop a file. Get Markdown. Done.</h1>
+    <p class="lead hero-animate" data-i18n-html="hero.lead">
+      A free, open-source desktop app for Microsoft's <code>markitdown</code>.
+      Drag any file or paste a URL, and it converts and saves straight to your
+      Downloads folder. No manual export step, no CLI required.
+    </p>
+    <div class="cta-row hero-animate">
+      <a class="btn btn-primary" href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc.exe" data-i18n="cta.windows">Download for Windows (.exe)</a>
+      <a class="btn btn-secondary" href="https://github.com/AbdoslamB/inkdoc/releases/latest" data-i18n="cta.other">Download for macOS / Linux</a>
+    </div>
+    <p class="cta-note hero-animate" data-i18n="cta.note">Unofficial, open-source, not affiliated with Microsoft.</p>
+    <div class="badges hero-animate">
+      <a href="https://github.com/AbdoslamB/inkdoc/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License"></a>
+      <a href="https://github.com/AbdoslamB/inkdoc/releases"><img src="https://img.shields.io/github/v/release/AbdoslamB/inkdoc" alt="Latest release"></a>
+      <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-informational" alt="Cross-platform">
+    </div>
+  </section>
+
+  <div class="screenshot-frame">
+    <img src="demo.gif" alt="InkDoc walkthrough: add a file, it converts, the rendered markdown preview appears" data-i18n-alt="screenshot.alt" loading="lazy">
+  </div>
+
+  <section id="features" class="reveal">
+    <h2 data-i18n="features.title">Why this exists</h2>
+    <p class="section-lead" data-i18n-html="features.lead">markitdown itself is a command-line tool: you run it, redirect output, manage files yourself. This wraps the same engine with no export step. Drop a file and the <code>.md</code> lands in Downloads the moment it converts.</p>
+
+    <div class="feature-layout">
+      <div class="feature-primary">
+        <span class="path-chip">~/Downloads/report.md</span>
+        <h3 data-i18n="features.primary.title">Auto-saves to Downloads, always</h3>
+        <p data-i18n-html="features.primary.body">The moment a file finishes converting, the <code>.md</code> lands in your Downloads folder under its original name. Name collisions get a safe numeric suffix instead of overwriting anything. No export dialog to remember.</p>
+      </div>
+
+      <div class="feature-list">
+        <div class="feature-row">
+          <span class="mark">→</span>
+          <div><h3 data-i18n="features.list.1.title">Live preview</h3><p data-i18n="features.list.1.body">Rendered or raw Markdown, editable before saving a copy elsewhere.</p></div>
+        </div>
+        <div class="feature-row">
+          <span class="mark">→</span>
+          <div><h3 data-i18n="features.list.2.title">Light &amp; dark themes</h3><p data-i18n="features.list.2.body">Follows your system automatically, or switch manually.</p></div>
+        </div>
+        <div class="feature-row">
+          <span class="mark">→</span>
+          <div><h3 data-i18n="features.list.3.title">English &amp; Spanish</h3><p data-i18n="features.list.3.body">Switch live from the menu bar, no restart needed.</p></div>
+        </div>
+        <div class="feature-row">
+          <span class="mark">→</span>
+          <div><h3 data-i18n="features.list.4.title">Advanced options, out of the way</h3><p data-i18n="features.list.4.body">Plugins, Azure Document Intelligence, and format hints live in a separate settings dialog.</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="how-it-works" class="reveal">
+    <h2 data-i18n="how.title">How it works</h2>
+    <div class="flow">
+      <div class="flow-step">
+        <span class="flow-num" aria-hidden="true">1</span>
+        <h3 data-i18n="how.1.title">Drop a file</h3>
+        <p data-i18n="how.1.body">Or click the drop zone to browse, or paste a URL.</p>
+      </div>
+      <div class="flow-step">
+        <span class="flow-num" aria-hidden="true">2</span>
+        <h3 data-i18n="how.2.title">It converts</h3>
+        <p data-i18n="how.2.body">Runs in the background. The interface never freezes, even on large batches.</p>
+      </div>
+      <div class="flow-step">
+        <span class="flow-num" aria-hidden="true">3</span>
+        <h3 data-i18n="how.3.title">Find it in Downloads</h3>
+        <p data-i18n-html="how.3.body">The <code>.md</code> file is already there. Double-click the row to open its folder.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="formats" class="reveal">
+    <h2 data-i18n="formats.title">Supported formats</h2>
+    <p class="section-lead" data-i18n="formats.lead">Anything markitdown supports:</p>
+    <div class="formats">
+      <span class="pill"><img src="icons/pdf.svg" alt="" />PDF</span>
+      <span class="pill"><img src="icons/word.svg" alt="" />Word</span>
+      <span class="pill"><img src="icons/excel.svg" alt="" />Excel</span>
+      <span class="pill"><img src="icons/powerpoint.svg" alt="" />PowerPoint</span>
+      <span class="pill"><img src="icons/image.svg" alt="" /><span data-i18n="formats.images">Images (EXIF / OCR)</span></span>
+      <span class="pill"><img src="icons/audio.svg" alt="" /><span data-i18n="formats.audio">Audio (transcription)</span></span>
+      <span class="pill"><img src="icons/html5.svg" alt="" />HTML</span>
+      <span class="pill"><img src="icons/csv.svg" alt="" />CSV</span>
+      <span class="pill"><img src="icons/json.svg" alt="" />JSON</span>
+      <span class="pill"><img src="icons/xml.svg" alt="" />XML</span>
+      <span class="pill"><img src="icons/zip.svg" alt="" /><span data-i18n="formats.zip">ZIP archives</span></span>
+      <span class="pill"><img src="icons/epub.svg" alt="" />EPub</span>
+      <span class="pill"><img src="icons/youtube.svg" alt="" /><span data-i18n="formats.youtube">YouTube URLs</span></span>
+      <span class="pill"><img src="icons/web.svg" alt="" /><span data-i18n="formats.web">Web pages</span></span>
+    </div>
+  </section>
+
+  <section id="install" class="reveal">
+    <h2 data-i18n="install.title">Install &amp; run</h2>
+    <p class="section-lead" data-i18n="install.lead">Grab a ready-to-run build for your platform, or run from source.</p>
+
+    <div class="download-list">
+      <div class="download-row">
+        <div>
+          <p class="platform">Windows<span class="platform-icon platform-icon-windows" aria-hidden="true"><img src="icons/windows.svg" alt="" /></span></p>
+          <p class="platform-note" data-i18n="download.windows.note">Installer or standalone .exe, no Python required.</p>
+        </div>
+        <a class="btn btn-secondary" href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc.exe" data-i18n="download.exe.button">Download .exe</a>
+      </div>
+      <div class="download-row">
+        <div>
+          <p class="platform">macOS<span class="platform-icon platform-icon-apple" aria-hidden="true"><img src="icons/apple.svg" alt="" /></span></p>
+          <p class="platform-note" data-i18n="download.bundle.note">Packaged app bundle, zipped.</p>
+        </div>
+        <a class="btn btn-secondary" href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-macos.zip" data-i18n="download.zip.button">Download .zip</a>
+      </div>
+      <div class="download-row">
+        <div>
+          <p class="platform">Linux<span class="platform-icon" aria-hidden="true"><img src="icons/linux.svg" alt="" width="18" height="18" /></span></p>
+          <p class="platform-note" data-i18n="download.bundle.note">Packaged app bundle, zipped.</p>
+        </div>
+        <a class="btn btn-secondary" href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-linux.zip" data-i18n="download.zip.button">Download .zip</a>
+      </div>
+    </div>
+
+    <h3 class="source-heading" data-i18n="install.source.heading">Run from source</h3>
+    <p class="source-note" data-i18n="install.source.note">For contributors or other platforms. Requires Python 3.10+.</p>
+
+    <div class="tabs" role="tablist">
+      <button class="tab" id="tab-win" role="tab" aria-selected="true" aria-controls="panel-win" tabindex="0" data-target="panel-win">Windows</button>
+      <button class="tab" id="tab-mac" role="tab" aria-selected="false" aria-controls="panel-mac" tabindex="-1" data-target="panel-mac">macOS / Linux</button>
+    </div>
+
+    <div class="tab-panel active" id="panel-win" role="tabpanel" aria-labelledby="tab-win">
+<pre>git clone https://github.com/AbdoslamB/inkdoc.git
+cd inkdoc
+python -m pip install -r requirements.txt
+run.bat</pre>
+    </div>
+    <div class="tab-panel" id="panel-mac" role="tabpanel" aria-labelledby="tab-mac">
+<pre>git clone https://github.com/AbdoslamB/inkdoc.git
+cd inkdoc
+python3 -m pip install -r requirements.txt
+./run.sh</pre>
+    </div>
+  </section>
+
+  <div class="disclaimer" data-i18n-html="disclaimer.body">
+    This is an independent, community-built GUI. It is <strong>not</strong> developed,
+    maintained, or endorsed by Microsoft. It wraps the open-source
+    <a href="https://github.com/microsoft/markitdown">markitdown</a> package (MIT License).
+    All credit for the underlying conversion engine goes to Microsoft and its contributors.
+  </div>
+
+</main>
+
+<footer>
+  <p data-i18n="footer.license">InkDoc · MIT Licensed</p>
+  <p><a href="https://github.com/AbdoslamB/inkdoc">GitHub</a> · <a href="https://github.com/microsoft/markitdown">markitdown (Microsoft)</a></p>
+  <a class="author-avatar" href="https://github.com/AbdoslamB" target="_blank" rel="noopener noreferrer" aria-label="AbdoslamB on GitHub">
+    <img src="https://github.com/AbdoslamB.png" alt="Abdoslam Baabbad" width="40" height="40" />
+  </a>
+</footer>
+
+<script>
+  var TRANSLATIONS = {
+    en: {
+      "nav.features": "Features",
+      "nav.how": "How it works",
+      "nav.formats": "Formats",
+      "nav.install": "Install",
+      "nav.starAriaLabel": "Star this project on GitHub",
+      "hero.title": "Drop a file. Get Markdown. Done.",
+      "hero.lead": "A free, open-source multi-engine workbench powered by Microsoft's <code>markitdown</code>, IBM <code>docling</code>, and <code>markit</code>. Drag any file or paste a URL, and it converts and saves straight to your Downloads folder. No manual export step, no CLI required.",
+      "cta.windows": "Download for Windows (.exe)",
+      "cta.other": "Download for macOS / Linux",
+      "cta.note": "Unofficial, open-source, not affiliated with Microsoft.",
+      "screenshot.alt": "InkDoc walkthrough: add a file, it converts, the rendered markdown preview appears",
+      "features.title": "Why this exists",
+      "features.lead": "markitdown itself is a command-line tool: you run it, redirect output, manage files yourself. This wraps the same engine with no export step. Drop a file and the <code>.md</code> lands in Downloads the moment it converts.",
+      "features.primary.title": "Auto-saves to Downloads, always",
+      "features.primary.body": "The moment a file finishes converting, the <code>.md</code> lands in your Downloads folder under its original name. Name collisions get a safe numeric suffix instead of overwriting anything. No export dialog to remember.",
+      "features.list.1.title": "Live preview",
+      "features.list.1.body": "Rendered or raw Markdown, editable before saving a copy elsewhere.",
+      "features.list.2.title": "Light & dark themes",
+      "features.list.2.body": "Follows your system automatically, or switch manually.",
+      "features.list.3.title": "English & Spanish",
+      "features.list.3.body": "Switch live from the menu bar, no restart needed.",
+      "features.list.4.title": "Advanced options, out of the way",
+      "features.list.4.body": "Plugins, Azure Document Intelligence, and format hints live in a separate settings dialog.",
+      "how.title": "How it works",
+      "how.1.title": "Drop a file",
+      "how.1.body": "Or click the drop zone to browse, or paste a URL.",
+      "how.2.title": "It converts",
+      "how.2.body": "Runs in the background. The interface never freezes, even on large batches.",
+      "how.3.title": "Find it in Downloads",
+      "how.3.body": "The <code>.md</code> file is already there. Double-click the row to open its folder.",
+      "formats.title": "Supported formats",
+      "formats.lead": "Anything markitdown supports:",
+      "formats.images": "Images (EXIF / OCR)",
+      "formats.audio": "Audio (transcription)",
+      "formats.zip": "ZIP archives",
+      "formats.youtube": "YouTube URLs",
+      "formats.web": "Web pages",
+      "install.title": "Install & run",
+      "install.lead": "Grab a ready-to-run build for your platform, or run from source.",
+      "download.windows.note": "Installer or standalone .exe, no Python required.",
+      "download.bundle.note": "Packaged app bundle, zipped.",
+      "download.exe.button": "Download .exe",
+      "download.zip.button": "Download .zip",
+      "install.source.heading": "Run from source",
+      "install.source.note": "For contributors or other platforms. Requires Python 3.10+.",
+      "disclaimer.body": "This is an independent, community-built GUI. It is <strong>not</strong> developed, maintained, or endorsed by Microsoft. It wraps the open-source <a href=\"https://github.com/microsoft/markitdown\">markitdown</a> package (MIT License). All credit for the underlying conversion engine goes to Microsoft and its contributors.",
+      "footer.license": "InkDoc · MIT Licensed",
+      "lang.switchTo": "ES",
+    },
+    es: {
+      "nav.features": "Funciones",
+      "nav.how": "Cómo funciona",
+      "nav.formats": "Formatos",
+      "nav.install": "Instalación",
+      "nav.starAriaLabel": "Marca este proyecto con una estrella en GitHub",
+      "hero.title": "Suelta un archivo. Obtén Markdown. Listo.",
+      "hero.lead": "Un banco de trabajo de escritorio multimotor gratuito y de código abierto impulsado por <code>markitdown</code> de Microsoft, IBM <code>docling</code> y <code>markit</code>. Arrastra cualquier archivo o pega una URL, y se convierte y se guarda directamente en tu carpeta de Descargas.",
+      "cta.windows": "Descargar para Windows (.exe)",
+      "cta.other": "Descargar para macOS / Linux",
+      "cta.note": "No oficial, de código abierto, no afiliado con Microsoft.",
+      "screenshot.alt": "Recorrido de InkDoc: se añade un archivo, se convierte y aparece la vista previa del markdown renderizado",
+      "features.title": "Por qué existe",
+      "features.lead": "markitdown en sí es una herramienta de línea de comandos: la ejecutas, rediriges la salida y gestionas los archivos tú mismo. Esta aplicación envuelve el mismo motor sin pasos de exportación. Suelta un archivo y el <code>.md</code> llega a Descargas en el momento en que se convierte.",
+      "features.primary.title": "Guarda automáticamente en Descargas, siempre",
+      "features.primary.body": "En cuanto un archivo termina de convertirse, el <code>.md</code> llega a tu carpeta de Descargas con su nombre original. Las colisiones de nombre reciben un sufijo numérico seguro en lugar de sobrescribir nada. No hay que recordar ningún cuadro de exportación.",
+      "features.list.1.title": "Vista previa en vivo",
+      "features.list.1.body": "Markdown renderizado o en bruto, editable antes de guardar una copia en otro lugar.",
+      "features.list.2.title": "Temas claro y oscuro",
+      "features.list.2.body": "Sigue tu sistema automáticamente, o cambia manualmente.",
+      "features.list.3.title": "Inglés y español",
+      "features.list.3.body": "Cambia en vivo desde la barra de menú, sin necesidad de reiniciar.",
+      "features.list.4.title": "Opciones avanzadas, fuera del camino",
+      "features.list.4.body": "Los plugins, Azure Document Intelligence y las sugerencias de formato viven en un cuadro de configuración aparte.",
+      "how.title": "Cómo funciona",
+      "how.1.title": "Suelta un archivo",
+      "how.1.body": "O haz clic en la zona de arrastre para explorar, o pega una URL.",
+      "how.2.title": "Se convierte",
+      "how.2.body": "Se ejecuta en segundo plano. La interfaz nunca se congela, incluso con lotes grandes.",
+      "how.3.title": "Encuéntralo en Descargas",
+      "how.3.body": "El archivo <code>.md</code> ya está ahí. Haz doble clic en la fila para abrir su carpeta.",
+      "formats.title": "Formatos compatibles",
+      "formats.lead": "Todo lo que markitdown admite:",
+      "formats.images": "Imágenes (EXIF / OCR)",
+      "formats.audio": "Audio (transcripción)",
+      "formats.zip": "Archivos ZIP",
+      "formats.youtube": "URLs de YouTube",
+      "formats.web": "Páginas web",
+      "install.title": "Instalación y ejecución",
+      "install.lead": "Obtén una compilación lista para usar en tu plataforma, o ejecútalo desde el código fuente.",
+      "download.windows.note": "Instalador o .exe independiente, no requiere Python.",
+      "download.bundle.note": "Paquete de aplicación empaquetado, comprimido.",
+      "download.exe.button": "Descargar .exe",
+      "download.zip.button": "Descargar .zip",
+      "install.source.heading": "Ejecutar desde el código fuente",
+      "install.source.note": "Para colaboradores u otras plataformas. Requiere Python 3.10+.",
+      "disclaimer.body": "Esta es una interfaz gráfica independiente, construida por la comunidad. <strong>No</strong> está desarrollada, mantenida ni respaldada por Microsoft. Envuelve el paquete de código abierto <a href=\"https://github.com/microsoft/markitdown\">markitdown</a> (licencia MIT). Todo el crédito del motor de conversión subyacente es de Microsoft y sus colaboradores.",
+      "footer.license": "InkDoc · Licencia MIT",
+      "lang.switchTo": "EN",
+    },
+  };
+
+  (function () {
+    var STORAGE_KEY = "inkdoc-landing-lang";
+    var toggle = document.getElementById("langToggle");
+
+    function detectInitialLang() {
+      var stored = null;
+      try { stored = localStorage.getItem(STORAGE_KEY); } catch (e) { /* storage unavailable */ }
+      if (stored === "en" || stored === "es") return stored;
+      return navigator.language && navigator.language.toLowerCase().indexOf("es") === 0 ? "es" : "en";
+    }
+
+    function applyLang(lang) {
+      var dict = TRANSLATIONS[lang] || TRANSLATIONS.en;
+      document.documentElement.lang = lang;
+
+      document.querySelectorAll("[data-i18n]").forEach(function (el) {
+        var key = el.getAttribute("data-i18n");
+        if (dict[key]) el.textContent = dict[key];
+      });
+      document.querySelectorAll("[data-i18n-html]").forEach(function (el) {
+        var key = el.getAttribute("data-i18n-html");
+        if (dict[key]) el.innerHTML = dict[key];
+      });
+      document.querySelectorAll("[data-i18n-alt]").forEach(function (el) {
+        var key = el.getAttribute("data-i18n-alt");
+        if (dict[key]) el.setAttribute("alt", dict[key]);
+      });
+      document.querySelectorAll("[data-i18n-aria-label]").forEach(function (el) {
+        var key = el.getAttribute("data-i18n-aria-label");
+        if (dict[key]) el.setAttribute("aria-label", dict[key]);
+      });
+
+      if (toggle) toggle.textContent = dict["lang.switchTo"];
+      toggle.setAttribute("aria-label", lang === "en" ? "Switch to Spanish" : "Cambiar a inglés");
+
+      try { localStorage.setItem(STORAGE_KEY, lang); } catch (e) { /* storage unavailable */ }
+    }
+
+    var currentLang = detectInitialLang();
+    applyLang(currentLang);
+
+    if (toggle) {
+      toggle.addEventListener("click", function () {
+        currentLang = currentLang === "en" ? "es" : "en";
+        applyLang(currentLang);
+      });
+    }
+  })();
+
+  (function () {
+    var tabs = Array.prototype.slice.call(document.querySelectorAll(".tab"));
+
+    function activateTab(tab, focusTab) {
+      tabs.forEach(function (t) {
+        t.setAttribute("aria-selected", "false");
+        t.setAttribute("tabindex", "-1");
+      });
+      document.querySelectorAll(".tab-panel").forEach(function (p) {
+        p.classList.remove("active", "in");
+      });
+      tab.setAttribute("aria-selected", "true");
+      tab.setAttribute("tabindex", "0");
+      if (focusTab) tab.focus();
+
+      var panel = document.getElementById(tab.dataset.target);
+      panel.classList.add("active");
+      // Defer the opacity flip a frame so the display swap above is committed
+      // first — this is what makes the cross-fade transition actually run.
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { panel.classList.add("in"); });
+      });
+    }
+
+    tabs.forEach(function (tab, i) {
+      tab.addEventListener("click", function () { activateTab(tab, false); });
+      tab.addEventListener("keydown", function (e) {
+        if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+        e.preventDefault();
+        var next = e.key === "ArrowRight" ? (i + 1) % tabs.length : (i - 1 + tabs.length) % tabs.length;
+        activateTab(tabs[next], true);
+      });
+    });
+
+    var initialPanel = document.querySelector(".tab-panel.active");
+    if (initialPanel) requestAnimationFrame(function () { initialPanel.classList.add("in"); });
+  })();
+
+  (function () {
+    var el = document.getElementById("starCount");
+    if (!el) return;
+    var controller = new AbortController();
+    var timeout = setTimeout(function () { controller.abort(); }, 4000);
+    fetch("https://api.github.com/repos/AbdoslamB/inkdoc", { signal: controller.signal })
+      .then(function (res) { return res.ok ? res.json() : null; })
+      .then(function (data) {
+        clearTimeout(timeout);
+        if (!data || typeof data.stargazers_count !== "number") return;
+        var n = data.stargazers_count;
+        el.textContent = n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n);
+      })
+      .catch(function () { /* offline or rate-limited: button still works without a count */ });
+  })();
+
+  (function () {
+    var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduceMotion || !("IntersectionObserver" in window)) return;
+
+    var targets = document.querySelectorAll(".reveal, .screenshot-frame");
+    var observer = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (entry.isIntersecting) {
+          entry.target.classList.add("in-view");
+          observer.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.1 });
+
+    targets.forEach(function (el) { observer.observe(el); });
+  })();
+</script>
+
+</body>
+</html>

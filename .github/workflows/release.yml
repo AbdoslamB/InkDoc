@@ -1,0 +1,109 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.asset_name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            asset_name: windows
+          - os: macos-latest
+            asset_name: macos
+          - os: ubuntu-latest
+            asset_name: linux
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install system dependencies (Linux, for WebKitGTK + packaging)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libxkbcommon0 libgl1 zip python3-gi gir1.2-gtk-3.0 gir1.2-webkit2-4.1 || sudo apt-get install -y gir1.2-webkit2-4.0
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build with PyInstaller
+        shell: bash
+        run: |
+          SEP="${{ runner.os == 'Windows' && ';' || ':' }}"
+          pyinstaller --noconfirm --onedir --windowed \
+            --name inkdoc \
+            --collect-all markitdown \
+            --collect-all magika \
+            --collect-all uvicorn \
+            --collect-all fastapi \
+            --collect-all webview \
+            --add-data "app/ui${SEP}app/ui" \
+            --add-data "assets${SEP}assets" \
+            main.py
+
+      - name: Build single-file .exe (Windows)
+        if: runner.os == 'Windows'
+        run: >
+          pyinstaller --noconfirm --onefile --windowed
+          --name inkdoc
+          --distpath dist-onefile
+          --collect-all markitdown
+          --collect-all magika
+          --collect-all uvicorn
+          --collect-all fastapi
+          --collect-all webview
+          --add-data "app/ui;app/ui"
+          --add-data "assets;assets"
+          main.py
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist/inkdoc/* -DestinationPath inkdoc-windows.zip
+
+      - name: Build installer with Inno Setup (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y
+            $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          }
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          & $iscc "/DMyAppVersion=$version" installer.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Package (macOS / Linux)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cd dist
+          zip -r "../inkdoc-${{ matrix.asset_name }}.zip" inkdoc
+
+      - name: Attach to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            inkdoc-${{ matrix.asset_name }}.zip
+            dist-onefile/inkdoc.exe
+            dist-installer/inkdoc-setup.exe
+          generate_release_notes: true

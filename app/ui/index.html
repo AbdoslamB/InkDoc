@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>InkDoc — Multi-Engine Document Workbench</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="stylesheet" href="/static/style.css">
+  <!-- Marked.js for fast client-side markdown rendering -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-icon">
+          <img src="/static/logo.svg" alt="InkDoc Logo" width="36" height="36" class="brand-logo-img">
+        </div>
+        <div class="brand-text">
+          <h1>InkDoc</h1>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <button id="themeToggle" class="btn btn-icon" title="Toggle Light/Dark theme">
+          <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="5"></circle>
+            <line x1="12" y1="1" x2="12" y2="3"></line>
+            <line x1="12" y1="21" x2="12" y2="23"></line>
+            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+            <line x1="1" y1="12" x2="3" y2="12"></line>
+            <line x1="21" y1="12" x2="23" y2="12"></line>
+            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+          </svg>
+          <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+          </svg>
+        </button>
+
+        <!-- Settings button + popover -->
+        <div class="settings-wrapper">
+          <button id="settingsBtn" class="btn btn-icon" title="Settings">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+          </button>
+          <div class="settings-popover" id="settingsPopover">
+            <div class="settings-section">
+              <label class="toggle-switch" title="Also save converted .md files to ~/Downloads">
+                <input type="checkbox" id="autoSaveToggle">
+                <span class="toggle-slider"></span>
+                <span class="toggle-label">Auto-save to Downloads</span>
+              </label>
+            </div>
+            <div class="settings-divider"></div>
+
+            <!-- Engine info cards -->
+            <div class="settings-engines">
+              <p class="settings-engines-label">Engines</p>
+
+              <details class="engine-card" id="engineCardMarkitdown">
+                <summary class="engine-card-summary">
+                  <span class="engine-card-icon markitdown-icon">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                    </svg>
+                  </span>
+                  <span class="engine-card-name">MarkItDown</span>
+                  <span class="engine-card-version" id="versionMarkitdown">—</span>
+                  <svg class="engine-card-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
+                </summary>
+                <p class="engine-card-desc">Fast, zero-config converter for everyday documents: PDF, Word, Excel, PowerPoint, images, audio transcription, HTML &amp; CSV.</p>
+              </details>
+
+              <details class="engine-card" id="engineCardDocling">
+                <summary class="engine-card-summary">
+                  <span class="engine-card-icon docling-icon">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M12 2a10 10 0 1 0 10 10"></path>
+                      <path d="M12 6a6 6 0 0 1 6 6"></path>
+                      <circle cx="12" cy="12" r="2"></circle>
+                    </svg>
+                  </span>
+                  <span class="engine-card-name">Docling</span>
+                  <span class="engine-card-version" id="versionDocling">—</span>
+                  <svg class="engine-card-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
+                </summary>
+                <p class="engine-card-desc">IBM AI-powered deep document parser. Best for complex layouts, scanned pages, reading-order detection &amp; table structure recognition.</p>
+              </details>
+
+              <details class="engine-card" id="engineCardMarkit">
+                <summary class="engine-card-summary">
+                  <span class="engine-card-icon markit-icon">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                      <circle cx="12" cy="12" r="10"></circle>
+                      <line x1="2" y1="12" x2="22" y2="12"></line>
+                      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                    </svg>
+                  </span>
+                  <span class="engine-card-name">Markit</span>
+                  <span class="engine-card-version" id="versionMarkit">—</span>
+                  <svg class="engine-card-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
+                </summary>
+                <p class="engine-card-desc">Broad format specialist. Use for EPUB ebooks, YAML configs, Jupyter Notebooks (.ipynb), XML &amp; other formats not covered by MarkItDown.</p>
+              </details>
+            </div>
+
+            <div class="settings-divider"></div>
+            <div class="settings-section">
+              <a href="/docs" target="_blank" class="settings-link">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                  <polyline points="15 3 21 3 21 9"></polyline>
+                  <line x1="10" y1="14" x2="21" y2="3"></line>
+                </svg>
+                API Documentation
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Connection Error Banner (hidden unless disconnected) -->
+    <div class="connection-error-bar" id="connectionErrorBar">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"></circle>
+        <line x1="12" y1="8" x2="12" y2="12"></line>
+        <line x1="12" y1="16" x2="12.01" y2="16"></line>
+      </svg>
+      <span id="connectionErrorMsg">Unable to reach the API server — make sure the server is running on port 13118.</span>
+    </div>
+
+    <!-- Main Workspace -->
+    <main class="app-main">
+      <!-- Drop Zone & URL Bar -->
+      <section class="dropzone-section" id="dropZoneSection">
+        <div class="dropzone-card" id="dropZone">
+          <input type="file" id="fileInput" multiple style="display: none;">
+          <input type="file" id="folderInput" webkitdirectory directory multiple style="display: none;">
+
+          <div class="dropzone-icon">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="17 8 12 3 7 8"></polyline>
+              <line x1="12" y1="3" x2="12" y2="15"></line>
+            </svg>
+          </div>
+
+          <h2 class="dropzone-title">Drop files or a URL to convert</h2>
+
+          <!-- Unified Engine Pill Selector — single source of truth -->
+          <div class="engine-pill-group" id="enginePillGroup" role="radiogroup" aria-label="Processing Engine">
+            <button type="button" class="engine-pill active" data-engine="markitdown" id="pillMarkitdown"
+              title="MarkItDown — Fast local programmatic converter. Supports Office, PDF, audio, images &amp; text.">
+              <span class="pill-engine-icon markitdown-icon">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                </svg>
+              </span>
+              MarkItDown
+            </button>
+            <button type="button" class="engine-pill" data-engine="docling" id="pillDocling"
+              title="Docling — IBM AI layout &amp; table recognition. Deep document analysis.">
+              <span class="pill-engine-icon docling-icon">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 2a10 10 0 1 0 10 10"></path>
+                  <path d="M12 6a6 6 0 0 1 6 6"></path>
+                  <circle cx="12" cy="12" r="2"></circle>
+                </svg>
+              </span>
+              Docling
+            </button>
+            <button type="button" class="engine-pill" data-engine="markit" id="pillMarkit"
+              title="Markit — Broad format converter. EPUB, YAML, Jupyter Notebooks, XML &amp; more.">
+              <span class="pill-engine-icon markit-icon">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <line x1="2" y1="12" x2="22" y2="12"></line>
+                  <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                </svg>
+              </span>
+              Markit
+            </button>
+          </div>
+
+          <div class="dropzone-buttons">
+            <button class="btn btn-primary" id="btnBrowseFiles">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
+                <polyline points="13 2 13 9 20 9"></polyline>
+              </svg>
+              Browse Files
+            </button>
+            <button class="btn btn-secondary" id="btnBrowseFolder">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+              </svg>
+              Add Folder
+            </button>
+          </div>
+
+          <!-- URL Input Box -->
+          <div class="url-input-container">
+            <div class="url-input-wrapper">
+              <svg class="url-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="2" y1="12" x2="22" y2="12"></line>
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+              </svg>
+              <input type="url" id="urlInput" placeholder="Paste a webpage or YouTube video URL…" autocomplete="off">
+              <button class="btn btn-mark" id="btnConvertUrl">Convert URL</button>
+            </div>
+          </div>
+
+          <!-- Format chips -->
+          <div class="format-chips">
+            <span class="chip">PDF</span>
+            <span class="chip">Word</span>
+            <span class="chip">Excel</span>
+            <span class="chip">PowerPoint</span>
+            <span class="chip">Images</span>
+            <span class="chip">Audio</span>
+            <span class="chip">HTML</span>
+            <span class="chip">CSV / JSON</span>
+            <span class="chip">EPUB</span>
+            <span class="chip">YAML / Notebooks</span>
+            <span class="chip">ZIP</span>
+            <span class="chip">YouTube</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Workbench Area (Queue + Preview Split View) -->
+      <section class="workbench-section" id="workbenchSection" style="display: none;">
+        <!-- Left: Queue / Activity List -->
+        <aside class="queue-panel">
+          <div class="panel-header">
+            <div class="panel-title-wrap">
+              <h3 class="panel-title">Queue</h3>
+              <span class="badge-count" id="queueCount">0</span>
+            </div>
+            <button class="btn btn-sm btn-ghost" id="btnClearQueue" title="Clear all items">Clear</button>
+          </div>
+
+          <div class="queue-list" id="queueList">
+            <!-- Queue items dynamically injected here -->
+          </div>
+        </aside>
+
+        <!-- Right: Markdown Preview Pane -->
+        <section class="preview-panel">
+          <div class="preview-header">
+            <div class="preview-tabs">
+              <button class="tab-btn active" data-tab="rendered" id="tabRendered">Rendered</button>
+              <button class="tab-btn" data-tab="raw" id="tabRaw">Raw</button>
+            </div>
+
+            <div class="preview-meta" id="previewMeta">
+              <span class="meta-filename" id="previewFilename">No file selected</span>
+              <span class="meta-stats" id="previewStats"></span>
+            </div>
+
+            <div class="preview-actions">
+              <button class="btn btn-sm btn-secondary" id="btnSwitchEngine" style="display: none;" title="Re-convert with next engine">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+                </svg>
+              </button>
+
+              <button class="btn btn-sm btn-secondary" id="btnCopyMarkdown" title="Copy Markdown to clipboard">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+                <span id="copyText">Copy</span>
+              </button>
+
+              <button class="btn btn-sm btn-primary" id="btnDownloadMarkdown" title="Download as .md file">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                  <polyline points="7 10 12 15 17 10"></polyline>
+                  <line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+                Download
+              </button>
+            </div>
+          </div>
+
+          <!-- Preview Content Body -->
+          <div class="preview-body">
+            <!-- Conversion Notice Banner (shown for failed / unsupported / empty results) -->
+            <div class="conversion-notice" id="conversionNoticeBar" role="alert">
+              <span class="conversion-notice-icon" id="conversionNoticeIcon"></span>
+              <div class="conversion-notice-body">
+                <span class="conversion-notice-title" id="conversionNoticeTitle"></span>
+                <span class="conversion-notice-detail" id="conversionNoticeDetail"></span>
+              </div>
+            </div>
+
+            <!-- Rendered HTML Tab -->
+            <div class="tab-content active" id="renderedContainer">
+              <div class="markdown-rendered" id="renderedOutput">
+                <div class="empty-preview-hint">
+                  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                    <line x1="16" y1="13" x2="8" y2="13"></line>
+                    <line x1="16" y1="17" x2="8" y2="17"></line>
+                    <polyline points="10 9 9 9 8 9"></polyline>
+                  </svg>
+                  <p>Select an item from the queue to preview converted Markdown</p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Raw Markdown Tab -->
+            <div class="tab-content" id="rawContainer">
+              <textarea class="raw-markdown-editor" id="rawEditor" spellcheck="false" placeholder="Raw markdown content will appear here…"></textarea>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <!-- Global Notification Banner -->
+    <div id="toastNotification" class="toast-notification"></div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

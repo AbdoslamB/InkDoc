@@ -50,7 +50,7 @@ app = FastAPI(
         "High-performance local REST API server for InkDoc multi-engine document-to-markdown workbench. "
         "Converts PDF, Office documents, images, audio, and web URLs directly to Markdown."
     ),
-    version="2.0.0",
+    version="1.0.0",
 )
 
 # Enable CORS for local web applications / frontend integrations
@@ -167,7 +167,7 @@ def root(request: Request):
     return {
         "app": "InkDoc Local API",
         "status": "running",
-        "version": "2.0.0",
+        "version": "1.0.0",
         "markitdown_version": get_markitdown_version(),
         "docling_available": is_docling_available(),
         "docling_version": get_docling_version(),

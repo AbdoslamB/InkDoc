@@ -107,7 +107,7 @@ curl http://localhost:13118/health
 ```json
 {
   "status": "ok",
-  "version": "2.0.0",
+  "version": "1.0.0",
   "markitdown_version": "0.1.7",
   "docling_available": true,
   "docling_version": "2.128.0",

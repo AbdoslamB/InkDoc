@@ -7,7 +7,7 @@
 ;   "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
 ;
 ; CI / release compile (version injected via /D, see release.yml):
-;   "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=1.3.0 installer.iss
+;   "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=1.0.0 installer.iss
 
 #define MyAppName "InkDoc"
 #define MyAppPublisher "Abdoslam Baabbad"

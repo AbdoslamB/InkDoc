@@ -80,6 +80,27 @@ def wait_for_server(host: str, port: int, timeout: float = 10.0) -> bool:
     return False
 
 
+def verify_inkdoc_server(host: str, port: int) -> bool:
+    """Verify that a service listening on host:port is genuinely InkDoc."""
+    import json
+    import urllib.request
+
+    url = f"http://{host}:{port}/health"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "InkDoc/ServerVerification"})
+        with urllib.request.urlopen(req, timeout=1.5) as resp:
+            if resp.status == 200:
+                data = json.loads(resp.read().decode("utf-8"))
+                return (
+                    isinstance(data, dict)
+                    and data.get("status") == "ok"
+                    and "markitdown_version" in data
+                )
+    except Exception:
+        pass
+    return False
+
+
 def run_desktop(
     port: int | None = None,
     headless: bool = False,
@@ -97,8 +118,21 @@ def run_desktop(
             print(f"[Error] Failed to bind internal server to {host}:{target_port}", file=sys.stderr)
             return 1
     else:
-        # Server already running on this port (e.g. standalone api instance)
-        print(f"[Info] Connected to existing server on {host}:{target_port}")
+        # Port is in use: verify it is actually an InkDoc instance
+        if verify_inkdoc_server(host, target_port):
+            print(f"[Info] Connected to existing InkDoc server on {host}:{target_port}")
+        else:
+            # Port is occupied by a foreign/unverified process; fall back to an isolated ephemeral port
+            print(
+                f"[Warn] Port {target_port} is occupied by an unverified process. Selecting an ephemeral port.",
+                file=sys.stderr,
+            )
+            target_port = find_available_port(0, host)
+            server_thread = EmbeddedServer(host, target_port)
+            server_thread.start()
+            if not wait_for_server(host, target_port):
+                print(f"[Error] Failed to bind internal server to {host}:{target_port}", file=sys.stderr)
+                return 1
 
     app_url = f"http://{host}:{target_port}/InkDoc"
 

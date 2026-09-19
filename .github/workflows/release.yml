@@ -8,11 +8,15 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   build:
     name: Build (${{ matrix.asset_name }})
     runs-on: ${{ matrix.os }}
+    env:
+      HAVE_SIGNING: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -45,7 +49,7 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Build with PyInstaller
+      - name: Build with PyInstaller (folder bundle)
         shell: bash
         run: |
           SEP="${{ runner.os == 'Windows' && ';' || ':' }}"
@@ -75,7 +79,14 @@ jobs:
           --add-data "assets;assets"
           main.py
 
-      - name: Package (Windows)
+      - name: Sign inner executables (Windows)
+        if: runner.os == 'Windows' && env.HAVE_SIGNING == 'true'
+        shell: pwsh
+        run: |
+          Write-Host "Signing inner executables before installer packaging..."
+          # Ready for SignPath / Authenticode signing command when secret is set
+
+      - name: Package (Windows zip)
         if: runner.os == 'Windows'
         shell: pwsh
         run: Compress-Archive -Path dist/inkdoc/* -DestinationPath inkdoc-windows.zip
@@ -94,6 +105,13 @@ jobs:
           & $iscc "/DMyAppVersion=$version" installer.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Sign installer (Windows)
+        if: runner.os == 'Windows' && env.HAVE_SIGNING == 'true'
+        shell: pwsh
+        run: |
+          Write-Host "Signing Inno Setup installer..."
+          # Ready for SignPath / Authenticode signing command when secret is set
+
       - name: Package (macOS / Linux)
         if: runner.os != 'Windows'
         shell: bash
@@ -101,12 +119,31 @@ jobs:
           cd dist
           zip -r "../inkdoc-${{ matrix.asset_name }}.zip" inkdoc
 
+      - name: Stage release artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release
+          if (Test-Path "inkdoc-${{ matrix.asset_name }}.zip") { Copy-Item "inkdoc-${{ matrix.asset_name }}.zip" release/ }
+          if (Test-Path "dist-onefile/inkdoc.exe") { Copy-Item "dist-onefile/inkdoc.exe" release/ }
+          if (Test-Path "dist-installer/inkdoc-setup.exe") { Copy-Item "dist-installer/inkdoc-setup.exe" release/ }
+
+      - name: Generate SHA-256 checksums
+        shell: pwsh
+        working-directory: release
+        run: |
+          Get-ChildItem -File | Where-Object { $_.Name -notlike "SHA256SUMS*" } | ForEach-Object {
+            $hash = (Get-FileHash -Path $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($_.Name)"
+          } | Set-Content -Encoding ascii -Path "SHA256SUMS-${{ matrix.asset_name }}.txt"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: release/*
+
       - name: Attach to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            inkdoc-${{ matrix.asset_name }}.zip
-            dist-onefile/inkdoc.exe
-            dist-installer/inkdoc-setup.exe
+          files: release/*
           fail_on_unmatched_files: false
           generate_release_notes: true

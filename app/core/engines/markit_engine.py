@@ -59,7 +59,7 @@ def convert_with_markit(item: QueueItem, options: ConversionOptions) -> str:
         if shutil.which("markit"):
             cmd = ["markit", source, "-q"]
         elif shutil.which("npx"):
-            cmd = ["npx", "--yes", "@shiftlabs/markit", source, "-q"]
+            cmd = ["npx", "--yes", f"@shiftlabs/markit@{MARKIT_VERSION}", source, "-q"]
 
         if cmd:
             try:
@@ -128,7 +128,7 @@ def convert_with_markit(item: QueueItem, options: ConversionOptions) -> str:
         if wsl_path:
             try:
                 res = subprocess.run(
-                    ["wsl", "npx", "--yes", "@shiftlabs/markit", wsl_path, "-q"],
+                    ["wsl", "npx", "--yes", f"@shiftlabs/markit@{MARKIT_VERSION}", wsl_path, "-q"],
                     capture_output=True,
                     text=True,
                     timeout=60,
@@ -195,8 +195,15 @@ def _convert_yaml(file_path: Path) -> str:
     return f"{title}```yaml\n{content.strip()}\n```\n"
 
 
+# EPUB archive safety limits (Zip bomb mitigation)
+MAX_EPUB_FILES = 500
+MAX_EPUB_ENTRY_SIZE = 10 * 1024 * 1024         # 10 MB per content entry
+MAX_EPUB_TOTAL_UNCOMPRESSED = 50 * 1024 * 1024  # 50 MB total extracted text
+MAX_COMPRESSION_RATIO = 100                    # Reject entries with compression ratio > 100:1
+
+
 def _convert_epub(file_path: Path) -> str:
-    """Extract and convert text from an EPUB ebook archive."""
+    """Extract and convert text from an EPUB ebook archive with zip bomb protection."""
     lines = [f"# {file_path.stem}\n"]
     try:
         with zipfile.ZipFile(file_path, "r") as z:
@@ -206,9 +213,32 @@ def _convert_epub(file_path: Path) -> str:
                 if n.lower().endswith((".xhtml", ".html", ".htm"))
                 and not n.lower().endswith(("toc.ncx", "nav.xhtml"))
             ]
+            if len(html_files) > MAX_EPUB_FILES:
+                raise ValueError(
+                    f"EPUB contains too many entries ({len(html_files)} > {MAX_EPUB_FILES})."
+                )
+
             html_files.sort()
+            total_uncompressed = 0
 
             for name in html_files:
+                info = z.getinfo(name)
+                if info.file_size > MAX_EPUB_ENTRY_SIZE:
+                    raise ValueError(
+                        f"EPUB entry '{name}' exceeds safe size limit ({info.file_size} > {MAX_EPUB_ENTRY_SIZE})."
+                    )
+
+                if info.compress_size > 0 and (info.file_size / info.compress_size) > MAX_COMPRESSION_RATIO:
+                    raise ValueError(
+                        f"EPUB entry '{name}' has suspicious compression ratio ({info.file_size / info.compress_size:.1f}x > {MAX_COMPRESSION_RATIO}x)."
+                    )
+
+                total_uncompressed += info.file_size
+                if total_uncompressed > MAX_EPUB_TOTAL_UNCOMPRESSED:
+                    raise ValueError(
+                        f"EPUB total uncompressed content exceeds safe limit ({total_uncompressed} > {MAX_EPUB_TOTAL_UNCOMPRESSED})."
+                    )
+
                 raw_bytes = z.read(name)
                 text = raw_bytes.decode("utf-8", errors="replace")
                 # Strip basic XML/HTML tags

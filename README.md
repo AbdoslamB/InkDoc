@@ -67,10 +67,25 @@ Ready-to-run desktop packages with every dependency and runtime bundled — **no
 
 </details>
 
-> [!TIP]
-> **Windows SmartScreen Note:**
-> Because InkDoc is an open-source project without a paid commercial certificate ($400+/yr), Microsoft Defender SmartScreen may display an *"Unrecognized app"* prompt on initial launch.
-> Simply click **"More info"** &rarr; **"Run anyway"** to launch. InkDoc is 100% open-source, reproducible, and safe.
+> [!NOTE]
+> **Windows SmartScreen:** InkDoc's Windows builds aren't code-signed yet, so Windows may show "Windows protected your PC" on first run. Verify your download below, then choose **More info → Run anyway**.
+
+<details>
+<summary><b>Verify your download</b></summary>
+
+Compare the SHA-256 checksum with `SHA256SUMS-windows.txt` on the release page:
+
+```powershell
+Get-FileHash .\inkdoc-setup.exe -Algorithm SHA256
+```
+
+Confirm the file was built by this repository's verified GitHub Actions release workflow:
+
+```bash
+gh attestation verify inkdoc-setup.exe --repo AbdoslamB/inkdoc
+```
+
+</details>
 
 <p align="center">
   <sub>Detailed release notes, asset bundles, and SHA-256 checksums are available on the <a href="https://github.com/AbdoslamB/inkdoc/releases">GitHub Releases</a> page.</sub>

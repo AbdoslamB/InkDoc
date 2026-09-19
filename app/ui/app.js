@@ -567,9 +567,19 @@ document.addEventListener("DOMContentLoaded", () => {
     const words = md.trim() ? md.trim().split(/\s+/).length : 0;
     previewStats.textContent = words > 0 ? `${words.toLocaleString()} words` : "";
 
-    // Rendered HTML
+    // Rendered HTML (Sanitized against DOM XSS)
     if (window.marked) {
-      renderedOutput.innerHTML = window.marked.parse(md);
+      try {
+        if (typeof window.marked.use === "function") {
+          window.marked.use({ gfm: true, breaks: true });
+        }
+      } catch (_) {}
+      const rawHtml = window.marked.parse(md);
+      if (window.DOMPurify) {
+        renderedOutput.innerHTML = window.DOMPurify.sanitize(rawHtml);
+      } else {
+        renderedOutput.innerHTML = renderBasicMarkdown(md);
+      }
     } else {
       renderedOutput.innerHTML = renderBasicMarkdown(md);
     }

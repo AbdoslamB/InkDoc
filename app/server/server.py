@@ -5,10 +5,14 @@ without launching the desktop window.
 """
 from __future__ import annotations
 
+import logging
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
+
+logger = logging.getLogger("inkdoc.server")
 
 # Ensure repository root is on sys.path so app.core modules can be imported
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -38,11 +42,16 @@ try:
     from app.core.engines.docling_engine import get_docling_version, is_docling_available
     from app.core.engines.markit_engine import get_markit_version, is_markit_available
     from app.core.queue_model import EngineKind, QueueItem, SourceKind
+    from app.core.security import SSRFValidationError, validate_url_for_ssrf
 except ImportError as err:
     raise RuntimeError(
         f"Failed to import app.core modules from {REPO_ROOT}. "
         "Ensure requirements are installed."
     ) from err
+
+# Disable interactive API docs in packaged production desktop builds unless explicitly requested
+_is_frozen = getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")
+_docs_enabled = (not _is_frozen) or os.environ.get("INKDOC_ENABLE_DOCS", "").lower() in ("1", "true")
 
 app = FastAPI(
     title="InkDoc Local API",
@@ -51,12 +60,15 @@ app = FastAPI(
         "Converts PDF, Office documents, images, audio, and web URLs directly to Markdown."
     ),
     version="1.0.0",
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
 )
 
-# Enable CORS for local web applications / frontend integrations
+# Restrict CORS to local loopback origins (desktop pywebview and local web workbench)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -114,6 +126,78 @@ class UrlConvertRequest(BaseModel):
         default="markitdown",
         description="Conversion engine route: 'markitdown' (default), 'docling', or 'markit'",
     )
+
+
+# Resource and DoS protection limits
+MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024  # 100 MB per file limit
+MAX_BATCH_FILES = 50                     # Maximum files per batch request
+
+# MarkItDown plugin permissions (disabled by default to prevent arbitrary Python code execution)
+ALLOW_PLUGINS = os.environ.get("INKDOC_ALLOW_PLUGINS", "").lower() in ("1", "true")
+
+
+def _check_plugin_permission(enable_plugins: bool) -> None:
+    """Validate whether MarkItDown third-party plugin execution is permitted."""
+    if enable_plugins and not ALLOW_PLUGINS:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Third-party MarkItDown plugins are disabled on this server. "
+                "Set INKDOC_ALLOW_PLUGINS=1 to permit."
+            ),
+        )
+
+
+def sanitize_conversion_error(exc: Exception, context_name: str = "document") -> str:
+    """Produce a safe, informative error message without leaking internal system paths."""
+    exc_str = str(exc)
+    exc_lower = exc_str.lower()
+
+    if any(phrase in exc_lower for phrase in (
+        "unsupported format", "not supported", "file format not allowed",
+        "no converter attempted", "format none does not match", "format is not supported",
+    )):
+        return f"Unsupported file format for {context_name}."
+
+    if isinstance(exc, FileNotFoundError) or "file not found" in exc_lower:
+        return f"The specified file for {context_name} was not found."
+
+    if "docling" in exc_lower and ("not installed" in exc_lower or "unavailable" in exc_lower):
+        return "Docling engine is not installed in this environment."
+
+    # Strip potential Windows/Unix filesystem path disclosures
+    clean_msg = re.sub(r"[A-Za-z]:\\[^\s:\"']+", "[path]", exc_str)
+    clean_msg = re.sub(r"/(?:tmp|private|Users|home|var|etc)/[^\s:\"']+", "[path]", clean_msg)
+    clean_msg = re.sub(r"\s+", " ", clean_msg).strip()
+
+    if len(clean_msg) > 160 or "\n" in exc_str or not clean_msg:
+        return f"Conversion failed for {context_name}. Please check server logs for details."
+
+    return f"Conversion failed: {clean_msg}"
+
+
+async def _save_upload_to_temp(file: UploadFile, suffix: str) -> str:
+    """Stream uploaded file to a temporary file while enforcing MAX_FILE_SIZE_BYTES."""
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp_path = tmp.name
+        total_bytes = 0
+        try:
+            while chunk := await file.read(1024 * 1024):  # 1MB chunks
+                total_bytes += len(chunk)
+                if total_bytes > MAX_FILE_SIZE_BYTES:
+                    raise HTTPException(
+                        status_code=getattr(status, "HTTP_413_CONTENT_TOO_LARGE", 413),
+                        detail=f"File exceeds maximum allowed size of {MAX_FILE_SIZE_BYTES // (1024 * 1024)}MB.",
+                    )
+                tmp.write(chunk)
+        except Exception:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+            raise
+    return tmp_path
 
 
 def _serve_bench_html() -> HTMLResponse:
@@ -229,11 +313,10 @@ async def convert_file(
     ext = Path(filename).suffix
     engine_kind = resolve_engine(engine)
 
-    # Save to a temporary file for MarkItDown to read
-    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-        content = await file.read()
-        tmp.write(content)
-        tmp_path = tmp.name
+    _check_plugin_permission(enable_plugins)
+
+    # Stream to a temporary file with size validation
+    tmp_path = await _save_upload_to_temp(file, ext)
 
     saved_path_str: str | None = None
     try:
@@ -266,10 +349,13 @@ async def convert_file(
             )
         return PlainTextResponse(markdown_text, media_type="text/markdown; charset=utf-8")
 
+    except HTTPException:
+        raise
     except Exception as exc:
+        logger.exception("File conversion failed for '%s': %s", filename, exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Conversion failed: {exc}",
+            detail=sanitize_conversion_error(exc, context_name=filename),
         ) from exc
     finally:
         if os.path.exists(tmp_path):
@@ -293,16 +379,16 @@ def convert_url(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="URL cannot be empty."
         )
-    if not url.startswith(("http://", "https://", "file:", "data:")):
-        if "." in url and " " not in url:
-            url = f"https://{url}"
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid URL format. Please provide a valid HTTP or HTTPS URL.",
-            )
+    try:
+        url = validate_url_for_ssrf(url)
+    except SSRFValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid or prohibited URL: {exc}",
+        ) from exc
 
     engine_kind = resolve_engine(payload.engine)
+    _check_plugin_permission(payload.enable_plugins)
     saved_path_str: str | None = None
     try:
         item = QueueItem(
@@ -334,10 +420,13 @@ def convert_url(
             )
         return PlainTextResponse(markdown_text, media_type="text/markdown; charset=utf-8")
 
+    except HTTPException:
+        raise
     except Exception as exc:
+        logger.exception("URL conversion failed for '%s': %s", url, exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"URL conversion failed: {exc}",
+            detail=sanitize_conversion_error(exc, context_name=url),
         ) from exc
 
 
@@ -353,6 +442,14 @@ async def convert_batch(
     ),
 ):
     """Batch convert multiple files to Markdown. Returns a JSON map of results."""
+    if len(files) > MAX_BATCH_FILES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Batch size exceeds maximum limit of {MAX_BATCH_FILES} files per request.",
+        )
+
+    _check_plugin_permission(enable_plugins)
+
     results = {}
     engine_kind = resolve_engine(engine)
     options = ConversionOptions(enable_plugins=enable_plugins, engine=engine_kind)
@@ -360,9 +457,15 @@ async def convert_batch(
     for file in files:
         filename = file.filename or "file"
         ext = Path(filename).suffix
-        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-            tmp.write(await file.read())
-            tmp_path = tmp.name
+        tmp_path = None
+        try:
+            tmp_path = await _save_upload_to_temp(file, ext)
+        except HTTPException as he:
+            results[filename] = {
+                "success": False,
+                "error": he.detail,
+            }
+            continue
 
         try:
             item = QueueItem(
@@ -383,12 +486,13 @@ async def convert_batch(
                 "saved_to_downloads": saved_str,
             }
         except Exception as exc:
+            logger.exception("Batch conversion failed for '%s': %s", filename, exc)
             results[filename] = {
                 "success": False,
-                "error": str(exc),
+                "error": sanitize_conversion_error(exc, context_name=filename),
             }
         finally:
-            if os.path.exists(tmp_path):
+            if tmp_path and os.path.exists(tmp_path):
                 try:
                     os.remove(tmp_path)
                 except OSError:
@@ -407,5 +511,5 @@ if __name__ == "__main__":
     import uvicorn
 
     DEFAULT_PORT = 13118
-    print(f"Starting InkDoc Local API server at http://localhost:{DEFAULT_PORT}/InkDoc ...")
-    uvicorn.run("app.server.server:app", host="0.0.0.0", port=DEFAULT_PORT, reload=True, app_dir=str(REPO_ROOT))
+    print(f"Starting InkDoc Local API server at http://127.0.0.1:{DEFAULT_PORT}/InkDoc ...")
+    uvicorn.run("app.server.server:app", host="127.0.0.1", port=DEFAULT_PORT, reload=False, app_dir=str(REPO_ROOT))

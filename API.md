@@ -12,8 +12,10 @@ A high-throughput local REST API server powered by **FastAPI** and **Uvicorn**, 
 # Recommended: start headless mode using the unified entry point
 python main.py --headless --port 13118
 
-# Or launch directly with Uvicorn
-python -m uvicorn app.server.server:app --host 0.0.0.0 --port 13118
+# Or launch directly with Uvicorn on local loopback
+python -m uvicorn app.server.server:app --host 127.0.0.1 --port 13118
+
+> **Security Note**: By default, InkDoc binds to `127.0.0.1` (loopback). Do not bind to `0.0.0.0` unless deployed inside an isolated private container or behind an authenticated reverse proxy, as binding to all interfaces exposes the API to your local network.
 ```
 
 ### Interactive Documentation & Web Workbench

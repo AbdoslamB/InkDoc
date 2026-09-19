@@ -42,6 +42,9 @@ jobs:
       - name: Byte-compile all sources (catches syntax errors)
         run: python -m compileall -q main.py app tests examples
 
+      - name: Run API server integration tests
+        run: python tests/test_server.py
+
       - name: Smoke test (CLI & headless server)
         shell: bash
         run: |

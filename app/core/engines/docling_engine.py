@@ -36,6 +36,7 @@ def _patch_omegaconf_for_windows() -> None:
     """
     try:
         from pathlib import PurePath
+
         import omegaconf._utils
         import omegaconf.base
         import omegaconf.dictconfig
@@ -79,13 +80,13 @@ def get_document_converter(ocr: bool = True, table_structure: bool = True) -> An
     _patch_omegaconf_for_windows()
 
     current_options = (ocr, table_structure)
-    if _CACHED_CONVERTER is not None and _CACHED_OPTIONS == current_options:
+    if _CACHED_CONVERTER is not None and current_options == _CACHED_OPTIONS:
         return _CACHED_CONVERTER
 
     try:
-        from docling.document_converter import DocumentConverter, PdfFormatOption
         from docling.datamodel.base_models import InputFormat
         from docling.datamodel.pipeline_options import PdfPipelineOptions
+        from docling.document_converter import DocumentConverter, PdfFormatOption
     except ImportError as exc:
         raise RuntimeError(
             "Docling is not installed in this Python environment. "

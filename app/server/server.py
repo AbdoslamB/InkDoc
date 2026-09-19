@@ -9,16 +9,21 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from typing import List, Optional
 
 # Ensure repository root is on sys.path so app.core modules can be imported
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Query, Request, UploadFile, status
+from fastapi import APIRouter, FastAPI, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -30,9 +35,9 @@ try:
         convert_item,
         get_markitdown_version,
     )
-    from app.core.queue_model import EngineKind, QueueItem, SourceKind
     from app.core.engines.docling_engine import get_docling_version, is_docling_available
     from app.core.engines.markit_engine import get_markit_version, is_markit_available
+    from app.core.queue_model import EngineKind, QueueItem, SourceKind
 except ImportError as err:
     raise RuntimeError(
         f"Failed to import app.core modules from {REPO_ROOT}. "
@@ -230,7 +235,7 @@ async def convert_file(
         tmp.write(content)
         tmp_path = tmp.name
 
-    saved_path_str: Optional[str] = None
+    saved_path_str: str | None = None
     try:
         item = QueueItem(
             source=tmp_path,
@@ -298,7 +303,7 @@ def convert_url(
             )
 
     engine_kind = resolve_engine(payload.engine)
-    saved_path_str: Optional[str] = None
+    saved_path_str: str | None = None
     try:
         item = QueueItem(
             source=url,
@@ -338,7 +343,7 @@ def convert_url(
 
 @api_router.post("/convert/batch", tags=["Conversion"])
 async def convert_batch(
-    files: List[UploadFile] = File(..., description="Multiple files to convert in a single request"),
+    files: list[UploadFile] = File(..., description="Multiple files to convert in a single request"),
     save_to_downloads: bool = Query(
         False, description="Whether to also save the .md files to user's Downloads directory"
     ),
@@ -367,7 +372,7 @@ async def convert_batch(
                 engine=engine_kind,
             )
             markdown_text = convert_item(item, options)
-            saved_str: Optional[str] = None
+            saved_str: str | None = None
             if save_to_downloads:
                 saved_str = str(auto_save_markdown(item, markdown_text))
 

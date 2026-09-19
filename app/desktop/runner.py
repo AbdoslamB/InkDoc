@@ -11,7 +11,6 @@ import socket
 import sys
 import threading
 import time
-from typing import Optional
 
 # Ensure repository root is on sys.path
 _repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -19,6 +18,7 @@ if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
 import uvicorn
+
 from app.server.server import app
 
 
@@ -81,15 +81,15 @@ def wait_for_server(host: str, port: int, timeout: float = 10.0) -> bool:
 
 
 def run_desktop(
-    port: Optional[int] = None,
+    port: int | None = None,
     headless: bool = False,
-    url_to_open: Optional[str] = None,
+    url_to_open: str | None = None,
 ) -> int:
     """Entry point to launch the desktop application."""
     host = "127.0.0.1"
     target_port = port if port else find_available_port(13118, host)
 
-    server_thread: Optional[EmbeddedServer] = None
+    server_thread: EmbeddedServer | None = None
     if not is_port_in_use(target_port, host):
         server_thread = EmbeddedServer(host, target_port)
         server_thread.start()
@@ -122,7 +122,7 @@ def run_desktop(
         return 1
 
     # Locate icon
-    icon_path: Optional[str] = None
+    icon_path: str | None = None
     candidate_icons = []
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
         mei = sys._MEIPASS

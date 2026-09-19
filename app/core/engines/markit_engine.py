@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import shutil
 import subprocess
 import sys
@@ -163,7 +162,7 @@ def _convert_jupyter_notebook(file_path: Path) -> str:
 
     lines = [f"# {file_path.stem}\n"]
     cells = data.get("cells", [])
-    for idx, cell in enumerate(cells, 1):
+    for cell in cells:
         cell_type = cell.get("cell_type", "")
         source_content = "".join(cell.get("source", [])).strip()
         if not source_content:

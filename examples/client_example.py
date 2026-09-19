@@ -8,8 +8,10 @@ Demonstrates how to programmatically interact with the local API server:
 """
 from __future__ import annotations
 
+import contextlib
 import sys
 from pathlib import Path
+
 import requests
 
 API_BASE_URL = "http://localhost:13118/InkDoc"
@@ -66,22 +68,17 @@ def convert_url(url: str, save_to_downloads: bool = False) -> str:
 def batch_convert(file_paths: list[str | Path]) -> dict:
     """Send multiple files for batch conversion."""
     print(f"\nBatch converting {len(file_paths)} files...")
-    files = []
-    opened = []
-    try:
+    with contextlib.ExitStack() as stack:
+        files = []
         for p in file_paths:
             path = Path(p)
-            f = open(path, "rb")
-            opened.append(f)
+            f = stack.enter_context(open(path, "rb"))
             files.append(("files", (path.name, f)))
 
         resp = requests.post(f"{API_BASE_URL}/convert/batch", files=files)
         if resp.status_code != 200:
             raise RuntimeError(f"Batch conversion error {resp.status_code}: {resp.text}")
         return resp.json()
-    finally:
-        for f in opened:
-            f.close()
 
 
 if __name__ == "__main__":

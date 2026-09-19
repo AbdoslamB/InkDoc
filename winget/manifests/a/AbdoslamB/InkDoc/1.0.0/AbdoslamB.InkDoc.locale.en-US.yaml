@@ -1,0 +1,23 @@
+PackageIdentifier: AbdoslamB.InkDoc
+PackageVersion: 1.0.0
+PackageLocale: en-US
+Publisher: Abdoslam Baabbad
+PublisherUrl: https://github.com/AbdoslamB
+PublisherSupportUrl: https://github.com/AbdoslamB/inkdoc/issues
+PackageName: InkDoc
+PackageUrl: https://abdoslamb.github.io/inkdoc/
+License: MIT
+LicenseUrl: https://raw.githubusercontent.com/AbdoslamB/inkdoc/main/LICENSE
+ShortDescription: Tri-engine desktop application and local REST API for converting documents to Markdown.
+Description: InkDoc is a free, open-source multi-engine desktop and web workbench for converting documents to Markdown. Powered by Microsoft MarkItDown, IBM Docling, and Markit.
+Tags:
+  - markdown
+  - converter
+  - markitdown
+  - docling
+  - pdf
+  - docx
+  - desktop
+ReleaseNotesUrl: https://github.com/AbdoslamB/inkdoc/releases/tag/v1.0.0
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

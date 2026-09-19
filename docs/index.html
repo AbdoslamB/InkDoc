@@ -386,13 +386,15 @@
     <h2 data-i18n="install.title">Install &amp; run</h2>
     <p class="section-lead" data-i18n="install.lead">Grab a ready-to-run build for your platform, or run from source.</p>
 
-    <div class="download-list">
       <div class="download-row">
         <div>
           <p class="platform">Windows<span class="platform-icon platform-icon-windows" aria-hidden="true"><img src="icons/windows.svg" alt="" /></span></p>
-          <p class="platform-note" data-i18n="download.windows.note">Installer or standalone .exe, no Python required.</p>
+          <p class="platform-note" data-i18n="download.windows.note">Setup wizard or portable .exe, no Python required.</p>
         </div>
-        <a class="btn btn-secondary" href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc.exe" data-i18n="download.exe.button">Download .exe</a>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <a class="btn btn-primary" href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-setup.exe">Setup (.exe)</a>
+          <a class="btn btn-secondary" href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc.exe">Portable (.exe)</a>
+        </div>
       </div>
       <div class="download-row">
         <div>
@@ -407,6 +409,14 @@
           <p class="platform-note" data-i18n="download.bundle.note">Packaged app bundle, zipped.</p>
         </div>
         <a class="btn btn-secondary" href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-linux.zip" data-i18n="download.zip.button">Download .zip</a>
+      </div>
+    </div>
+
+    <div style="margin: 18px 0 28px; padding: 14px 18px; border-radius: 8px; background: var(--accent-tint); border: 1px solid var(--border); display: flex; align-items: flex-start; gap: 12px; font-size: 0.9rem; line-height: 1.5;">
+      <span style="font-size: 1.25rem; flex-shrink: 0;">🛡️</span>
+      <div>
+        <strong>First time launching on Windows?</strong><br />
+        Because InkDoc is a free open-source project without a paid commercial certificate, Microsoft Defender SmartScreen may display an <em>"Unrecognized app"</em> prompt. Simply click <strong>"More info"</strong> &rarr; <strong>"Run anyway"</strong>. InkDoc is 100% open-source, virus-free, and reproducible.
       </div>
     </div>
 

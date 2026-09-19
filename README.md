@@ -67,6 +67,11 @@ Ready-to-run desktop packages with every dependency and runtime bundled — **no
 
 </details>
 
+> [!TIP]
+> **Windows SmartScreen Note:**
+> Because InkDoc is an open-source project without a paid commercial certificate ($400+/yr), Microsoft Defender SmartScreen may display an *"Unrecognized app"* prompt on initial launch.
+> Simply click **"More info"** &rarr; **"Run anyway"** to launch. InkDoc is 100% open-source, reproducible, and safe.
+
 <p align="center">
   <sub>Detailed release notes, asset bundles, and SHA-256 checksums are available on the <a href="https://github.com/AbdoslamB/inkdoc/releases">GitHub Releases</a> page.</sub>
 </p>

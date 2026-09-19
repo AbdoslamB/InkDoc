@@ -5,7 +5,7 @@ InstallerType: inno
 Installers:
   - Architecture: x64
     InstallerUrl: https://github.com/AbdoslamB/inkdoc/releases/download/v1.0.0/inkdoc-setup.exe
-    InstallerSha256: da1a89ddf7baea4b38d3cbdbe2adeee2c2fe068bcb41c487bd6c4ab6f7c9ebbd
+    InstallerSha256: 2e28bb7947b7837d71cac788fff6cc7fadb6b48576448252c7e353de2d6287f3
     Scope: user
 ManifestType: installer
 ManifestVersion: 1.6.0

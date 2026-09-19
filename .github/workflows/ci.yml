@@ -34,7 +34,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install ruff
+          pip install ruff pytest httpx httpx2
 
       - name: Lint with ruff
         run: ruff check .

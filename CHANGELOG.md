@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.1] - 2026-09-20
 
+### Known Issues
+- **Startup Crash in Packaged Desktop Binaries**: Standalone executables and installer packages for v1.0.1 fail on launch with `ImportError: cannot import name 'get_version' from 'app._version'` due to a packaging workflow issue. Users should use v1.0.0 or upgrade to v1.0.2+.
+
 ### Fixed & Hardened
 - **IBM Docling Engine Support**:
   - Isolated out-of-process worker RPC architecture (`worker.py`, `docling_worker_client.py`) preventing process pollution.

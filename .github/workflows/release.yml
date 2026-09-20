@@ -102,37 +102,7 @@ jobs:
       - name: Verify Linux dependency imports come from the venv
         if: runner.os == 'Linux'
         shell: bash
-        run: |
-          python - <<'PY'
-          import importlib
-          import os
-          from pathlib import Path
-
-          venv = Path(os.environ["VIRTUAL_ENV"]).resolve()
-            required = ("markitdown", "cryptography", "yaml", "pydantic", "fastapi", "uvicorn", "requests", "httpx", "webview")
-            optional = ("PIL", "numpy")
-            resolved = []
-            shadowed = []
-            for name in required + optional:
-              try:
-                  module = importlib.import_module(name)
-              except ModuleNotFoundError:
-                  if name in optional:
-                  resolved.append((name, "not installed"))
-                      continue
-                  raise
-              path = Path(module.__file__).resolve()
-              resolved.append((name, str(path)))
-              if not path.is_relative_to(venv):
-                shadowed.append((name, str(path)))
-            for name, path in resolved:
-              print(f"{name}: {path}")
-            if shadowed:
-              details = "; ".join(f"{name}: {path}" for name, path in shadowed)
-              raise SystemExit(f"Packages shadowing the venv: {details}")
-            yaml_path = dict(resolved)["yaml"]
-            print(f"PyInstaller yaml source: {yaml_path}")
-          PY
+        run: python scripts/check_venv_imports.py
 
       - name: Cheap engine manifest release guard (verify existence, size, digests, README alignment)
         run: python scripts/verify_engine_manifest_guard.py --allow-empty

@@ -147,10 +147,12 @@ def main() -> int:
         help="Override minimum app version",
     )
     parser.add_argument(
+        "--expected-platforms",
         "--require-platform",
-        action="append",
+        nargs="+",
+        action="extend",
         dest="expected_platforms",
-        help="Platform key required to be present in final manifest (e.g. windows-x86_64)",
+        help="Platform keys required to be present in final manifest (e.g. windows-x86_64 linux-x86_64 macos-arm64)",
     )
     args = parser.parse_args()
 

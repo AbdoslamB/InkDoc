@@ -197,6 +197,42 @@ jobs:
           if (Test-Path "dist-onefile/inkdoc.exe") { Copy-Item "dist-onefile/inkdoc.exe" release/ }
           if (Test-Path "dist-installer/inkdoc-setup.exe") { Copy-Item "dist-installer/inkdoc-setup.exe" release/ }
 
+      - name: Report staged artifact sizes and digests
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          try {
+            Write-Host "=== Staged Artifact Sizes & SHA-256 Digests (${{ matrix.asset_name }}) ==="
+            $summary = @(
+              "### Staged Artifacts (${{ matrix.asset_name }})",
+              "",
+              "| Name | Bytes | MiB |",
+              "| :--- | :--- | :--- |"
+            )
+            $hashes = @()
+            Get-ChildItem -Path release -File | ForEach-Object {
+              $bytes = $_.Length
+              $mib = "{0:N2}" -f ($bytes / 1MB)
+              $hash = (Get-FileHash -Path $_.FullName -Algorithm SHA256).Hash.ToLower()
+              Write-Host "$($_.Name): $bytes bytes | SHA-256: $hash"
+              $summary += "| ``$($_.Name)`` | $bytes | $mib |"
+              $hashes += "$hash  $($_.Name)"
+            }
+            if ($env:GITHUB_STEP_SUMMARY) {
+              $summary += ""
+              $summary += "<details><summary>SHA-256 Checksums</summary>"
+              $summary += ""
+              $summary += "``````"
+              $summary += $hashes
+              $summary += "``````"
+              $summary += "</details>"
+              $summary += ""
+              $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            }
+          } catch {
+            Write-Warning "Failed to report artifact sizes: $_"
+          }
+
       - name: Install smoke test document generators
         run: |
           pip install python-docx==1.1.2 openpyxl==3.1.5 fpdf2==2.8.2

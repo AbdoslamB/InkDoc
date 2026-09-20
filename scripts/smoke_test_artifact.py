@@ -58,6 +58,9 @@ def find_executable(base_dir: Path) -> Path:
         app_candidates = list(base_dir.rglob("Contents/MacOS/inkdoc"))
         if app_candidates:
             exe = app_candidates[0]
+            exe_str = str(exe).replace("\\", "/")
+            if ".app/Contents/MacOS" not in exe_str:
+                raise RuntimeError(f"macOS executable path does not contain .app/Contents/MacOS: {exe}")
             exe.chmod(0o755)
             return exe
         raise FileNotFoundError(f"Could not find macOS .app bundle executable (Contents/MacOS/inkdoc) in {base_dir}")
@@ -207,6 +210,10 @@ def run_smoke_test(
     with tempfile.TemporaryDirectory(prefix="inkdoc-smoke-", ignore_cleanup_errors=True) as tmp:
         temp_dir = Path(tmp)
         exe_path = prepare_target_executable(artifact_path, artifact_type, temp_dir)
+        if sys.platform == "darwin":
+            exe_str = str(exe_path).replace("\\", "/")
+            if ".app/Contents/MacOS" not in exe_str:
+                raise RuntimeError(f"macOS executable path does not contain .app/Contents/MacOS: {exe_path}")
         print(f"[*] Prepared executable: {exe_path}")
 
         # 1. Run GUI backend self-test in frozen build
@@ -225,10 +232,10 @@ def run_smoke_test(
                     f"STDOUT:\n{out}\n"
                     f"STDERR:\n{err}"
                 )
-            print(f"[PASS] GUI backend self-test succeeded:\n{out.strip()}")
+            print(f"[SELFTEST] {artifact_path.name}: PASS (exit code {selftest_proc.returncode})")
         except subprocess.TimeoutExpired as e:
             kill_process_tree(selftest_proc.pid)
-            raise RuntimeError("--selftest timed out after 15s (process hung or showed modal crash dialog)") from e
+            raise RuntimeError(f"--selftest timed out after 15s for {artifact_path.name}") from e
 
         port = get_free_port()
         print(f"[*] Selected ephemeral port: {port}")
@@ -244,6 +251,7 @@ def run_smoke_test(
                 kwargs["start_new_session"] = True
 
             cmd = [str(exe_path), "--headless", "--port", str(port)]
+            print(f"[LAUNCH-PATH] {artifact_path.name}: {exe_path}")
             print(f"[*] Launching: {' '.join(cmd)}")
             proc = subprocess.Popen(cmd, **kwargs)
 
@@ -272,9 +280,10 @@ def run_smoke_test(
                             if resp.getcode() == 200:
                                 data = json.loads(resp.read().decode("utf-8"))
                                 reported_version = data.get("version")
-                                if data.get("status") == "ok":
+                                status_val = data.get("status")
+                                if status_val == "ok":
                                     health_ok = True
-                                    print(f"[PASS] /health responded HTTP 200 OK (version='{reported_version}')")
+                                    print(f"[HEALTH] {artifact_path.name}: status={status_val} version='{reported_version}'")
                                     break
                     except (urllib.error.URLError, ConnectionResetError, OSError):
                         pass
@@ -298,14 +307,14 @@ def run_smoke_test(
                 print(f"[PASS] Version verification passed: '{reported_version}' == '{expected_version}'")
 
                 # 4. Multi-format conversion testing
-                print("[*] Testing document conversions via /convert/file...")
+                print(f"[*] Testing document conversions for {artifact_path.name} via /convert/file...")
 
                 # 4a. Plain text (.txt)
                 txt_data = b"# Sample Heading\nSmoke test body content for InkDoc verification.\r\n"
                 txt_md = send_file_conversion(port, "sample.txt", txt_data, "text/plain")
                 if "Sample Heading" not in txt_md:
                     raise AssertionError(f"Expected content in text markdown output, got: {txt_md[:200]}")
-                print(f"[PASS] Plain text (.txt) converted successfully ({len(txt_md)} bytes markdown).")
+                print(f"[CONVERT-TXT] {artifact_path.name}: PASS (output length: {len(txt_md)} bytes)")
 
                 # 4b. Word Document (.docx)
                 docx_data = generate_sample_docx()
@@ -317,7 +326,7 @@ def run_smoke_test(
                 )
                 if "DOCX Smoke Test" not in docx_md:
                     raise AssertionError(f"Expected content in docx markdown output, got: {docx_md[:200]}")
-                print(f"[PASS] Word document (.docx) converted successfully ({len(docx_md)} bytes markdown).")
+                print(f"[CONVERT-DOCX] {artifact_path.name}: PASS (output length: {len(docx_md)} bytes)")
 
                 # 4c. Excel Workbook (.xlsx)
                 xlsx_data = generate_sample_xlsx()
@@ -329,14 +338,14 @@ def run_smoke_test(
                 )
                 if "TestRun" not in xlsx_md and "Metric" not in xlsx_md:
                     raise AssertionError(f"Expected content in xlsx markdown output, got: {xlsx_md[:200]}")
-                print(f"[PASS] Excel workbook (.xlsx) converted successfully ({len(xlsx_md)} bytes markdown).")
+                print(f"[CONVERT-XLSX] {artifact_path.name}: PASS (output length: {len(xlsx_md)} bytes)")
 
                 # 4d. PDF Document (.pdf)
                 pdf_data = generate_sample_pdf()
                 pdf_md = send_file_conversion(port, "sample.pdf", pdf_data, "application/pdf")
                 if "PDF Smoke Test" not in pdf_md:
                     raise AssertionError(f"Expected content in pdf markdown output, got: {pdf_md[:200]}")
-                print(f"[PASS] PDF document (.pdf) converted successfully ({len(pdf_md)} bytes markdown).")
+                print(f"[CONVERT-PDF] {artifact_path.name}: PASS (output length: {len(pdf_md)} bytes)")
 
             finally:
                 print(f"[*] Terminating process tree for PID {proc.pid} ...")

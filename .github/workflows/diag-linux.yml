@@ -24,7 +24,7 @@ jobs:
           set +e
           tool_python=$(python --version 2>&1)
           tool_executable=$(python -c "import sys; print(sys.executable)")
-          toolcache_gi=$(python -c "import gi; print(gi.__file__)" 2>&1)
+          toolcache_gi=$(python -c "import gi; print(gi.__file__)" 2>&1 | tail -n 1)
           toolcache_gi_status=$?
           system_gi=$(/usr/bin/python3 -c "import gi; print(gi.__file__)" 2>&1)
           system_gi_status=$?

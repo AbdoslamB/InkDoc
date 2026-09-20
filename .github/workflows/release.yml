@@ -195,6 +195,22 @@ jobs:
         run: |
           Write-Host "Signing Inno Setup installer..."
           # Ready for SignPath / Authenticode signing command when secret is set
+      - name: Trim optional Linux data files
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          bundle=dist/inkdoc
+          echo "Linux bundle before trim: $(du -sh "$bundle" | cut -f1)"
+          icons="$bundle/_internal/share/icons"
+          if [ -d "$icons" ]; then
+            find "$icons" -mindepth 1 -maxdepth 1 ! -name hicolor ! -name Adwaita -exec rm -rf -- {} +
+          fi
+          pocketsphinx="$bundle/_internal/speech_recognition/pocketsphinx-data"
+          if [ -d "$pocketsphinx" ]; then
+            rm -rf -- "$pocketsphinx"
+          fi
+          echo "Linux bundle after trim: $(du -sh "$bundle" | cut -f1)"
+          echo "No shared libraries were removed."
 
       - name: Package (macOS / Linux)
         if: runner.os != 'Windows'
@@ -205,6 +221,7 @@ jobs:
             ditto -c -k --keepParent inkdoc.app "../inkdoc-macos.zip"
           else
             zip -r "../inkdoc-${{ matrix.asset_name }}.zip" inkdoc
+            echo "Linux zip size: $(wc -c < ../inkdoc-${{ matrix.asset_name }}.zip) bytes"
           fi
 
       - name: Stage release artifacts
@@ -284,10 +301,12 @@ jobs:
           {
             echo "Linux bundle size diagnostics"
             echo "=== 40 largest files/directories in dist/inkdoc ==="
-            du -ah dist/inkdoc | sort -rh | head -40
+            du -ah dist/inkdoc | sort -rh > /tmp/du.txt || true
+            head -40 /tmp/du.txt || true
             echo "=== Selected top-level bundle directories/files ==="
             find dist/inkdoc -maxdepth 2 \( -path '*/_internal/gi*' -o -path '*/_internal/gi_repository' -o -path '*/_internal/typelibs' -o -path '*/_internal/webkit*' -o -path '*/_internal/gtk*' -o -path '*/_internal/libicu*' -o -path '*/_internal/libLLVM*' -o -path '*/_internal/onnx*' -o -path '*/_internal/torch*' -o -path '*/_internal/cuda*' \) -print0 | xargs -0 -r du -sh
-          } | tee "$report"
+          } > "$report" || true
+          cat "$report" || true
           if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
             {
               echo "### Linux bundle size diagnostics"
@@ -408,7 +427,8 @@ jobs:
           bytes=$(wc -c < inkdoc-linux-old.zip)
           echo "Old Linux bundle: $bytes bytes"
           echo "=== 40 largest files/directories in dist/inkdoc ==="
-          du -ah dist/inkdoc | sort -rh | head -40
+          du -ah dist/inkdoc | sort -rh > /tmp/old-du.txt || true
+          head -40 /tmp/old-du.txt || true
           if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
             {
               echo "### Old Linux bundle comparison"
@@ -416,7 +436,8 @@ jobs:
               echo "Size: $bytes bytes"
               echo
               echo '```text'
-              du -ah dist/inkdoc | sort -rh | head -40
+              du -ah dist/inkdoc | sort -rh > /tmp/old-du.txt || true
+              head -40 /tmp/old-du.txt || true
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
           fi

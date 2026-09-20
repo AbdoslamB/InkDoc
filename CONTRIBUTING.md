@@ -140,9 +140,15 @@ ruff check .
 2. **Keep PRs Focused**: Keep pull requests focused on a single feature or bug fix.
 3. **Describe Your Verification**: Document the exact commands you ran and operating systems tested in the PR description using the template.
 
+### Dependency Updates
+
+All dependency updates (whether submitted manually or generated automatically by Dependabot) must satisfy the following requirements before merging:
+1. **Automated CI Validation**: The PR must cleanly pass all checks in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) across all supported platforms (Windows, macOS, and Linux).
+2. **Smoke Test of Built App**: Changes to core desktop runtime dependencies (including `pywebview`, `fastapi`, and `uvicorn`) require a local smoke test of a built application package to verify that desktop window events, pywebview loopback orchestration, and PyInstaller bundling continue to function without regressions.
+
 ---
 
-## 6. Security Policy
+## 7. Security Policy
 
 ### Supported Versions
 Only the latest release is supported with security fixes:
@@ -168,7 +174,7 @@ You will receive an initial response within a few days. Once a fix is available,
 
 ---
 
-## 7. Code of Conduct
+## 8. Code of Conduct
 
 ### Our Pledge
 We as members, contributors, and leaders pledge to make participation in our community a harassment-free experience for everyone, regardless of age, body size, visible or invisible disability, ethnicity, sex characteristics, gender identity and expression, level of experience, education, socio-economic status, nationality, personal appearance, race, religion, or sexual identity and orientation.

@@ -17,6 +17,8 @@ jobs:
         run: |
           set -o pipefail
           set +e
+          tool_python=$(python --version 2>&1)
+          tool_executable=$(python -c "import sys; print(sys.executable)")
           toolcache_gi=$(python -c "import gi; print(gi.__file__)" 2>&1)
           toolcache_gi_status=$?
           system_gi=$(/usr/bin/python3 -c "import gi; print(gi.__file__)" 2>&1)
@@ -32,7 +34,7 @@ jobs:
             echo "$system_gi"
             echo "system gi exit=$system_gi_status"
           } 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
-          echo "::notice title=Linux GI diagnostic::runner=${ImageOS:-unknown} ${ImageVersion:-unknown}; toolcache_gi_exit=$toolcache_gi_status output=$toolcache_gi; system_gi_exit=$system_gi_status output=$system_gi"
+          echo "::notice title=Linux GI diagnostic::runner=${ImageOS:-unknown} ${ImageVersion:-unknown}; tool_python=$tool_python exe=$tool_executable; toolcache_gi_exit=$toolcache_gi_status output=$toolcache_gi; system_gi_exit=$system_gi_status output=$system_gi"
 
       - name: Diagnose shipped v1.0.1 artifact
         shell: bash
@@ -61,9 +63,11 @@ jobs:
               wait "$gui_pid"
               echo "gui stayed alive=no exit=$?"
             fi
+            echo "$gui_stayed_alive" > gui-stayed-alive.txt
             echo "### GUI traceback tail"
             tail -n 15 gui.log
           } 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
           selftest_tail=$(tail -n 15 selftest.log | tr '\n' ' ')
           gui_tail=$(tail -n 15 gui.log | tr '\n' ' ')
+          gui_stayed_alive=$(cat gui-stayed-alive.txt)
           echo "::notice title=Shipped v1.0.1 Linux diagnostic::selftest_exit=$selftest_status tail=$selftest_tail; gui_stayed_alive=$gui_stayed_alive gui_tail=$gui_tail"

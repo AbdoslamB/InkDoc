@@ -96,7 +96,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          python -m pip install --ignore-installed -r requirements.txt
           python -m pip install pyinstaller
 
       - name: Verify Linux dependency imports come from the venv
@@ -109,20 +109,29 @@ jobs:
           from pathlib import Path
 
           venv = Path(os.environ["VIRTUAL_ENV"]).resolve()
-          required = ("markitdown", "cryptography", "yaml", "pydantic")
-          optional = ("PIL", "numpy")
-          for name in required + optional:
+            required = ("markitdown", "cryptography", "yaml", "pydantic", "fastapi", "uvicorn", "requests", "httpx", "webview")
+            optional = ("PIL", "numpy")
+            resolved = []
+            shadowed = []
+            for name in required + optional:
               try:
                   module = importlib.import_module(name)
               except ModuleNotFoundError:
                   if name in optional:
-                      print(f"{name}: not installed")
+                  resolved.append((name, "not installed"))
                       continue
                   raise
               path = Path(module.__file__).resolve()
-              print(f"{name}: {path}")
+              resolved.append((name, str(path)))
               if not path.is_relative_to(venv):
-                  raise SystemExit(f"{name} shadows the venv: {path}")
+                shadowed.append((name, str(path)))
+            for name, path in resolved:
+              print(f"{name}: {path}")
+            if shadowed:
+              details = "; ".join(f"{name}: {path}" for name, path in shadowed)
+              raise SystemExit(f"Packages shadowing the venv: {details}")
+            yaml_path = dict(resolved)["yaml"]
+            print(f"PyInstaller yaml source: {yaml_path}")
           PY
 
       - name: Cheap engine manifest release guard (verify existence, size, digests, README alignment)
@@ -134,6 +143,7 @@ jobs:
           SEP="${{ runner.os == 'Windows' && ';' || ':' }}"
           ICON_OPT=""
           GI_OPT=""
+          YAML_OPT=""
           if [ "${{ runner.os }}" = "Windows" ]; then
             ICON_OPT="--icon assets/logo.ico"
           elif [ "${{ runner.os }}" = "macOS" ]; then
@@ -141,11 +151,13 @@ jobs:
           else
             ICON_OPT="--icon assets/logo.png"
             GI_OPT="--collect-all gi"
+            YAML_OPT="--collect-all yaml"
           fi
           pyinstaller --noconfirm --onedir --windowed \
             --name inkdoc \
             $ICON_OPT \
             $GI_OPT \
+            $YAML_OPT \
             --collect-all markitdown \
             --collect-all magika \
             --collect-all uvicorn \

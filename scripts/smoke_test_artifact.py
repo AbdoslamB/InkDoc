@@ -1,48 +1,31 @@
 #!/usr/bin/env python3
-"""Smoke test packaged InkDoc release artifacts as shipped.
-
-Supports:
-- Windows installer (inkdoc-setup.exe): silent install to temp dir, launch installed exe
-- Windows onefile (inkdoc.exe): launch directly
-- Windows zip (inkdoc-windows.zip): extract and launch unpacked exe
-- macOS zip (inkdoc-macos.zip): extract and launch unpacked app/binary
-- Linux zip (inkdoc-linux.zip): extract and launch unpacked binary
-
-Verification steps:
-1. Start in --headless mode on an ephemeral port
-2. Poll /health for up to 60s, assert HTTP 200
-3. Assert reported version matches expected tag/version
-4. Convert a small test document through /convert/file
-5. Kill the entire process tree cleanly
-"""
+"""End-to-end smoke test runner for shipped InkDoc artifacts."""
 from __future__ import annotations
 
 import argparse
 import json
 import os
 import shutil
-import signal
 import socket
 import subprocess
 import sys
 import tempfile
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
 
 
 def get_free_port() -> int:
-    """Find a random available TCP port on localhost."""
+    """Find a random ephemeral port that is free on 127.0.0.1."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
 
 
 def kill_process_tree(pid: int) -> None:
-    """Terminate the process and all its descendants."""
+    """Forcefully terminate a process tree cross-platform."""
     if sys.platform == "win32":
         subprocess.run(
             ["taskkill", "/F", "/T", "/PID", str(pid)],
@@ -52,32 +35,45 @@ def kill_process_tree(pid: int) -> None:
         )
     else:
         try:
+            import signal
+
             pgid = os.getpgid(pid)
             os.killpg(pgid, signal.SIGTERM)
             time.sleep(0.5)
             os.killpg(pgid, signal.SIGKILL)
-        except Exception:
+        except (ProcessLookupError, PermissionError):
             pass
 
 
-def find_executable(search_dir: Path) -> Path:
-    """Find the main inkdoc binary inside an extracted directory."""
+def find_executable(base_dir: Path) -> Path:
+    """Locate the InkDoc executable inside an extracted directory."""
     if sys.platform == "win32":
-        matches = list(search_dir.rglob("inkdoc.exe"))
-        if not matches:
-            raise FileNotFoundError(f"Could not find inkdoc.exe in {search_dir}")
-        return matches[0]
+        candidates = list(base_dir.rglob("inkdoc.exe"))
+        if not candidates:
+            raise FileNotFoundError(f"Could not find inkdoc.exe in {base_dir}")
+        return candidates[0]
 
-    # macOS or Linux
-    matches = [
-        p for p in search_dir.rglob("inkdoc")
-        if p.is_file() and not p.name.endswith(".py") and not p.name.endswith(".sh")
-    ]
-    if not matches:
-        raise FileNotFoundError(f"Could not find inkdoc executable in {search_dir}")
-    exe = matches[0]
-    exe.chmod(exe.stat().st_mode | 0o755)
-    return exe
+    if sys.platform == "darwin":
+        # Check for macOS .app bundle or direct folder binary
+        app_candidates = list(base_dir.rglob("Contents/MacOS/inkdoc"))
+        if app_candidates:
+            exe = app_candidates[0]
+            exe.chmod(0o755)
+            return exe
+        direct_candidates = list(base_dir.rglob("inkdoc"))
+        for c in direct_candidates:
+            if c.is_file() and not c.name.endswith(".zip"):
+                c.chmod(0o755)
+                return c
+        raise FileNotFoundError(f"Could not find macOS inkdoc binary in {base_dir}")
+
+    # Linux
+    candidates = list(base_dir.rglob("inkdoc"))
+    for c in candidates:
+        if c.is_file() and not c.name.endswith(".zip"):
+            c.chmod(0o755)
+            return c
+    raise FileNotFoundError(f"Could not find Linux inkdoc executable in {base_dir}")
 
 
 def prepare_target_executable(artifact_path: Path, artifact_type: str, temp_dir: Path) -> Path:
@@ -123,28 +119,76 @@ def prepare_target_executable(artifact_path: Path, artifact_type: str, temp_dir:
     raise ValueError(f"Unknown artifact type '{artifact_type}'. Expected: onefile, zip, or installer.")
 
 
-def send_sample_conversion(port: int) -> dict:
-    """Test file conversion route via multipart upload."""
+def generate_sample_docx() -> bytes:
+    """Generate minimal valid .docx file."""
+    import io
+    import docx
+
+    doc = docx.Document()
+    doc.add_heading("DOCX Smoke Test", level=1)
+    doc.add_paragraph("Smoke test paragraph content for docx conversion.")
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
+def generate_sample_xlsx() -> bytes:
+    """Generate minimal valid .xlsx file."""
+    import io
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["Metric", "Value", "Status"])
+    ws.append(["TestRun", 42, "OK"])
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def generate_sample_pdf() -> bytes:
+    """Generate minimal standard PDF 1.4 document with extractable text."""
+    return (
+        b"%PDF-1.4\n"
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n"
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n"
+        b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\nendobj\n"
+        b"5 0 obj\n<< /Length 55 >>\nstream\n"
+        b"BT\n/F1 14 Tf\n72 712 Td\n(PDF Smoke Test Sample Document) Tj\nET\n"
+        b"endstream\nendobj\n"
+        b"xref\n0 6\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000236 00000 n \n0000000330 00000 n \n"
+        b"trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n436\n%%EOF"
+    )
+
+
+def send_file_conversion(port: int, filename: str, content: bytes, content_type: str) -> str:
+    """Test file conversion route via multipart upload and assert non-empty markdown."""
     boundary = "----SmokeTestBoundary123456789"
-    content = (
+    body = (
         f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="file"; filename="sample.txt"\r\n'
-        f"Content-Type: text/plain\r\n\r\n"
-        f"# Sample Heading\nSmoke test body content for InkDoc verification.\r\n"
-        f"--{boundary}--\r\n"
-    ).encode("utf-8")
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+        f"Content-Type: {content_type}\r\n\r\n"
+    ).encode("utf-8") + content + f"\r\n--{boundary}--\r\n".encode("utf-8")
 
     url = f"http://127.0.0.1:{port}/convert/file?save_to_downloads=false&response_format=json"
     req = urllib.request.Request(
         url,
-        data=content,
+        data=body,
         headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=15.0) as resp:
+    with urllib.request.urlopen(req, timeout=20.0) as resp:
         if resp.getcode() != 200:
-            raise RuntimeError(f"/convert/file returned status {resp.getcode()}")
-        return json.loads(resp.read().decode("utf-8"))
+            raise RuntimeError(f"/convert/file for {filename} returned status {resp.getcode()}")
+        data = json.loads(resp.read().decode("utf-8"))
+        if not data.get("success"):
+            raise RuntimeError(f"Conversion of {filename} failed: {data}")
+        markdown = data.get("markdown", "")
+        if not markdown.strip():
+            raise RuntimeError(f"Conversion of {filename} returned empty markdown output!")
+        return markdown
 
 
 def run_smoke_test(
@@ -173,6 +217,27 @@ def run_smoke_test(
         exe_path = prepare_target_executable(artifact_path, artifact_type, temp_dir)
         print(f"[*] Prepared executable: {exe_path}")
 
+        # 1. Run GUI backend self-test in frozen build
+        print(f"[*] Running GUI backend self-test: {exe_path} --selftest")
+        selftest_proc = subprocess.Popen(
+            [str(exe_path), "--selftest"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            out, err = selftest_proc.communicate(timeout=15.0)
+            if selftest_proc.returncode != 0:
+                raise RuntimeError(
+                    f"--selftest failed with code {selftest_proc.returncode}:\n"
+                    f"STDOUT:\n{out}\n"
+                    f"STDERR:\n{err}"
+                )
+            print(f"[PASS] GUI backend self-test succeeded:\n{out.strip()}")
+        except subprocess.TimeoutExpired as e:
+            kill_process_tree(selftest_proc.pid)
+            raise RuntimeError("--selftest timed out after 15s (process hung or showed modal crash dialog)") from e
+
         port = get_free_port()
         print(f"[*] Selected ephemeral port: {port}")
 
@@ -195,12 +260,24 @@ def run_smoke_test(
             reported_version = None
 
             try:
-                # 1. Poll /health
+                # 2. Poll /health with fast-fail
                 print(f"[*] Polling http://127.0.0.1:{port}/health (timeout={timeout}s) ...")
                 while (time.time() - start_time) < timeout:
-                    # Check if process terminated unexpectedly
+                    # Fail fast if process terminated unexpectedly
                     if proc.poll() is not None:
-                        raise RuntimeError(f"Process exited prematurely with code {proc.returncode} before /health was ready")
+                        log_content = log_file.read_text(encoding="utf-8", errors="replace") if log_file.is_file() else ""
+                        raise RuntimeError(
+                            f"Process exited prematurely with code {proc.returncode} before /health was ready.\n"
+                            f"Process Log:\n{log_content}"
+                        )
+
+                    # Fail fast if fatal exception trace appears in log
+                    if log_file.is_file() and log_file.stat().st_size > 0:
+                        log_content = log_file.read_text(encoding="utf-8", errors="replace")
+                        if "Traceback (most recent call last)" in log_content or "Failed to execute script" in log_content:
+                            raise RuntimeError(
+                                f"Fatal startup error detected in process log before /health was ready:\n{log_content}"
+                            )
 
                     try:
                         req = urllib.request.Request(f"http://127.0.0.1:{port}/health")
@@ -220,22 +297,53 @@ def run_smoke_test(
                 if not health_ok:
                     raise TimeoutError(f"Timed out after {timeout}s waiting for /health to become available.")
 
-                # 2. Verify reported version
+                # 3. Verify reported version matches expected tag/dev version
                 if reported_version != expected_version:
                     raise AssertionError(
                         f"Version mismatch in /health: expected '{expected_version}', got '{reported_version}'"
                     )
                 print(f"[PASS] Version verification passed: '{reported_version}' == '{expected_version}'")
 
-                # 3. Test document conversion
-                print("[*] Testing sample document conversion via /convert/file ...")
-                conv_result = send_sample_conversion(port)
-                if not conv_result.get("success"):
-                    raise RuntimeError(f"Document conversion failed: {conv_result}")
-                markdown = conv_result.get("markdown", "")
-                if "Sample Heading" not in markdown:
-                    raise AssertionError(f"Expected converted content in markdown output, got: {markdown[:200]}")
-                print(f"[PASS] Sample document converted successfully ({len(markdown)} bytes markdown).")
+                # 4. Multi-format conversion testing
+                print("[*] Testing document conversions via /convert/file...")
+
+                # 4a. Plain text (.txt)
+                txt_data = b"# Sample Heading\nSmoke test body content for InkDoc verification.\r\n"
+                txt_md = send_file_conversion(port, "sample.txt", txt_data, "text/plain")
+                if "Sample Heading" not in txt_md:
+                    raise AssertionError(f"Expected content in text markdown output, got: {txt_md[:200]}")
+                print(f"[PASS] Plain text (.txt) converted successfully ({len(txt_md)} bytes markdown).")
+
+                # 4b. Word Document (.docx)
+                docx_data = generate_sample_docx()
+                docx_md = send_file_conversion(
+                    port,
+                    "sample.docx",
+                    docx_data,
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+                if "DOCX Smoke Test" not in docx_md:
+                    raise AssertionError(f"Expected content in docx markdown output, got: {docx_md[:200]}")
+                print(f"[PASS] Word document (.docx) converted successfully ({len(docx_md)} bytes markdown).")
+
+                # 4c. Excel Workbook (.xlsx)
+                xlsx_data = generate_sample_xlsx()
+                xlsx_md = send_file_conversion(
+                    port,
+                    "sample.xlsx",
+                    xlsx_data,
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+                if "TestRun" not in xlsx_md and "Metric" not in xlsx_md:
+                    raise AssertionError(f"Expected content in xlsx markdown output, got: {xlsx_md[:200]}")
+                print(f"[PASS] Excel workbook (.xlsx) converted successfully ({len(xlsx_md)} bytes markdown).")
+
+                # 4d. PDF Document (.pdf)
+                pdf_data = generate_sample_pdf()
+                pdf_md = send_file_conversion(port, "sample.pdf", pdf_data, "application/pdf")
+                if "PDF Smoke Test" not in pdf_md:
+                    raise AssertionError(f"Expected content in pdf markdown output, got: {pdf_md[:200]}")
+                print(f"[PASS] PDF document (.pdf) converted successfully ({len(pdf_md)} bytes markdown).")
 
             finally:
                 print(f"[*] Terminating process tree for PID {proc.pid} ...")
@@ -254,27 +362,13 @@ def main() -> int:
     parser.add_argument("--artifact", type=Path, required=True, help="Path to artifact to test.")
     parser.add_argument(
         "--type",
-        choices=["installer", "onefile", "zip"],
+        choices=["onefile", "zip", "installer"],
         required=True,
-        help="Artifact type.",
+        help="Artifact distribution packaging type.",
     )
-    parser.add_argument(
-        "--expected-version",
-        required=True,
-        help="Expected version string reported by /health.",
-    )
-    parser.add_argument(
-        "--timeout",
-        type=float,
-        default=60.0,
-        help="Timeout in seconds to wait for /health.",
-    )
-    parser.add_argument(
-        "--log-dir",
-        type=Path,
-        default=None,
-        help="Directory to store process output logs.",
-    )
+    parser.add_argument("--expected-version", required=True, help="Expected version reported by /health.")
+    parser.add_argument("--timeout", type=float, default=60.0, help="Timeout in seconds for /health polling.")
+    parser.add_argument("--log-dir", type=Path, default=None, help="Directory to save process logs.")
 
     args = parser.parse_args()
 
@@ -287,10 +381,9 @@ def main() -> int:
             log_dir=args.log_dir,
         )
         return 0
-    except Exception as err:
-        print(f"\n[FAIL] Smoke test failed: {err}", file=sys.stderr)
-        log_dir = args.log_dir or (Path.cwd() / "smoke-logs")
-        log_file = log_dir / f"{args.artifact.stem}.smoke.log"
+    except Exception as e:
+        print(f"\n[FAIL] Smoke test failed: {e}", file=sys.stderr)
+        log_file = (args.log_dir or (Path.cwd() / "smoke-logs")) / f"{args.artifact.stem}.smoke.log"
         if log_file.is_file():
             print(f"\n--- Process Log ({log_file}) ---", file=sys.stderr)
             print(log_file.read_text(encoding="utf-8", errors="replace"), file=sys.stderr)

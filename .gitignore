@@ -16,3 +16,6 @@ CLAUDE.md
 .atl/
 .work/
 
+# Smoke test and scratch artifacts
+scratch/
+smoke-logs/

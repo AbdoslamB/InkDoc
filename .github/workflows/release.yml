@@ -12,8 +12,29 @@ permissions:
   attestations: write
 
 jobs:
+  create-draft-release:
+    name: Create Draft Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create Single Draft Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          PRERELEASE_FLAG=""
+          if [[ "$TAG" == *-* ]]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+          echo "Creating single draft release for $TAG ($PRERELEASE_FLAG)..."
+          gh release create "$TAG" --draft $PRERELEASE_FLAG --title "$TAG" --generate-notes
+
   build:
     name: Build (${{ matrix.asset_name }})
+    needs: [create-draft-release]
+    if: always() && (needs.create-draft-release.result == 'success' || needs.create-draft-release.result == 'skipped')
     runs-on: ${{ matrix.os }}
     env:
       HAVE_SIGNING: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
@@ -157,33 +178,6 @@ jobs:
             zip -r "../inkdoc-${{ matrix.asset_name }}.zip" inkdoc
           fi
 
-      - name: Smoke-test Windows artifacts (installer, onefile, zip)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          python scripts/smoke_test_artifact.py --artifact dist-installer/inkdoc-setup.exe --type installer --expected-version "${{ steps.ver.outputs.version }}"
-          python scripts/smoke_test_artifact.py --artifact dist-onefile/inkdoc.exe --type onefile --expected-version "${{ steps.ver.outputs.version }}"
-          python scripts/smoke_test_artifact.py --artifact inkdoc-windows.zip --type zip --expected-version "${{ steps.ver.outputs.version }}"
-
-      - name: Smoke-test macOS zip artifact
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          python scripts/smoke_test_artifact.py --artifact inkdoc-macos.zip --type zip --expected-version "${{ steps.ver.outputs.version }}"
-
-      - name: Smoke-test Linux zip artifact
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          python scripts/smoke_test_artifact.py --artifact "inkdoc-${{ matrix.asset_name }}.zip" --type zip --expected-version "${{ steps.ver.outputs.version }}"
-
-      - name: Upload smoke test logs on failure
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: smoke-logs-${{ matrix.asset_name }}
-          path: smoke-logs/*
-
       - name: Stage release artifacts
         shell: pwsh
         run: |
@@ -191,6 +185,33 @@ jobs:
           if (Test-Path "inkdoc-${{ matrix.asset_name }}.zip") { Copy-Item "inkdoc-${{ matrix.asset_name }}.zip" release/ }
           if (Test-Path "dist-onefile/inkdoc.exe") { Copy-Item "dist-onefile/inkdoc.exe" release/ }
           if (Test-Path "dist-installer/inkdoc-setup.exe") { Copy-Item "dist-installer/inkdoc-setup.exe" release/ }
+
+      - name: Smoke-test Windows artifacts (installer, onefile, zip)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          python scripts/smoke_test_artifact.py --artifact release/inkdoc-setup.exe --type installer --expected-version "${{ steps.ver.outputs.version }}"
+          python scripts/smoke_test_artifact.py --artifact release/inkdoc.exe --type onefile --expected-version "${{ steps.ver.outputs.version }}"
+          python scripts/smoke_test_artifact.py --artifact release/inkdoc-windows.zip --type zip --expected-version "${{ steps.ver.outputs.version }}"
+
+      - name: Smoke-test macOS zip artifact
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          python scripts/smoke_test_artifact.py --artifact release/inkdoc-macos.zip --type zip --expected-version "${{ steps.ver.outputs.version }}"
+
+      - name: Smoke-test Linux zip artifact
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          python scripts/smoke_test_artifact.py --artifact "release/inkdoc-${{ matrix.asset_name }}.zip" --type zip --expected-version "${{ steps.ver.outputs.version }}"
+
+      - name: Upload smoke test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: smoke-logs-${{ matrix.asset_name }}
+          path: smoke-logs/*
 
       - name: Generate SHA-256 checksums
         shell: pwsh
@@ -212,14 +233,14 @@ jobs:
           name: inkdoc-build-${{ matrix.asset_name }}
           path: release/*
 
-      - name: Attach to GitHub Draft Release
+      - name: Upload artifacts to GitHub Draft Release
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.2.1
-        with:
-          files: release/*
-          fail_on_unmatched_files: false
-          generate_release_notes: true
-          draft: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Uploading release artifacts to draft release ${{ github.ref_name }}..."
+          gh release upload "${{ github.ref_name }}" release/* --clobber
 
   publish-release:
     name: Publish Release
@@ -233,5 +254,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Publishing release ${{ github.ref_name }} and designating as latest app release..."
-          gh release edit "${{ github.ref_name }}" --draft=false --latest
+          TAG="${{ github.ref_name }}"
+          if [[ "$TAG" == *-* ]]; then
+            echo "Publishing pre-release: $TAG with --latest=false"
+            gh release edit "$TAG" --draft=false --prerelease --latest=false
+          else
+            echo "Publishing stable release: $TAG with --latest=true"
+            gh release edit "$TAG" --draft=false --prerelease=false --latest=true
+          fi

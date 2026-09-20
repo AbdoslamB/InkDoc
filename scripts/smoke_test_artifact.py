@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import signal
 import socket
 import subprocess
@@ -90,8 +91,13 @@ def prepare_target_executable(artifact_path: Path, artifact_type: str, temp_dir:
         extract_dir = temp_dir / "unpacked"
         extract_dir.mkdir(parents=True, exist_ok=True)
         print(f"[*] Unpacking {artifact_path.name} to {extract_dir} ...")
-        with zipfile.ZipFile(artifact_path, "r") as z:
-            z.extractall(extract_dir)
+        if sys.platform == "darwin":
+            subprocess.run(["ditto", "-x", "-k", str(artifact_path), str(extract_dir)], check=True)
+        elif shutil.which("unzip"):
+            subprocess.run(["unzip", "-q", str(artifact_path), "-d", str(extract_dir)], check=True)
+        else:
+            with zipfile.ZipFile(artifact_path, "r") as z:
+                z.extractall(extract_dir)
         return find_executable(extract_dir)
 
     if artifact_type == "installer":
@@ -162,7 +168,7 @@ def run_smoke_test(
     print(f"Log:  {log_file}")
     print(f"{'='*70}")
 
-    with tempfile.TemporaryDirectory(prefix="inkdoc-smoke-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="inkdoc-smoke-", ignore_cleanup_errors=True) as tmp:
         temp_dir = Path(tmp)
         exe_path = prepare_target_executable(artifact_path, artifact_type, temp_dir)
         print(f"[*] Prepared executable: {exe_path}")
@@ -238,6 +244,7 @@ def run_smoke_test(
                     proc.wait(timeout=5)
                 except Exception:
                     pass
+                time.sleep(1.0)
 
     print(f"[ALL PASS] Smoke test succeeded for {artifact_path.name}\n")
 

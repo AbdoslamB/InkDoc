@@ -42,6 +42,10 @@ jobs:
       - name: Byte-compile all sources (catches syntax errors)
         run: python -m compileall -q main.py app tests examples scripts
 
+      - name: Test docs release selector
+        if: runner.os == 'Linux'
+        run: node tests/docs_release_selector.test.js
+
       - name: Engine manifest release guard (verify zero placeholder hashes)
         run: python scripts/generate_engine_manifest.py --verify-manifest
 

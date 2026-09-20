@@ -148,19 +148,14 @@ def generate_sample_xlsx() -> bytes:
 
 
 def generate_sample_pdf() -> bytes:
-    """Generate minimal standard PDF 1.4 document with extractable text."""
-    return (
-        b"%PDF-1.4\n"
-        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
-        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n"
-        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n"
-        b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\nendobj\n"
-        b"5 0 obj\n<< /Length 55 >>\nstream\n"
-        b"BT\n/F1 14 Tf\n72 712 Td\n(PDF Smoke Test Sample Document) Tj\nET\n"
-        b"endstream\nendobj\n"
-        b"xref\n0 6\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000236 00000 n \n0000000330 00000 n \n"
-        b"trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n436\n%%EOF"
-    )
+    """Generate minimal valid PDF with extractable text using fpdf2."""
+    from fpdf import FPDF
+
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Helvetica", size=14)
+    pdf.cell(text="PDF Smoke Test Sample Document")
+    return bytes(pdf.output())
 
 
 def send_file_conversion(port: int, filename: str, content: bytes, content_type: str) -> str:

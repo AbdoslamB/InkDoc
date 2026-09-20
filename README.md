@@ -49,7 +49,7 @@ Ready-to-run desktop packages with every dependency and runtime bundled — **no
 <p align="center">
   <a href="https://github.com/AbdoslamB/inkdoc/releases/download/v1.0.1/inkdoc-setup.exe"><img src="assets/readme/download-windows-setup.svg" width="400" alt="Download InkDoc for Windows: Setup installer (inkdoc-setup.exe)" /></a>
   <a href="https://github.com/AbdoslamB/inkdoc/releases/download/v1.0.1/inkdoc.exe"><img src="assets/readme/download-windows-portable.svg" width="400" alt="Download InkDoc for Windows: Portable executable (inkdoc.exe)" /></a>
-  <a href="https://github.com/AbdoslamB/inkdoc/releases/download/v1.0.1/inkdoc-macos.zip"><img src="assets/readme/download-macos.svg" width="400" alt="Download InkDoc for macOS: Universal application (inkdoc-macos.zip)" /></a>
+  <a href="https://github.com/AbdoslamB/inkdoc/releases/download/v1.0.1/inkdoc-macos.zip"><img src="assets/readme/download-macos.svg" width="400" alt="Download InkDoc for macOS: Apple Silicon application (inkdoc-macos.zip)" /></a>
   <a href="https://github.com/AbdoslamB/inkdoc/releases/download/v1.0.1/inkdoc-linux.zip"><img src="assets/readme/download-linux.svg" width="400" alt="Download InkDoc for Linux: Portable bundle (inkdoc-linux.zip)" /></a>
 </p>
 

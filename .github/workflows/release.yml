@@ -24,6 +24,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ github.ref_name }}"
+          echo "Checking if release or draft already exists for $TAG..."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::A release or draft for tag '$TAG' already exists. Aborting workflow to prevent collision."
+            exit 1
+          fi
           PRERELEASE_FLAG=""
           if [[ "$TAG" == *-* ]]; then
             PRERELEASE_FLAG="--prerelease"
@@ -111,6 +116,9 @@ jobs:
             --collect-all fastapi \
             --collect-all webview \
             --collect-all cryptography \
+            --collect-all pdfminer \
+            --collect-all pdfplumber \
+            --collect-all pypdfium2 \
             --add-data "app/ui${SEP}app/ui" \
             --add-data "assets${SEP}assets" \
             --add-data "app/core/manifest.json${SEP}app/core" \
@@ -130,6 +138,9 @@ jobs:
             --collect-all fastapi \
             --collect-all webview \
             --collect-all cryptography \
+            --collect-all pdfminer \
+            --collect-all pdfplumber \
+            --collect-all pypdfium2 \
             --add-data "app/ui;app/ui" \
             --add-data "assets;assets" \
             --add-data "app/core/manifest.json;app/core" \
@@ -186,6 +197,10 @@ jobs:
           if (Test-Path "dist-onefile/inkdoc.exe") { Copy-Item "dist-onefile/inkdoc.exe" release/ }
           if (Test-Path "dist-installer/inkdoc-setup.exe") { Copy-Item "dist-installer/inkdoc-setup.exe" release/ }
 
+      - name: Install smoke test document generators
+        run: |
+          pip install python-docx openpyxl fpdf2
+
       - name: Smoke-test Windows artifacts (installer, onefile, zip)
         if: runner.os == 'Windows'
         shell: bash
@@ -239,8 +254,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Uploading release artifacts to draft release ${{ github.ref_name }}..."
-          gh release upload "${{ github.ref_name }}" release/* --clobber
+          TAG="${{ github.ref_name }}"
+          echo "Verifying that release '$TAG' is still a draft before uploading..."
+          IS_DRAFT=$(gh release view "$TAG" --json isDraft -q .isDraft)
+          if [ "$IS_DRAFT" != "true" ]; then
+            echo "::error::Release '$TAG' is not a draft (isDraft=$IS_DRAFT). Refusing to upload or clobber."
+            exit 1
+          fi
+          echo "Uploading release artifacts to draft release $TAG..."
+          gh release upload "$TAG" release/* --clobber
 
   publish-release:
     name: Publish Release

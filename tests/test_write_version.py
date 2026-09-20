@@ -5,20 +5,20 @@ import importlib.util
 import subprocess
 import sys
 import tempfile
-from pathlib import Path
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from app.core.update_manager import UpdateManager, UpdateState
 from scripts.write_version import (
     resolve_version_string,
-    write_version_file,
     verify_written_version,
+    write_version_file,
 )
-from app.core.update_manager import UpdateManager, UpdateState
 
 
 class TestWriteVersion(unittest.TestCase):

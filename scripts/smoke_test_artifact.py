@@ -54,18 +54,13 @@ def find_executable(base_dir: Path) -> Path:
         return candidates[0]
 
     if sys.platform == "darwin":
-        # Check for macOS .app bundle or direct folder binary
+        # Check for macOS .app bundle executable (Contents/MacOS/inkdoc)
         app_candidates = list(base_dir.rglob("Contents/MacOS/inkdoc"))
         if app_candidates:
             exe = app_candidates[0]
             exe.chmod(0o755)
             return exe
-        direct_candidates = list(base_dir.rglob("inkdoc"))
-        for c in direct_candidates:
-            if c.is_file() and not c.name.endswith(".zip"):
-                c.chmod(0o755)
-                return c
-        raise FileNotFoundError(f"Could not find macOS inkdoc binary in {base_dir}")
+        raise FileNotFoundError(f"Could not find macOS .app bundle executable (Contents/MacOS/inkdoc) in {base_dir}")
 
     # Linux
     candidates = list(base_dir.rglob("inkdoc"))
@@ -122,6 +117,7 @@ def prepare_target_executable(artifact_path: Path, artifact_type: str, temp_dir:
 def generate_sample_docx() -> bytes:
     """Generate minimal valid .docx file."""
     import io
+
     import docx
 
     doc = docx.Document()
@@ -135,6 +131,7 @@ def generate_sample_docx() -> bytes:
 def generate_sample_xlsx() -> bytes:
     """Generate minimal valid .xlsx file."""
     import io
+
     import openpyxl
 
     wb = openpyxl.Workbook()
@@ -165,7 +162,7 @@ def send_file_conversion(port: int, filename: str, content: bytes, content_type:
         f"--{boundary}\r\n"
         f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
         f"Content-Type: {content_type}\r\n\r\n"
-    ).encode("utf-8") + content + f"\r\n--{boundary}--\r\n".encode("utf-8")
+    ).encode() + content + f"\r\n--{boundary}--\r\n".encode()
 
     url = f"http://127.0.0.1:{port}/convert/file?save_to_downloads=false&response_format=json"
     req = urllib.request.Request(
@@ -258,21 +255,16 @@ def run_smoke_test(
                 # 2. Poll /health with fast-fail
                 print(f"[*] Polling http://127.0.0.1:{port}/health (timeout={timeout}s) ...")
                 while (time.time() - start_time) < timeout:
-                    # Fail fast if process terminated unexpectedly
-                    if proc.poll() is not None:
+                    # Detect process having exited (poll return code instead of matching log text)
+                    ret = proc.poll()
+                    if ret is not None:
+                        log_f.flush()
                         log_content = log_file.read_text(encoding="utf-8", errors="replace") if log_file.is_file() else ""
+                        print(f"\n--- Process Log ({log_file}) ---\n{log_content}\n--- End Process Log ---", file=sys.stderr)
                         raise RuntimeError(
-                            f"Process exited prematurely with code {proc.returncode} before /health was ready.\n"
+                            f"Process exited prematurely with code {ret} before /health was ready.\n"
                             f"Process Log:\n{log_content}"
                         )
-
-                    # Fail fast if fatal exception trace appears in log
-                    if log_file.is_file() and log_file.stat().st_size > 0:
-                        log_content = log_file.read_text(encoding="utf-8", errors="replace")
-                        if "Traceback (most recent call last)" in log_content or "Failed to execute script" in log_content:
-                            raise RuntimeError(
-                                f"Fatal startup error detected in process log before /health was ready:\n{log_content}"
-                            )
 
                     try:
                         req = urllib.request.Request(f"http://127.0.0.1:{port}/health")
@@ -290,7 +282,13 @@ def run_smoke_test(
                     time.sleep(0.5)
 
                 if not health_ok:
-                    raise TimeoutError(f"Timed out after {timeout}s waiting for /health to become available.")
+                    log_f.flush()
+                    log_content = log_file.read_text(encoding="utf-8", errors="replace") if log_file.is_file() else ""
+                    print(f"\n--- Process Log ({log_file}) ---\n{log_content}\n--- End Process Log ---", file=sys.stderr)
+                    raise TimeoutError(
+                        f"Timed out after {timeout}s waiting for /health to become available.\n"
+                        f"Process Log:\n{log_content}"
+                    )
 
                 # 3. Verify reported version matches expected tag/dev version
                 if reported_version != expected_version:

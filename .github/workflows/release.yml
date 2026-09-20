@@ -184,7 +184,7 @@ jobs:
         run: |
           cd dist
           if [ "${{ runner.os }}" = "macOS" ]; then
-            ditto -c -k --keepParent inkdoc "../inkdoc-macos.zip"
+            ditto -c -k --keepParent inkdoc.app "../inkdoc-macos.zip"
           else
             zip -r "../inkdoc-${{ matrix.asset_name }}.zip" inkdoc
           fi
@@ -199,7 +199,7 @@ jobs:
 
       - name: Install smoke test document generators
         run: |
-          pip install python-docx openpyxl fpdf2
+          pip install python-docx==1.1.2 openpyxl==3.1.5 fpdf2==2.8.2
 
       - name: Smoke-test Windows artifacts (installer, onefile, zip)
         if: runner.os == 'Windows'

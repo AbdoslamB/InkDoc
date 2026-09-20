@@ -5,7 +5,7 @@ Publisher: Abdoslam Baabbad
 PublisherUrl: https://github.com/AbdoslamB
 PublisherSupportUrl: https://github.com/AbdoslamB/inkdoc/issues
 PackageName: InkDoc
-PackageUrl: https://abdoslamb.github.io/inkdoc/
+PackageUrl: https://abdoslamb.github.io/InkDoc/
 License: MIT
 LicenseUrl: https://raw.githubusercontent.com/AbdoslamB/inkdoc/main/LICENSE
 ShortDescription: Tri-engine desktop application and local REST API for converting documents to Markdown.

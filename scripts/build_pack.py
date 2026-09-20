@@ -9,7 +9,7 @@ Hardened with:
 - Mandatory archive size check (< 1.9 GiB)
 
 Usage:
-    python scripts/build_pack.py [--output-dir dist/packs] [--release-tag docling-pack-v1]
+    python scripts/build_pack.py [--output-dir dist/packs] [--release-tag docling-pack-v2]
 """
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ if str(REPO_ROOT) not in sys.path:
 from app.core.engine_manifest import get_current_platform_key
 
 MAX_ALLOWED_PACK_SIZE = 1900 * 1024 * 1024  # 1.9 GiB maximum limit
-DEFAULT_RELEASE_TAG = "docling-pack-v1"
+DEFAULT_RELEASE_TAG = "docling-pack-v2"
 MINIMAL_PDF_BYTES = (
     b"%PDF-1.4\n"
     b"1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
@@ -62,6 +62,14 @@ def compute_tree_hashes(root_dir: Path) -> dict[str, str]:
             rel = p.relative_to(root_dir).as_posix()
             tree[rel] = compute_sha256(p)
     return tree
+
+
+def count_model_files(models_dir: Path) -> tuple[int, int]:
+    """Return the count and size of bundled Docling model artifacts."""
+    files = [path for path in models_dir.rglob("*") if path.is_file()]
+    if not files:
+        raise RuntimeError(f"Docling model prefetch produced no files in {models_dir}")
+    return len(files), sum(path.stat().st_size for path in files)
 
 
 def resign_macos_binaries(root_dir: Path) -> None:
@@ -103,11 +111,14 @@ def run_post_build_smoke_test(
 
         extracted_python = clean_dir / interpreter_rel
         extracted_worker = clean_dir / worker_rel
+        extracted_models = clean_dir / "models"
 
         if not extracted_python.is_file():
             raise RuntimeError(f"Extracted interpreter not found at {extracted_python}")
         if not extracted_worker.is_file():
             raise RuntimeError(f"Extracted worker script not found at {extracted_worker}")
+        model_count, model_bytes = count_model_files(extracted_models)
+        print(f"    [OK] Bundled Docling models present ({model_count} files, {model_bytes} bytes).")
 
         # Ensure POSIX execution permissions on Unix
         if sys.platform != "win32":
@@ -123,6 +134,7 @@ def run_post_build_smoke_test(
             "OPENBLAS_NUM_THREADS": "1",
             "MKL_NUM_THREADS": "1",
             "OMP_NUM_THREADS": "1",
+            "DOCLING_ARTIFACTS_PATH": str(extracted_models),
         })
 
         # 1. Ping RPC test
@@ -159,8 +171,8 @@ def run_post_build_smoke_test(
             "job_id": "smoke-test-1",
             "source_file": str(pdf_path),
             "output_file": str(out_md),
-            "ocr": False,
-            "table_structure": False,
+            "ocr": True,
+            "table_structure": True,
         }) + "\n"
 
         proc2 = subprocess.Popen(
@@ -172,8 +184,14 @@ def run_post_build_smoke_test(
             env=offline_env,
         )
         stdout_data2, stderr_data2 = proc2.communicate(input=convert_rpc, timeout=60)
+        if proc2.returncode != 0:
+            raise RuntimeError(f"Post-build offline PDF conversion failed with code {proc2.returncode}: {stderr_data2}")
         lines2 = [ln.strip() for ln in stdout_data2.strip().split("\n") if ln.strip()]
         last_res2 = json.loads(lines2[-1]) if lines2 else {}
+        if last_res2.get("status") != "ok" or not out_md.is_file():
+            raise RuntimeError(
+                f"Post-build offline PDF conversion did not produce Markdown: {last_res2} (stdout: {stdout_data2})"
+            )
         print(f"    [OK] Post-build worker conversion RPC executed (status: {last_res2.get('status')}).")
 
 
@@ -245,27 +263,37 @@ def build_pack(
     ]
     subprocess.run(install_cmd, check=True)
 
-    # 5. Copy worker script into staging root
+    # 5. Prefetch the default Docling model artifacts into the pack.  The worker
+    # runs with networking disabled, so model downloads after installation are
+    # not an option.
+    models_dir = staging_dir / "models"
+    model_tool = venv_dir / ("Scripts/docling-tools.exe" if sys.platform.startswith("win") else "bin/docling-tools")
+    print(f"[*] Prefetching Docling models into {models_dir}...")
+    subprocess.run([str(model_tool), "models", "download", "--output-dir", str(models_dir)], check=True)
+    model_count, model_bytes = count_model_files(models_dir)
+    print(f"    [OK] Bundled Docling models: {model_count} files, {model_bytes} bytes.")
+
+    # 6. Copy worker script into staging root
     worker_src = REPO_ROOT / "app" / "core" / "engines" / "worker.py"
     worker_dst = staging_dir / "worker.py"
     shutil.copy2(worker_src, worker_dst)
 
-    # 6. Strip unnecessary bloat (__pycache__, test files)
+    # 7. Strip unnecessary bloat (__pycache__, test files)
     print("[*] Cleaning cache files and tests from pack...")
     for cache_dir in staging_dir.rglob("__pycache__"):
         if cache_dir.is_dir():
             shutil.rmtree(cache_dir, ignore_errors=True)
 
-    # 7. macOS Ad-Hoc Re-signing (Requirement 5)
+    # 8. macOS Ad-Hoc Re-signing (Requirement 5)
     if sys.platform == "darwin":
         resign_macos_binaries(staging_dir)
 
-    # 8. Compute full tree file hashes before archiving
+    # 9. Compute full tree file hashes before archiving
     print("[*] Computing cryptographic hashes for all pack files...")
     sha256_files = compute_tree_hashes(staging_dir)
     print(f"    [+] Indexed {len(sha256_files)} files.")
 
-    # 9. Create archive
+    # 10. Create archive
     archive_path = output_dir / archive_name
     print(f"[*] Packaging into {archive_path}...")
     if archive_format == "zip":
@@ -309,7 +337,7 @@ def build_pack(
         "sha256_files": sha256_files,
     }
 
-    # 10. Write per-platform manifest fragment (Requirement 10)
+    # 11. Write per-platform manifest fragment (Requirement 10)
     fragment_data = {
         "manifest_version": "1.0.0",
         "pack_version": pack_version,
@@ -324,7 +352,7 @@ def build_pack(
     fragment_path.write_text(json.dumps(fragment_data, indent=2) + "\n", encoding="utf-8")
     print(f"[OK] Manifest fragment saved to: {fragment_path}")
 
-    # 11. Run post-build smoke test (Requirement 5)
+    # 12. Run post-build smoke test (Requirement 5)
     if run_test:
         run_post_build_smoke_test(
             archive_path=archive_path,
@@ -340,7 +368,7 @@ def build_pack(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build InkDoc Docling engine pack.")
     parser.add_argument("--output-dir", type=Path, default=REPO_ROOT / "dist" / "packs")
-    parser.add_argument("--release-tag", type=str, default=DEFAULT_RELEASE_TAG, help="Dedicated release tag (e.g. docling-pack-v1)")
+    parser.add_argument("--release-tag", type=str, default=DEFAULT_RELEASE_TAG, help="Dedicated release tag (e.g. docling-pack-v2)")
     parser.add_argument("--pack-version", type=str, default="1.0.0", help="Pack version string")
     parser.add_argument("--min-app-version", type=str, default="1.0.0", help="Minimum required InkDoc version")
     parser.add_argument("--sample-pdf", type=Path, help="Path to sample PDF for smoke test")

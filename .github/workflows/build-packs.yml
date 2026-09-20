@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Dedicated release tag to publish packs to (e.g. docling-pack-v1)"
+        description: "Dedicated release tag to publish packs to (e.g. docling-pack-v2)"
         required: true
-        default: "docling-pack-v1"
+        default: "docling-pack-v2"
 
 permissions:
   contents: write
@@ -17,7 +17,7 @@ permissions:
   attestations: write
 
 env:
-  DEFAULT_RELEASE_TAG: "docling-pack-v1"
+  DEFAULT_RELEASE_TAG: "docling-pack-v2"
 
 jobs:
   build-pack:
@@ -36,7 +36,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Determine release tag
         id: tag
@@ -45,6 +45,10 @@ jobs:
           TARGET_TAG="${{ github.event.inputs.release_tag || github.ref_name }}"
           if [ -z "$TARGET_TAG" ] || [ "$TARGET_TAG" = "main" ]; then
             TARGET_TAG="${{ env.DEFAULT_RELEASE_TAG }}"
+          fi
+          if [ "$TARGET_TAG" = "docling-pack-v1" ]; then
+            echo "::error::docling-pack-v1 is immutable. Rebuild this workflow with docling-pack-v2."
+            exit 1
           fi
           echo "target_tag=$TARGET_TAG" >> "$GITHUB_OUTPUT"
           echo "Target Release Tag: $TARGET_TAG"
@@ -76,7 +80,7 @@ jobs:
           fi
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
           cache: "pip"
@@ -95,7 +99,7 @@ jobs:
             --release-tag "${{ steps.tag.outputs.target_tag }}"
 
       - name: Upload Pack & Fragment Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: docling-pack-${{ matrix.platform }}
           path: dist/packs/*
@@ -107,7 +111,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Determine release tag
         id: tag
@@ -117,15 +121,19 @@ jobs:
           if [ -z "$TARGET_TAG" ] || [ "$TARGET_TAG" = "main" ]; then
             TARGET_TAG="${{ env.DEFAULT_RELEASE_TAG }}"
           fi
+          if [ "$TARGET_TAG" = "docling-pack-v1" ]; then
+            echo "::error::docling-pack-v1 is immutable. Rebuild this workflow with docling-pack-v2."
+            exit 1
+          fi
           echo "target_tag=$TARGET_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
 
       - name: Download all platform pack artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: dist/downloaded_artifacts
 
@@ -147,71 +155,42 @@ jobs:
             --output dist/manifest.json \
             --expected-platforms windows-x86_64 linux-x86_64 macos-arm64
 
-      - name: Full Download & Extraction Verification (Requirement 1)
-        shell: bash
+      - name: Verify packs with EngineManager extraction and launch integrity (Requirement 1)
         run: |
-          python -c '
-          import json, tarfile, zipfile, hashlib, sys
-          from pathlib import Path
+          python scripts/verify_engine_pack_install.py \
+            --manifest dist/manifest.json \
+            --archives-dir dist/all_packs
 
-          manifest = json.loads(Path("dist/manifest.json").read_text(encoding="utf-8"))
-          packs_dir = Path("dist/all_packs")
-          temp_verify = Path("dist/verify_extraction")
-
-          print("[*] Running full extraction and SHA-256 tree verification on all pack archives...")
-
-          for plat_key, plat_info in manifest["supported_platforms"].items():
-              fmt = plat_info["archive_format"]
-              expected_sha = plat_info["sha256"]
-              expected_size = plat_info["size_bytes"]
-              expected_tree = plat_info["sha256_files"]
-              
-              ext = ".zip" if fmt == "zip" else ".tar.gz"
-              archive_path = packs_dir / f"docling-{plat_key}{ext}"
-              if not archive_path.is_file():
-                  print(f"[FAIL] Archive missing for {plat_key}: {archive_path}")
-                  sys.exit(1)
-
-              # 1. Size check
-              actual_size = archive_path.stat().st_size
-              if actual_size != expected_size:
-                  print(f"[FAIL] Archive size mismatch for {plat_key}: expected {expected_size}, got {actual_size}")
-                  sys.exit(1)
-
-              # 2. Archive SHA-256
-              h = hashlib.sha256(archive_path.read_bytes()).hexdigest()
-              if h.lower() != expected_sha.lower():
-                  print(f"[FAIL] Archive digest mismatch for {plat_key}: expected {expected_sha}, got {h}")
-                  sys.exit(1)
-
-              # 3. Full Extraction & File Tree Verification
-              extract_dir = temp_verify / plat_key
-              extract_dir.mkdir(parents=True, exist_ok=True)
-              if fmt == "zip":
-                  with zipfile.ZipFile(archive_path) as zf:
-                      zf.extractall(extract_dir)
-              else:
-                  with tarfile.open(archive_path, "r:*") as tf:
-                      tf.extractall(extract_dir)
-
-              for rel_path, file_sha in expected_tree.items():
-                  extracted_file = extract_dir / rel_path
-                  if not extracted_file.is_file():
-                      print(f"[FAIL] File {rel_path} missing in extracted {plat_key} pack!")
-                      sys.exit(1)
-                  f_hash = hashlib.sha256(extracted_file.read_bytes()).hexdigest()
-                  if f_hash.lower() != file_sha.lower():
-                      print(f"[FAIL] Extracted file hash mismatch for {rel_path} in {plat_key}!")
-                      sys.exit(1)
-
-              print(f"  [OK] Full tree verification passed for {plat_key} ({len(expected_tree)} files verified).")
-          print("[PASS] Full extraction verification completed successfully for all platforms.")
-          '
+      - name: Pre-upload immutable-asset check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_TAG: ${{ steps.tag.outputs.target_tag }}
+        run: |
+          expected_assets=(
+            docling-windows-x86_64.zip
+            docling-linux-x86_64.tar.gz
+            docling-macos-arm64.tar.gz
+            manifest.json
+          )
+          if gh release view "${TARGET_TAG}" --json assets --jq '.assets[].name' > existing_assets.txt 2>/dev/null; then
+            conflicts=0
+            for asset in "${expected_assets[@]}"; do
+              if grep -Fqx "$asset" existing_assets.txt; then
+                echo "::error::Refusing to overwrite existing release asset '$asset' on '${TARGET_TAG}'."
+                conflicts=1
+              fi
+            done
+            if [ "$conflicts" -ne 0 ]; then
+              exit 1
+            fi
+          fi
 
       - name: Attach Packs & Manifest to GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ steps.tag.outputs.target_tag }}
+          overwrite_files: false
           files: |
             dist/all_packs/*
             dist/manifest.json
@@ -219,8 +198,65 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Attest Pack Provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: |
             dist/all_packs/*
             dist/manifest.json
+
+  verify-published-release:
+    name: Verify Published Release Assets
+    needs: [finalize-pack-release]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      attestations: read
+      id-token: write
+    steps:
+      - name: Determine release tag
+        id: tag
+        shell: bash
+        run: |
+          TARGET_TAG="${{ github.event.inputs.release_tag || github.ref_name }}"
+          if [ -z "$TARGET_TAG" ] || [ "$TARGET_TAG" = "main" ]; then
+            TARGET_TAG="${{ env.DEFAULT_RELEASE_TAG }}"
+          fi
+          echo "target_tag=$TARGET_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Download public assets and verify size and SHA-256
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_TAG: ${{ steps.tag.outputs.target_tag }}
+        run: |
+          set -euo pipefail
+          expected_assets=(
+            docling-windows-x86_64.zip
+            docling-linux-x86_64.tar.gz
+            docling-macos-arm64.tar.gz
+            manifest.json
+          )
+          mkdir -p published-assets
+          gh release view "$TARGET_TAG" --json assets > release_assets.json
+          for asset in "${expected_assets[@]}"; do
+            expected_size=$(python -c 'import json, sys; assets = json.load(open("release_assets.json"))["assets"]; name = sys.argv[1]; matches = [a for a in assets if a["name"] == name]; assert len(matches) == 1, f"Expected exactly one release asset named {name}, found {len(matches)}"; print(matches[0]["size"])' "$asset")
+            expected_digest=$(python -c 'import json, sys; assets = json.load(open("release_assets.json"))["assets"]; name = sys.argv[1]; matches = [a for a in assets if a["name"] == name]; assert len(matches) == 1, f"Expected exactly one release asset named {name}, found {len(matches)}"; print(matches[0]["digest"])' "$asset")
+            public_url="https://github.com/AbdoslamB/InkDoc/releases/download/${TARGET_TAG}/${asset}"
+            curl --fail --location --retry 3 --retry-all-errors --output "published-assets/${asset}" "$public_url"
+            actual_size=$(wc -c < "published-assets/${asset}")
+            actual_digest="sha256:$(sha256sum "published-assets/${asset}" | awk '{print $1}')"
+            test "$actual_size" = "$expected_size"
+            test "$actual_digest" = "$expected_digest"
+            echo "[PASS] ${asset}: size=${actual_size}, sha256=${actual_digest#sha256:}"
+          done
+
+      - name: Verify GitHub build attestations
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          for asset in published-assets/*; do
+            gh attestation verify "$asset" --repo AbdoslamB/InkDoc
+            echo "[PASS] Attestation verified: $(basename "$asset")"
+          done

@@ -940,6 +940,7 @@ def test_post_build_smoke_test_and_size_guard():
             "        sys.stdout.write(json.dumps({'status': 'pong'}) + '\\n')\n"
             "        sys.stdout.flush()\n"
             "    elif req.get('action') == 'convert':\n"
+            "        open(req['output_file'], 'w').write('# smoke')\n"
             "        sys.stdout.write(json.dumps({'status': 'ok'}) + '\\n')\n"
             "        sys.stdout.flush()\n"
         )
@@ -947,6 +948,7 @@ def test_post_build_smoke_test_and_size_guard():
         # We'll package a runnable worker and copy current python into the zip
         with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zf:
             zf.writestr("worker.py", mock_worker_code)
+            zf.writestr("models/required-model.bin", b"test model")
             # Copy current python executable into the zip to act as isolated python
             zf.write(sys.executable, "bin/python.exe")
 

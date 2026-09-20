@@ -28,6 +28,7 @@ os.environ.setdefault("VECLIB_MAXIMUM_THREADS", "1")
 os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+os.environ.setdefault("DOCLING_ARTIFACTS_PATH", str(Path(__file__).resolve().parent / "models"))
 os.environ.setdefault("DO_NOT_TRACK", "1")
 os.environ.setdefault("SCARF_NO_ANALYTICS", "1")
 

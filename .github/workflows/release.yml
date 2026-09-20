@@ -39,7 +39,7 @@ jobs:
   build:
     name: Build (${{ matrix.asset_name }})
     needs: [create-draft-release]
-    if: always() && (needs.create-draft-release.result == 'success' || needs.create-draft-release.result == 'skipped')
+    if: ${{ !failure() && !cancelled() }}
     runs-on: ${{ matrix.os }}
     env:
       HAVE_SIGNING: ${{ secrets.SIGNPATH_API_TOKEN != '' }}

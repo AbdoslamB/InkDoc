@@ -832,12 +832,14 @@ python3 -m pip install -r requirements.txt
         clearTimeout(timeout);
         if (!Array.isArray(releases)) return;
         var appRelease = releases.find(function (r) {
-          return r && !r.draft && /^v\d+\.\d+\.\d+/.test(r.tag_name) && !r.tag_name.includes("pack");
+          return r && !r.draft && !r.prerelease && !r.tag_name.includes("-")
+            && /^v\d+\.\d+\.\d+$/.test(r.tag_name) && !r.tag_name.includes("pack");
         });
         if (!appRelease || !appRelease.tag_name) return;
         var targetTag = appRelease.tag_name;
-        document.querySelectorAll('a[href*="/releases/download/v"], a[href*="/releases/tag/v"]').forEach(function (link) {
-          link.href = link.href.replace(/\/releases\/download\/v[^\/]+/, "/releases/download/" + targetTag)
+        document.querySelectorAll('a[href*="/releases/latest/download/"], a[href*="/releases/download/v"], a[href*="/releases/tag/v"]').forEach(function (link) {
+          link.href = link.href.replace(/\/releases\/latest\/download\//, "/releases/download/" + targetTag + "/")
+                               .replace(/\/releases\/download\/v[^\/]+/, "/releases/download/" + targetTag)
                                .replace(/\/releases\/tag\/v[^\/]+/, "/releases/tag/" + targetTag);
         });
       })

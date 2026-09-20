@@ -301,12 +301,43 @@ def run_desktop(
     return 0
 
 
+def run_selftest() -> int:
+    """Run headless self-test importing webview and the platform-specific GUI backend."""
+    print("[*] Running InkDoc GUI backend self-test...")
+    try:
+        import webview
+        print(f"[PASS] Successfully imported 'webview' (version={getattr(webview, '__version__', 'unknown')})")
+
+        if sys.platform == "win32":
+            import webview.platforms.winforms as backend
+            print(f"[PASS] Successfully imported Windows GUI backend: {backend.__name__}")
+        elif sys.platform == "darwin":
+            import webview.platforms.cocoa as backend
+            print(f"[PASS] Successfully imported macOS GUI backend: {backend.__name__}")
+        elif sys.platform.startswith("linux"):
+            import gi
+            import webview.platforms.gtk as backend
+            print(f"[PASS] Successfully imported Linux GI: {gi.__file__}")
+            print(f"[PASS] Successfully imported Linux GUI backend: {backend.__name__}")
+
+        print("[ALL PASS] GUI backend self-test succeeded.")
+        return 0
+    except Exception as e:
+        print(f"[FAIL] GUI backend self-test failed: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="InkDoc Multi-Engine Workbench")
     parser.add_argument("--port", type=int, default=None, help="Port to run the local server on")
     parser.add_argument("--headless", action="store_true", help="Run in headless server mode without window")
+    parser.add_argument("--selftest", action="store_true", help="Run self-test importing GUI backend and exit 0")
 
     args = parser.parse_args()
+    if args.selftest:
+        return run_selftest()
     return run_desktop(port=args.port, headless=args.headless)
 
 

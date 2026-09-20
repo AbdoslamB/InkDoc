@@ -74,6 +74,14 @@ Ready-to-run desktop packages with every dependency and runtime bundled — **no
 > [!NOTE]
 > **Windows SmartScreen:** InkDoc's Windows builds aren't code-signed yet, so Windows may show "Windows protected your PC" on first run. Verify your download below, then choose **More info → Run anyway**.
 
+> [!NOTE]
+> **macOS First Run (Unsigned Application):** InkDoc macOS builds are currently unsigned. On first launch, macOS Gatekeeper may show a warning ("cannot be opened because the developer cannot be verified"). To open the application:
+> - **Finder:** In Finder, **right-click (or Control-click)** `inkdoc.app`, select **Open**, and click **Open** in the confirmation dialog.
+> - **Terminal:** Remove the quarantine attribute recursively:
+>   ```bash
+>   xattr -dr com.apple.quarantine inkdoc.app
+>   ```
+
 <details open>
 <summary><b>Updates &amp; cryptographic verification</b></summary>
 
@@ -88,9 +96,9 @@ InkDoc features a security-first update workflow designed to protect users again
   - **Windows Installer (`inkdoc-setup.exe`):** Silent in-app background upgrade (`/VERYSILENT /SUPPRESSMSGBOXES /NORESTART`) followed by clean process termination and relaunch.
   - **Windows Portable, macOS (arm64), Linux (x86_64):** Verified download directly to `~/Downloads` (`.part` streaming followed by atomic rename), with a one-click **Reveal in Folder** option.
 - **Manual Rollback Policy:** The Windows installer path executes an in-place upgrade without automatic rollback. If an issue occurs after an update, users can manually roll back at any time by downloading and installing any prior release from the [GitHub Releases](https://github.com/AbdoslamB/inkdoc/releases) archive.
-- **macOS Gatekeeper & Quarantine:** InkDoc builds are unsigned. The updater strictly preserves macOS quarantine attributes and does not strip quarantine. If Gatekeeper blocks execution, right-click `InkDoc.app` and choose **Open**, or run:
+- **macOS Gatekeeper & Quarantine:** InkDoc builds are unsigned. The updater strictly preserves macOS quarantine attributes and does not strip quarantine. If Gatekeeper blocks execution, right-click `inkdoc.app` and choose **Open**, or run:
   ```bash
-  xattr -d com.apple.quarantine /Applications/InkDoc.app
+  xattr -dr com.apple.quarantine /Applications/inkdoc.app
   ```
 
 #### Manual Checksum & Provenance Verification

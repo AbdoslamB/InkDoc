@@ -20,6 +20,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from fastapi.testclient import TestClient
 
+import app.server.server as server_module
 from app.server.server import app, set_update_applying
 
 client = TestClient(app)
@@ -71,6 +72,20 @@ def test_convert_file():
     assert data["filename"] == "test2.txt"
     assert "Simple plain text content" in data["markdown"]
     print("[OK] test_convert_file (json format) passed")
+
+
+def test_audio_conversion_unavailable_is_not_500(monkeypatch):
+    def raise_audio_failure(*_args):
+        raise RuntimeError("FileConversionException: AudioConverter threw UnknownValueError")
+
+    monkeypatch.setattr(server_module, "_perform_conversion", raise_audio_failure)
+    response = client.post(
+        "/convert/file?response_format=json",
+        files={"file": ("sample.wav", io.BytesIO(b"RIFF"), "audio/x-wav")},
+    )
+    assert response.status_code == 422
+    assert "Audio transcription unavailable" in response.json()["detail"]
+    print("[OK] test_audio_conversion_unavailable_is_not_500 passed")
 
 
 def test_convert_batch():

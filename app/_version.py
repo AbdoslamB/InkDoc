@@ -11,4 +11,4 @@ __version__ = "1.0.1"
 
 def get_version() -> str:
     """Return the current InkDoc version string."""
-    return __version__
+    return globals().get("__version__", "0.0.0+unknown")

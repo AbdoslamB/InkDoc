@@ -263,9 +263,19 @@ class UpdateManager:
             self._status.state = UpdateState.CHECKING.value
             self._status.error = None
 
+        installed_ver = get_version()
+        if not installed_ver or installed_ver == "0.0.0+unknown" or "unknown" in installed_ver:
+            logger.error(
+                "LOUD ERROR: Update check refused because application version is unknown (%s)",
+                installed_ver,
+            )
+            with self._lock:
+                self._status.state = UpdateState.ERROR.value
+                self._status.error = f"Update check refused: application version is unknown ({installed_ver})"
+                return asdict(self._status)
+
         try:
             raw_manifest_bytes = self._fetch_manifest_bytes()
-            installed_ver = get_version()
 
             # Cryptographically verify envelope BEFORE parsing
             manifest = verify_envelope_bytes(
@@ -371,6 +381,17 @@ class UpdateManager:
 
     def download_update(self) -> dict[str, Any]:
         """Start downloading the verified update asset in a background thread."""
+        installed_ver = get_version()
+        if not installed_ver or installed_ver == "0.0.0+unknown" or "unknown" in installed_ver:
+            logger.error(
+                "LOUD ERROR: Update download refused because application version is unknown (%s)",
+                installed_ver,
+            )
+            with self._lock:
+                self._status.state = UpdateState.ERROR.value
+                self._status.error = f"Update download refused: application version is unknown ({installed_ver})"
+            raise ValueError(f"Update download refused: application version is unknown ({installed_ver})")
+
         with self._lock:
             if self._status.state == UpdateState.DOWNLOADING.value:
                 return asdict(self._status)

@@ -27,10 +27,11 @@ jobs:
       - name: Create Single Draft Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           TAG="${{ github.ref_name }}"
           echo "Checking if release or draft already exists for $TAG..."
-          if gh release view "$TAG" >/dev/null 2>&1; then
+          if gh release view "$TAG" -R "${{ github.repository }}" >/dev/null 2>&1; then
             echo "::error::A release or draft for tag '$TAG' already exists. Aborting workflow to prevent collision."
             exit 1
           fi
@@ -39,7 +40,7 @@ jobs:
             PRERELEASE_FLAG="--prerelease"
           fi
           echo "Creating single draft release for $TAG ($PRERELEASE_FLAG)..."
-          gh release create "$TAG" --draft $PRERELEASE_FLAG --title "$TAG" --generate-notes
+          gh release create "$TAG" -R "${{ github.repository }}" --draft $PRERELEASE_FLAG --title "$TAG" --generate-notes
 
   build:
     name: Build (${{ matrix.asset_name }})
@@ -385,16 +386,17 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           TAG="${{ github.ref_name }}"
           echo "Verifying that release '$TAG' is still a draft before uploading..."
-          IS_DRAFT=$(gh release view "$TAG" --json isDraft -q .isDraft)
+          IS_DRAFT=$(gh release view "$TAG" -R "${{ github.repository }}" --json isDraft -q .isDraft)
           if [ "$IS_DRAFT" != "true" ]; then
             echo "::error::Release '$TAG' is not a draft (isDraft=$IS_DRAFT). Refusing to upload or clobber."
             exit 1
           fi
           echo "Uploading release artifacts to draft release $TAG..."
-          gh release upload "$TAG" release/* --clobber
+          gh release upload "$TAG" -R "${{ github.repository }}" release/* --clobber
 
   publish-release:
     name: Publish Release
@@ -408,9 +410,10 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           TAG="${{ github.ref_name }}"
-          assets=$(gh release view "$TAG" --json assets -q '.assets[].name')
+          assets=$(gh release view "$TAG" -R "${{ github.repository }}" --json assets -q '.assets[].name')
           for required in inkdoc-setup.exe inkdoc.exe inkdoc-windows.zip inkdoc-macos.zip inkdoc-linux.zip; do
             if ! printf '%s\n' "$assets" | grep -Fxq "$required"; then
               echo "::error::Draft release '$TAG' is missing required asset: $required"
@@ -422,12 +425,14 @@ jobs:
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           TAG="${{ github.ref_name }}"
           if [[ "$TAG" == *-* ]]; then
-            echo "Publishing pre-release: $TAG with --latest=false"
-            gh release edit "$TAG" --draft=false --prerelease --latest=false
+            echo "Publishing pre-release: $TAG"
+            gh release edit "$TAG" -R "${{ github.repository }}" --draft=false --prerelease
           else
             echo "Publishing stable release: $TAG with --latest=true"
-            gh release edit "$TAG" --draft=false --prerelease=false --latest=true
+            gh release edit "$TAG" -R "${{ github.repository }}" --draft=false --prerelease=false --latest=true
           fi
+          gh release view "$TAG" -R "${{ github.repository }}" --json isDraft,isPrerelease,assets

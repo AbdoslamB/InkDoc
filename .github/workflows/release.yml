@@ -1,0 +1,182 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.asset_name }})
+    runs-on: ${{ matrix.os }}
+    env:
+      HAVE_SIGNING: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            asset_name: windows
+          - os: macos-latest
+            asset_name: macos
+          - os: ubuntu-latest
+            asset_name: linux
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+
+      - name: Write version file
+        shell: bash
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+          if [ -z "$VERSION" ] || [ "$VERSION" = "main" ]; then
+            VERSION="1.0.0"
+          fi
+          echo "__version__ = \"$VERSION\"" > app/_version.py
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.4.0
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install system dependencies (Linux, for WebKitGTK + packaging)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libxkbcommon0 libgl1 zip python3-gi gir1.2-gtk-3.0 gir1.2-webkit2-4.1 || sudo apt-get install -y gir1.2-webkit2-4.0
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Cheap engine manifest release guard (verify existence, size, digests, README alignment)
+        run: python scripts/verify_engine_manifest_guard.py --allow-empty
+
+      - name: Build with PyInstaller (folder bundle)
+        shell: bash
+        run: |
+          SEP="${{ runner.os == 'Windows' && ';' || ':' }}"
+          ICON_OPT=""
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            ICON_OPT="--icon assets/logo.ico"
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            ICON_OPT="--icon assets/logo.icns"
+          else
+            ICON_OPT="--icon assets/logo.png"
+          fi
+          pyinstaller --noconfirm --onedir --windowed \
+            --name inkdoc \
+            $ICON_OPT \
+            --collect-all markitdown \
+            --collect-all magika \
+            --collect-all uvicorn \
+            --collect-all fastapi \
+            --collect-all webview \
+            --collect-all cryptography \
+            --add-data "app/ui${SEP}app/ui" \
+            --add-data "assets${SEP}assets" \
+            --add-data "app/core/manifest.json${SEP}app/core" \
+            main.py
+
+      - name: Build single-file .exe (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          pyinstaller --noconfirm --onefile --windowed \
+            --name inkdoc \
+            --icon assets/logo.ico \
+            --distpath dist-onefile \
+            --collect-all markitdown \
+            --collect-all magika \
+            --collect-all uvicorn \
+            --collect-all fastapi \
+            --collect-all webview \
+            --collect-all cryptography \
+            --add-data "app/ui;app/ui" \
+            --add-data "assets;assets" \
+            --add-data "app/core/manifest.json;app/core" \
+            main.py
+
+      - name: Sign inner executables (Windows)
+        if: runner.os == 'Windows' && env.HAVE_SIGNING == 'true'
+        shell: pwsh
+        run: |
+          Write-Host "Signing inner executables before installer packaging..."
+          # Ready for SignPath / Authenticode signing command when secret is set
+
+      - name: Package (Windows zip)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist/inkdoc/* -DestinationPath inkdoc-windows.zip
+
+      - name: Build installer with Inno Setup (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y
+            $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          }
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          if ($version -eq "main" -or -not $version) { $version = "1.0.0" }
+          & $iscc "/DMyAppVersion=$version" installer.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Sign installer (Windows)
+        if: runner.os == 'Windows' && env.HAVE_SIGNING == 'true'
+        shell: pwsh
+        run: |
+          Write-Host "Signing Inno Setup installer..."
+          # Ready for SignPath / Authenticode signing command when secret is set
+
+      - name: Package (macOS / Linux)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cd dist
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            ditto -c -k --keepParent inkdoc "../inkdoc-macos.zip"
+          else
+            zip -r "../inkdoc-${{ matrix.asset_name }}.zip" inkdoc
+          fi
+
+      - name: Stage release artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release
+          if (Test-Path "inkdoc-${{ matrix.asset_name }}.zip") { Copy-Item "inkdoc-${{ matrix.asset_name }}.zip" release/ }
+          if (Test-Path "dist-onefile/inkdoc.exe") { Copy-Item "dist-onefile/inkdoc.exe" release/ }
+          if (Test-Path "dist-installer/inkdoc-setup.exe") { Copy-Item "dist-installer/inkdoc-setup.exe" release/ }
+
+      - name: Generate SHA-256 checksums
+        shell: pwsh
+        working-directory: release
+        run: |
+          Get-ChildItem -File | Where-Object { $_.Name -notlike "SHA256SUMS*" } | ForEach-Object {
+            $hash = (Get-FileHash -Path $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($_.Name)"
+          } | Set-Content -Encoding ascii -Path "SHA256SUMS-${{ matrix.asset_name }}.txt"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.2.0
+        with:
+          subject-path: release/*
+
+      - name: Attach to GitHub Draft Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.2.1
+        with:
+          files: release/*
+          fail_on_unmatched_files: false
+          generate_release_notes: true
+          draft: true

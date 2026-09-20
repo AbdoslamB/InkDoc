@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="100%" height="100%">
+  <defs>
+    <!-- Background Gradient -->
+    <linearGradient id="logoBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#14241D" />
+      <stop offset="50%" stop-color="#0A130F" />
+      <stop offset="100%" stop-color="#050907" />
+    </linearGradient>
+
+    <!-- Outer Rim Sheen -->
+    <linearGradient id="logoRim" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6EE7B7" />
+      <stop offset="50%" stop-color="#34D399" />
+      <stop offset="100%" stop-color="#059669" />
+    </linearGradient>
+
+    <!-- Brand Vibrant Mint-Emerald Gradient -->
+    <linearGradient id="logoBrand" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#A7F3D0" />
+      <stop offset="40%" stop-color="#34D399" />
+      <stop offset="100%" stop-color="#10B981" />
+    </linearGradient>
+
+    <!-- Subtle Center Radial Glow -->
+    <radialGradient id="logoGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#10B981" stop-opacity="0.3" />
+      <stop offset="100%" stop-color="#10B981" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+
+  <!-- Squircle Base Canvas -->
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="url(#logoBg)" stroke="url(#logoRim)" stroke-width="1.8" />
+
+  <!-- Ambient Glow -->
+  <ellipse cx="32" cy="32" rx="22" ry="18" fill="url(#logoGlow)" />
+
+  <!-- Inner Markdown Frame -->
+  <rect x="9" y="16" width="46" height="32" rx="5" fill="#070D0A" stroke="url(#logoBrand)" stroke-width="1.6" />
+
+  <!-- Bold Letter 'M' -->
+  <path d="M 15 40 V 24 L 21 31 L 27 24 V 40" fill="none" stroke="url(#logoBrand)" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" />
+
+  <!-- Converting Downward Arrow '↓' -->
+  <line x1="43" y1="24" x2="43" y2="37" stroke="url(#logoBrand)" stroke-width="2.8" stroke-linecap="round" />
+  <path d="M 37 33 L 43 39 L 49 33" fill="none" stroke="url(#logoBrand)" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" />
+</svg>

@@ -1,0 +1,226 @@
+name: Build Engine Packs
+
+on:
+  push:
+    tags:
+      - "docling-pack-*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Dedicated release tag to publish packs to (e.g. docling-pack-v1)"
+        required: true
+        default: "docling-pack-v1"
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+env:
+  DEFAULT_RELEASE_TAG: "docling-pack-v1"
+
+jobs:
+  build-pack:
+    name: Build Pack (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows-x86_64
+          - os: ubuntu-22.04
+            platform: linux-x86_64
+          - os: macos-14
+            platform: macos-arm64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine release tag
+        id: tag
+        shell: bash
+        run: |
+          TARGET_TAG="${{ github.event.inputs.release_tag || github.ref_name }}"
+          if [ -z "$TARGET_TAG" ] || [ "$TARGET_TAG" = "main" ]; then
+            TARGET_TAG="${{ env.DEFAULT_RELEASE_TAG }}"
+          fi
+          echo "target_tag=$TARGET_TAG" >> "$GITHUB_OUTPUT"
+          echo "Target Release Tag: $TARGET_TAG"
+
+      - name: Immutability Guard (Requirement 2)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_TAG: ${{ steps.tag.outputs.target_tag }}
+        run: |
+          echo "[*] Checking if release '${TARGET_TAG}' already contains assets for platform '${{ matrix.platform }}'..."
+          # If the release exists, check whether this platform's pack asset already exists
+          if gh release view "${TARGET_TAG}" --json assets > release_assets.json 2>/dev/null; then
+            ASSET_EXISTS=$(python -c '
+          import json, sys
+          data = json.load(open("release_assets.json"))
+          names = [a["name"] for a in data.get("assets", [])]
+          plat = "${{ matrix.platform }}"
+          exists = any(n.startswith(f"docling-{plat}.") for n in names)
+          print("1" if exists else "0")
+          ')
+            if [ "$ASSET_EXISTS" = "1" ]; then
+              echo "::error::Asset for platform '${{ matrix.platform }}' already exists on release tag '${TARGET_TAG}'. Pack assets are immutable! Rebuilds must bump the release tag (e.g. docling-pack-v2)."
+              exit 1
+            fi
+            echo "[OK] Immutability check passed: asset does not yet exist on release '${TARGET_TAG}'."
+          else
+            echo "[OK] Release '${TARGET_TAG}' does not exist yet. Proceeding with initial build."
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1 libglib2.0-0
+
+      - name: Build, harden, and verify engine pack
+        shell: bash
+        run: |
+          python scripts/build_pack.py \
+            --output-dir dist/packs \
+            --release-tag "${{ steps.tag.outputs.target_tag }}"
+
+      - name: Upload Pack & Fragment Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docling-pack-${{ matrix.platform }}
+          path: dist/packs/*
+          if-no-files-found: error
+
+  finalize-pack-release:
+    name: Finalize Release & Full Extraction Verification
+    needs: [build-pack]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine release tag
+        id: tag
+        shell: bash
+        run: |
+          TARGET_TAG="${{ github.event.inputs.release_tag || github.ref_name }}"
+          if [ -z "$TARGET_TAG" ] || [ "$TARGET_TAG" = "main" ]; then
+            TARGET_TAG="${{ env.DEFAULT_RELEASE_TAG }}"
+          fi
+          echo "target_tag=$TARGET_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Download all platform pack artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/downloaded_artifacts
+
+      - name: Organize pack archives and fragments
+        shell: bash
+        run: |
+          mkdir -p dist/all_packs dist/fragments
+          find dist/downloaded_artifacts -type f \( -name "*.zip" -o -name "*.tar.gz" \) -exec cp {} dist/all_packs/ \;
+          find dist/downloaded_artifacts -type f -name "*.fragment.json" -exec cp {} dist/fragments/ \;
+          echo "[*] Discovered archives:"
+          ls -lh dist/all_packs/
+          echo "[*] Discovered fragments:"
+          ls -lh dist/fragments/
+
+      - name: Merge platform fragments into unified manifest (Requirement 10)
+        run: |
+          python scripts/merge_manifest_fragments.py \
+            dist/fragments \
+            --output dist/manifest.json \
+            --expected-platforms windows-x86_64 linux-x86_64 macos-arm64
+
+      - name: Full Download & Extraction Verification (Requirement 1)
+        shell: bash
+        run: |
+          python -c '
+          import json, tarfile, zipfile, hashlib, sys
+          from pathlib import Path
+
+          manifest = json.loads(Path("dist/manifest.json").read_text(encoding="utf-8"))
+          packs_dir = Path("dist/all_packs")
+          temp_verify = Path("dist/verify_extraction")
+
+          print("[*] Running full extraction and SHA-256 tree verification on all pack archives...")
+
+          for plat_key, plat_info in manifest["supported_platforms"].items():
+              fmt = plat_info["archive_format"]
+              expected_sha = plat_info["sha256"]
+              expected_size = plat_info["size_bytes"]
+              expected_tree = plat_info["sha256_files"]
+              
+              ext = ".zip" if fmt == "zip" else ".tar.gz"
+              archive_path = packs_dir / f"docling-{plat_key}{ext}"
+              if not archive_path.is_file():
+                  print(f"[FAIL] Archive missing for {plat_key}: {archive_path}")
+                  sys.exit(1)
+
+              # 1. Size check
+              actual_size = archive_path.stat().st_size
+              if actual_size != expected_size:
+                  print(f"[FAIL] Archive size mismatch for {plat_key}: expected {expected_size}, got {actual_size}")
+                  sys.exit(1)
+
+              # 2. Archive SHA-256
+              h = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+              if h.lower() != expected_sha.lower():
+                  print(f"[FAIL] Archive digest mismatch for {plat_key}: expected {expected_sha}, got {h}")
+                  sys.exit(1)
+
+              # 3. Full Extraction & File Tree Verification
+              extract_dir = temp_verify / plat_key
+              extract_dir.mkdir(parents=True, exist_ok=True)
+              if fmt == "zip":
+                  with zipfile.ZipFile(archive_path) as zf:
+                      zf.extractall(extract_dir)
+              else:
+                  with tarfile.open(archive_path, "r:*") as tf:
+                      tf.extractall(extract_dir)
+
+              for rel_path, file_sha in expected_tree.items():
+                  extracted_file = extract_dir / rel_path
+                  if not extracted_file.is_file():
+                      print(f"[FAIL] File {rel_path} missing in extracted {plat_key} pack!")
+                      sys.exit(1)
+                  f_hash = hashlib.sha256(extracted_file.read_bytes()).hexdigest()
+                  if f_hash.lower() != file_sha.lower():
+                      print(f"[FAIL] Extracted file hash mismatch for {rel_path} in {plat_key}!")
+                      sys.exit(1)
+
+              print(f"  [OK] Full tree verification passed for {plat_key} ({len(expected_tree)} files verified).")
+          print("[PASS] Full extraction verification completed successfully for all platforms.")
+          '
+
+      - name: Attach Packs & Manifest to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.target_tag }}
+          files: |
+            dist/all_packs/*
+            dist/manifest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Attest Pack Provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/all_packs/*
+            dist/manifest.json

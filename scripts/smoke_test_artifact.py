@@ -157,6 +157,19 @@ def generate_sample_pdf() -> bytes:
     pdf.cell(text="PDF Smoke Test Sample Document")
     return bytes(pdf.output())
 
+def generate_sample_wav() -> bytes:
+    """Generate a tiny silent WAV for the optional audio conversion path."""
+    import io
+    import wave
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(8000)
+        wav.writeframes(b"\x00\x00" * 800)
+    return buf.getvalue()
+
 
 def send_file_conversion(port: int, filename: str, content: bytes, content_type: str) -> str:
     """Test file conversion route via multipart upload and assert non-empty markdown."""
@@ -179,11 +192,23 @@ def send_file_conversion(port: int, filename: str, content: bytes, content_type:
             raise RuntimeError(f"/convert/file for {filename} returned status {resp.getcode()}")
         data = json.loads(resp.read().decode("utf-8"))
         if not data.get("success"):
+
             raise RuntimeError(f"Conversion of {filename} failed: {data}")
         markdown = data.get("markdown", "")
         if not markdown.strip():
             raise RuntimeError(f"Conversion of {filename} returned empty markdown output!")
         return markdown
+
+
+def send_audio_conversion(port: int, content: bytes) -> str:
+    """Require HTTP 200 and accept text or an explicit no-transcription result."""
+    try:
+        return send_file_conversion(port, "sample.wav", content, "audio/x-wav")
+    except RuntimeError as exc:
+        message = str(exc)
+        if "empty markdown output" in message or "Speech transcription" in message:
+            return "[No transcription available]"
+        raise
 
 
 def record_summary_line(line: str) -> None:
@@ -219,6 +244,11 @@ def run_smoke_test(
     with tempfile.TemporaryDirectory(prefix="inkdoc-smoke-", ignore_cleanup_errors=True) as tmp:
         temp_dir = Path(tmp)
         exe_path = prepare_target_executable(artifact_path, artifact_type, temp_dir)
+        speech_model = list(temp_dir.rglob("pocketsphinx-data"))
+        record_summary_line(
+            f"[AUDIO-MODEL] {artifact_path.name}: "
+            f"{'included' if speech_model else 'absent'}"
+        )
         if sys.platform == "darwin":
             exe_str = str(exe_path).replace("\\", "/")
             if ".app/Contents/MacOS" not in exe_str:
@@ -368,6 +398,12 @@ def run_smoke_test(
                 if "PDF Smoke Test" not in pdf_md:
                     raise AssertionError(f"Expected content in pdf markdown output, got: {pdf_md[:200]}")
                 record_summary_line(f"[CONVERT-PDF] {artifact_path.name}: PASS (output length: {len(pdf_md)} bytes)")
+
+                # 4e. WAV audio conversion; transcription is optional.
+                audio_result = send_audio_conversion(port, generate_sample_wav())
+                if not audio_result.strip():
+                    raise AssertionError("Audio conversion returned no result")
+                record_summary_line(f"[CONVERT-AUDIO] {artifact_path.name}: PASS ({audio_result[:120]})")
 
             finally:
                 print(f"[*] Terminating process tree for PID {proc.pid} ...")

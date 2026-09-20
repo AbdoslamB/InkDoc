@@ -292,6 +292,36 @@ jobs:
         run: |
           xvfb-run -a python scripts/smoke_test_artifact.py --artifact "release/inkdoc-${{ matrix.asset_name }}.zip" --type zip --expected-version "${{ steps.ver.outputs.version }}"
 
+      - name: Enforce artifact size limits
+        shell: pwsh
+        run: |
+          $limits = @{
+            "inkdoc-linux.zip" = @{ Baseline = 155103378; Cap = 162858546 }
+            "inkdoc-macos.zip" = @{ Baseline = 115454850; Cap = 121227592 }
+            "inkdoc-windows.zip" = @{ Baseline = 120987267; Cap = 127036630 }
+            "inkdoc.exe" = @{ Baseline = 118264589; Cap = 124177818 }
+            "inkdoc-setup.exe" = @{ Baseline = 91294064; Cap = 95858767 }
+          }
+          if ($env:RUNNER_OS -eq "Linux") {
+            $names = @("inkdoc-linux.zip")
+          } elseif ($env:RUNNER_OS -eq "macOS") {
+            $names = @("inkdoc-macos.zip")
+          } else {
+            $names = @("inkdoc-windows.zip", "inkdoc.exe", "inkdoc-setup.exe")
+          }
+          foreach ($name in $names) {
+            $path = Join-Path "release" $name
+            $bytes = (Get-Item $path).Length
+            $baseline = $limits[$name].Baseline
+            $cap = $limits[$name].Cap
+            $change = (($bytes - $baseline) / $baseline) * 100
+            Write-Host ("{0}: {1} bytes; change vs v1.0.1 baseline: {2:N2}%; cap: {3} bytes" -f $name, $bytes, $change, $cap)
+            if ($bytes -gt $cap) {
+              Write-Error "$name exceeds its size cap of $cap bytes."
+              exit 1
+            }
+          }
+
       - name: Report Linux bundle size diagnostics
         if: runner.os == 'Linux'
         shell: bash
@@ -315,22 +345,6 @@ jobs:
               cat "$report"
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: Report Linux artifact size
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          bytes=$(wc -c < release/inkdoc-linux.zip)
-          baseline=155103378
-          cap=162858546
-          change=$(awk -v bytes="$bytes" -v baseline="$baseline" 'BEGIN { printf "%.2f", ((bytes - baseline) / baseline) * 100 }')
-          echo "inkdoc-linux.zip: $bytes bytes"
-          echo "Baseline v1.0.1: $baseline bytes"
-          echo "Change vs baseline: ${change}%"
-          echo "Report-only cap: $cap bytes"
-          if [ "$bytes" -gt "$cap" ]; then
-            echo "::warning::inkdoc-linux.zip exceeds the report-only cap of $cap bytes (${change}% vs v1.0.1 baseline)."
           fi
 
       - name: Upload smoke test logs
@@ -377,71 +391,6 @@ jobs:
           echo "Uploading release artifacts to draft release $TAG..."
           gh release upload "$TAG" release/* --clobber
 
-  compare-linux-old-build:
-    name: Compare Linux old build
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
-
-      - name: Set up Python 3.11 toolcache
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.4.0
-        with:
-          python-version: "3.11"
-
-      - name: Install release dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libegl1 libxkbcommon0 libgl1 zip xvfb python3-gi gir1.2-gtk-3.0
-          sudo apt-get install -y gir1.2-webkit2-4.1 || sudo apt-get install -y gir1.2-webkit2-4.0
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-          python -m pip install pyinstaller
-
-      - name: Build Linux bundle with old PyInstaller options
-        shell: bash
-        run: |
-          python scripts/write_version.py --dispatch
-          pyinstaller --noconfirm --onedir --windowed \
-            --name inkdoc \
-            --icon assets/logo.png \
-            --collect-all markitdown \
-            --collect-all magika \
-            --collect-all uvicorn \
-            --collect-all fastapi \
-            --collect-all webview \
-            --collect-all cryptography \
-            --collect-all pdfminer \
-            --collect-all pdfplumber \
-            --collect-all pypdfium2 \
-            --add-data "app/ui:app/ui" \
-            --add-data "assets:assets" \
-            --add-data "app/core/manifest.json:app/core" \
-            main.py
-          cd dist
-          zip -r ../inkdoc-linux-old.zip inkdoc
-
-      - name: Report old Linux bundle comparison
-        shell: bash
-        run: |
-          bytes=$(wc -c < inkdoc-linux-old.zip)
-          echo "Old Linux bundle: $bytes bytes"
-          echo "=== 40 largest files/directories in dist/inkdoc ==="
-          du -ah dist/inkdoc | sort -rh > /tmp/old-du.txt || true
-          head -40 /tmp/old-du.txt || true
-          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-            {
-              echo "### Old Linux bundle comparison"
-              echo
-              echo "Size: $bytes bytes"
-              echo
-              echo '```text'
-              du -ah dist/inkdoc | sort -rh > /tmp/old-du.txt || true
-              head -40 /tmp/old-du.txt || true
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
-
   publish-release:
     name: Publish Release
     if: startsWith(github.ref, 'refs/tags/v')
@@ -450,6 +399,21 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Verify draft release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          assets=$(gh release view "$TAG" --json assets -q '.assets[].name')
+          for required in inkdoc-setup.exe inkdoc.exe inkdoc-windows.zip inkdoc-macos.zip inkdoc-linux.zip; do
+            if ! printf '%s\n' "$assets" | grep -Fxq "$required"; then
+              echo "::error::Draft release '$TAG' is missing required asset: $required"
+              exit 1
+            fi
+          done
+          echo "All required draft release assets are present."
+
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

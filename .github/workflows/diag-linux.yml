@@ -16,18 +16,23 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          set +e
+          toolcache_gi=$(python -c "import gi; print(gi.__file__)" 2>&1)
+          toolcache_gi_status=$?
+          system_gi=$(/usr/bin/python3 -c "import gi; print(gi.__file__)" 2>&1)
+          system_gi_status=$?
           {
             echo "## Linux GI diagnostic"
             echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
             python --version
             python -c "import sys; print(sys.executable)"
-            set +e
-            python -c "import gi; print(gi.__file__)"
-            echo "toolcache gi exit=$?"
+            echo "$toolcache_gi"
+            echo "toolcache gi exit=$toolcache_gi_status"
             /usr/bin/python3 --version
-            /usr/bin/python3 -c "import gi; print(gi.__file__)"
-            echo "system gi exit=$?"
+            echo "$system_gi"
+            echo "system gi exit=$system_gi_status"
           } 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=Linux GI diagnostic::runner=${ImageOS:-unknown} ${ImageVersion:-unknown}; toolcache_gi_exit=$toolcache_gi_status output=$toolcache_gi; system_gi_exit=$system_gi_status output=$system_gi"
 
       - name: Diagnose shipped v1.0.1 artifact
         shell: bash
@@ -47,13 +52,18 @@ jobs:
             gui_pid=$!
             sleep 15
             if kill -0 "$gui_pid" 2>/dev/null; then
+              gui_stayed_alive=yes
               echo "gui stayed alive=yes"
               kill "$gui_pid" 2>/dev/null
               wait "$gui_pid" 2>/dev/null
             else
+              gui_stayed_alive=no
               wait "$gui_pid"
               echo "gui stayed alive=no exit=$?"
             fi
             echo "### GUI traceback tail"
             tail -n 15 gui.log
           } 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          selftest_tail=$(tail -n 15 selftest.log | tr '\n' ' ')
+          gui_tail=$(tail -n 15 gui.log | tr '\n' ' ')
+          echo "::notice title=Shipped v1.0.1 Linux diagnostic::selftest_exit=$selftest_status tail=$selftest_tail; gui_stayed_alive=$gui_stayed_alive gui_tail=$gui_tail"

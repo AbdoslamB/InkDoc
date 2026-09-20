@@ -210,7 +210,11 @@ This Code of Conduct is adapted from the [Contributor Covenant](https://www.cont
 Maintainers follow a strict release candidate rehearsal procedure before publishing a stable release:
 
 ### 1. Release Candidate (RC) Rehearsal
-1. **Prepare Branch**: Verify `CHANGELOG.md` is updated and CI is green on `main`.
+1. **Prepare Branch**: Verify `CHANGELOG.md` is updated and CI is green on `main`. Always tag only from an up-to-date `main` branch:
+   ```bash
+   git checkout main
+   git pull origin main
+   ```
 2. **Push RC Tag**:
    ```bash
    git tag v1.0.2-rc1
@@ -224,22 +228,22 @@ Maintainers follow a strict release candidate rehearsal procedure before publish
 
 ### 2. Recovery After a Failed Tag Run
 If a build step or smoke test fails during a release run, the pipeline aborts without publishing:
-1. **Delete the Draft Release**:
+1. **Delete the Draft Release and Remote Tag**:
+   Use `gh release delete` with `--cleanup-tag` to delete both the GitHub draft release and the remote git tag:
    ```bash
-   gh release delete v1.0.2-rc1 --yes
+   gh release delete v1.0.2-rc1 --yes --cleanup-tag
    ```
-2. **Delete the Git Tag**:
+2. **Delete the Local Git Tag**:
    ```bash
-   # Delete remote tag
-   git push origin :refs/tags/v1.0.2-rc1
-   # Delete local tag
    git tag -d v1.0.2-rc1
    ```
 3. **Fix and Retry as Next RC**: Fix the issue on a feature/fix branch, merge to `main`, and push the next release candidate tag (`v1.0.2-rc2`). Never re-use or force-push an existing tag.
 
 ### 3. Stable Release
-Once an RC is fully verified:
+Once an RC is fully verified, tag only from an up-to-date `main`:
 ```bash
+git checkout main
+git pull origin main
 git tag v1.0.2
 git push origin v1.0.2
 ```

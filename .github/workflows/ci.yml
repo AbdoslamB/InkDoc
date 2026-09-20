@@ -48,6 +48,12 @@ jobs:
       - name: Run API server integration tests
         run: python tests/test_server.py
 
+      - name: Run Engine, Worker & Network tests
+        run: |
+          python tests/test_docling_worker.py
+          python tests/test_pack_downloader.py
+          python tests/test_url_fetcher.py
+
       - name: Run Update & Security tests
         run: |
           python tests/test_update_verifier.py

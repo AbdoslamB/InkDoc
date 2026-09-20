@@ -1,0 +1,59 @@
+name: Diagnose Linux GI
+
+on:
+  push:
+    branches:
+      - diag/linux-gi
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Diagnose Python GI availability
+        shell: bash
+        run: |
+          set -o pipefail
+          {
+            echo "## Linux GI diagnostic"
+            echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+            python --version
+            python -c "import sys; print(sys.executable)"
+            set +e
+            python -c "import gi; print(gi.__file__)"
+            echo "toolcache gi exit=$?"
+            /usr/bin/python3 --version
+            /usr/bin/python3 -c "import gi; print(gi.__file__)"
+            echo "system gi exit=$?"
+          } 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Diagnose shipped v1.0.1 artifact
+        shell: bash
+        run: |
+          set -o pipefail
+          curl -fsSL -o inkdoc-linux.zip https://github.com/AbdoslamB/InkDoc/releases/download/v1.0.1/inkdoc-linux.zip
+          unzip -q inkdoc-linux.zip
+          set +e
+          inkdoc/inkdoc --selftest > selftest.log 2>&1
+          selftest_status=$?
+          {
+            echo "## Shipped v1.0.1"
+            echo "selftest exit=$selftest_status"
+            echo "### selftest tail"
+            tail -n 15 selftest.log
+            xvfb-run -a inkdoc/inkdoc > gui.log 2>&1 &
+            gui_pid=$!
+            sleep 15
+            if kill -0 "$gui_pid" 2>/dev/null; then
+              echo "gui stayed alive=yes"
+              kill "$gui_pid" 2>/dev/null
+              wait "$gui_pid" 2>/dev/null
+            else
+              wait "$gui_pid"
+              echo "gui stayed alive=no exit=$?"
+            fi
+            echo "### GUI traceback tail"
+            tail -n 15 gui.log
+          } 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"

@@ -201,9 +201,14 @@ def send_file_conversion(port: int, filename: str, content: bytes, content_type:
 
 
 def send_audio_conversion(port: int, content: bytes) -> str:
-    """Require HTTP 200 and accept text or an explicit no-transcription result."""
+    """Require HTTP 200 or a clean non-5xx no-transcription response."""
     try:
         return send_file_conversion(port, "sample.wav", content, "audio/x-wav")
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        if exc.code < 500 and "Audio transcription unavailable" in body:
+            return f"[No transcription available] {body}"
+        raise RuntimeError(f"Audio conversion returned HTTP {exc.code}: {body}") from exc
     except RuntimeError as exc:
         message = str(exc)
         if "empty markdown output" in message or "Speech transcription" in message:

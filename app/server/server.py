@@ -810,6 +810,14 @@ async def convert_file(
         raise
     except Exception as exc:
         logger.exception("File conversion failed for '%s': %s", filename, exc)
+        if ext.lower() in {".wav", ".mp3", ".m4a", ".mp4"} and "AudioConverter" in str(exc):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "Audio transcription unavailable: no speech was recognized or "
+                    "the optional speech-recognition dependency is unavailable."
+                ),
+            ) from exc
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=sanitize_conversion_error(exc, context_name=filename),

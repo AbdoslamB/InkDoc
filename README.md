@@ -24,7 +24,7 @@ A unified desktop workbench and local REST API that bridges **Microsoft MarkItDo
 </p>
 
 <p align="center">
-  <a href="https://abdoslamb.github.io/inkdoc/"><b>Website</b></a> &nbsp;•&nbsp;
+  <a href="https://abdoslamb.github.io/InkDoc/"><b>Website</b></a> &nbsp;•&nbsp;
   <a href="#download"><b>Download</b></a> &nbsp;•&nbsp;
   <a href="#quickstart"><b>Quickstart</b></a> &nbsp;•&nbsp;
   <a href="#engines"><b>Engines</b></a> &nbsp;•&nbsp;

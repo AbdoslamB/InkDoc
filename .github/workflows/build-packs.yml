@@ -191,6 +191,7 @@ jobs:
         with:
           tag_name: ${{ steps.tag.outputs.target_tag }}
           overwrite_files: false
+          make_latest: false
           files: |
             dist/all_packs/*
             dist/manifest.json

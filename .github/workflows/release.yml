@@ -180,3 +180,17 @@ jobs:
           fail_on_unmatched_files: false
           generate_release_notes: true
           draft: true
+
+  publish-release:
+    name: Publish Release
+    needs: [build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Publishing release ${{ github.ref_name }} and designating as latest app release..."
+          gh release edit "${{ github.ref_name }}" --draft=false --latest

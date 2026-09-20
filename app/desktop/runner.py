@@ -315,7 +315,9 @@ def run_selftest() -> int:
             import webview.platforms.cocoa as backend
             print(f"[PASS] Successfully imported macOS GUI backend: {backend.__name__}")
         elif sys.platform.startswith("linux"):
+            import gi
             import webview.platforms.gtk as backend
+            print(f"[PASS] Successfully imported Linux GI: {gi.__file__}")
             print(f"[PASS] Successfully imported Linux GUI backend: {backend.__name__}")
 
         print("[ALL PASS] GUI backend self-test succeeded.")

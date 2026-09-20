@@ -51,17 +51,30 @@ jobs:
             asset_name: windows
           - os: macos-latest
             asset_name: macos
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             asset_name: linux
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
 
-      - name: Set up Python
+      - name: Set up Python (Windows and macOS)
+        if: runner.os != 'Linux'
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.4.0
         with:
           python-version: "3.11"
           cache: "pip"
+
+      - name: Set up system Python venv (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libxkbcommon0 libgl1 zip xvfb python3-venv python3-gi gir1.2-gtk-3.0
+          sudo apt-get install -y gir1.2-webkit2-4.1 || sudo apt-get install -y gir1.2-webkit2-4.0
+          /usr/bin/python3 --version
+          /usr/bin/python3 -m venv --system-site-packages "$HOME/inkdoc-build-venv"
+          echo "$HOME/inkdoc-build-venv/bin" >> "$GITHUB_PATH"
+          echo "VIRTUAL_ENV=$HOME/inkdoc-build-venv" >> "$GITHUB_ENV"
 
       - name: Write version file
         shell: bash
@@ -80,17 +93,37 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Resolved version for build and smoke test: $VERSION"
 
-      - name: Install system dependencies (Linux, for WebKitGTK + packaging)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libegl1 libxkbcommon0 libgl1 zip python3-gi gir1.2-gtk-3.0 gir1.2-webkit2-4.1 || sudo apt-get install -y gir1.2-webkit2-4.0
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller
+
+      - name: Verify Linux dependency imports come from the venv
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          python - <<'PY'
+          import importlib
+          import os
+          from pathlib import Path
+
+          venv = Path(os.environ["VIRTUAL_ENV"]).resolve()
+          required = ("markitdown", "cryptography", "yaml", "pydantic")
+          optional = ("PIL", "numpy")
+          for name in required + optional:
+              try:
+                  module = importlib.import_module(name)
+              except ModuleNotFoundError:
+                  if name in optional:
+                      print(f"{name}: not installed")
+                      continue
+                  raise
+              path = Path(module.__file__).resolve()
+              print(f"{name}: {path}")
+              if not path.is_relative_to(venv):
+                  raise SystemExit(f"{name} shadows the venv: {path}")
+          PY
 
       - name: Cheap engine manifest release guard (verify existence, size, digests, README alignment)
         run: python scripts/verify_engine_manifest_guard.py --allow-empty
@@ -100,16 +133,19 @@ jobs:
         run: |
           SEP="${{ runner.os == 'Windows' && ';' || ':' }}"
           ICON_OPT=""
+          GI_OPT=""
           if [ "${{ runner.os }}" = "Windows" ]; then
             ICON_OPT="--icon assets/logo.ico"
           elif [ "${{ runner.os }}" = "macOS" ]; then
             ICON_OPT="--icon assets/logo.icns"
           else
             ICON_OPT="--icon assets/logo.png"
+            GI_OPT="--collect-all gi"
           fi
           pyinstaller --noconfirm --onedir --windowed \
             --name inkdoc \
             $ICON_OPT \
+            $GI_OPT \
             --collect-all markitdown \
             --collect-all magika \
             --collect-all uvicorn \
@@ -197,6 +233,18 @@ jobs:
           if (Test-Path "dist-onefile/inkdoc.exe") { Copy-Item "dist-onefile/inkdoc.exe" release/ }
           if (Test-Path "dist-installer/inkdoc-setup.exe") { Copy-Item "dist-installer/inkdoc-setup.exe" release/ }
 
+      - name: Enforce Linux artifact size limit
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          bytes=$(wc -c < release/inkdoc-linux.zip)
+          cap=162858546
+          echo "inkdoc-linux.zip: $bytes bytes (cap: $cap bytes)"
+          if [ "$bytes" -gt "$cap" ]; then
+            echo "::error::inkdoc-linux.zip exceeds the +5% cap."
+            exit 1
+          fi
+
       - name: Report staged artifact sizes and digests
         continue-on-error: true
         shell: pwsh
@@ -255,7 +303,7 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          python scripts/smoke_test_artifact.py --artifact "release/inkdoc-${{ matrix.asset_name }}.zip" --type zip --expected-version "${{ steps.ver.outputs.version }}"
+          xvfb-run -a python scripts/smoke_test_artifact.py --artifact "release/inkdoc-${{ matrix.asset_name }}.zip" --type zip --expected-version "${{ steps.ver.outputs.version }}"
 
       - name: Upload smoke test logs
         if: always()

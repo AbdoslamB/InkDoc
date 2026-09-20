@@ -261,7 +261,8 @@ def run_smoke_test(
             else:
                 kwargs["start_new_session"] = True
 
-            cmd = [str(exe_path), "--headless", "--port", str(port)]
+            gui_smoke = sys.platform.startswith("linux") and bool(os.environ.get("DISPLAY"))
+            cmd = [str(exe_path), "--port", str(port)] if gui_smoke else [str(exe_path), "--headless", "--port", str(port)]
             record_summary_line(f"[LAUNCH-PATH] {artifact_path.name}: {exe_path}")
             print(f"[*] Launching: {' '.join(cmd)}")
             proc = subprocess.Popen(cmd, **kwargs)
@@ -311,6 +312,14 @@ def run_smoke_test(
                         f"Timed out after {timeout}s waiting for /health to become available.\n"
                         f"Process Log:\n{log_content}"
                     )
+
+                if gui_smoke:
+                    gui_deadline = time.time() + 15.0
+                    while time.time() < gui_deadline:
+                        if proc.poll() is not None:
+                            raise RuntimeError(f"GUI process exited before 15 seconds with code {proc.returncode}")
+                        time.sleep(0.5)
+                    record_summary_line(f"[GUI] {artifact_path.name}: stayed alive for 15 seconds")
 
                 # 3. Verify reported version matches expected tag/dev version
                 if reported_version != expected_version:

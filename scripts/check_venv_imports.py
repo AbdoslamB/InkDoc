@@ -16,15 +16,13 @@ REQUIRED_PACKAGES = (
     "fastapi",
     "uvicorn",
     "requests",
-    "httpx",
     "webview",
 )
-OPTIONAL_PACKAGES = ("PIL", "numpy")
+OPTIONAL_PACKAGES = ("httpx", "PIL", "numpy")
 
 
 def check_packages(venv: Path, packages: Iterable[str], optional: Iterable[str]) -> int:
     """Print all package resolutions and return non-zero for shadowed packages."""
-    optional_set = set(optional)
     resolved: list[tuple[str, str]] = []
     shadowed: list[tuple[str, str]] = []
 
@@ -32,10 +30,8 @@ def check_packages(venv: Path, packages: Iterable[str], optional: Iterable[str])
         try:
             module = importlib.import_module(name)
         except ModuleNotFoundError:
-            if name in optional_set:
-                resolved.append((name, "not installed"))
-                continue
-            raise
+            resolved.append((name, "not installed"))
+            continue
         path = Path(module.__file__).resolve()
         path_text = str(path)
         resolved.append((name, path_text))

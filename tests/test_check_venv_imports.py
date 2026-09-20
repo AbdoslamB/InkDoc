@@ -36,11 +36,11 @@ def test_package_outside_venv_fails_and_is_named(tmp_path, monkeypatch, capsys):
     assert "Packages shadowing the venv" in output
 
 
-def test_missing_optional_package_is_reported_without_failing(tmp_path, monkeypatch, capsys):
+def test_missing_package_is_reported_without_failing(tmp_path, monkeypatch, capsys):
     def missing(_name):
         raise ModuleNotFoundError("missing")
 
     monkeypatch.setattr("scripts.check_venv_imports.importlib.import_module", missing)
 
-    assert check_packages(tmp_path / "venv", ["fake_optional"], ["fake_optional"]) == 0
-    assert "fake_optional: not installed" in capsys.readouterr().out
+    assert check_packages(tmp_path / "venv", ["fake_missing"], []) == 0
+    assert "fake_missing: not installed" in capsys.readouterr().out

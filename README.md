@@ -47,10 +47,10 @@ A unified desktop workbench and local REST API that bridges **Microsoft MarkItDo
 Ready-to-run desktop packages with every dependency and runtime bundled — **no Python installation required.**
 
 <p align="center">
-  <a href="https://github.com/AbdoslamB/inkdoc/releases/download/v1.0.1/inkdoc-setup.exe"><img src="assets/readme/download-windows-setup.svg" width="400" alt="Download InkDoc for Windows: Setup installer (inkdoc-setup.exe)" /></a>
-  <a href="https://github.com/AbdoslamB/inkdoc/releases/download/v1.0.1/inkdoc.exe"><img src="assets/readme/download-windows-portable.svg" width="400" alt="Download InkDoc for Windows: Portable executable (inkdoc.exe)" /></a>
-  <a href="https://github.com/AbdoslamB/inkdoc/releases/download/v1.0.1/inkdoc-macos.zip"><img src="assets/readme/download-macos.svg" width="400" alt="Download InkDoc for macOS: Apple Silicon application (inkdoc-macos.zip)" /></a>
-  <a href="https://github.com/AbdoslamB/inkdoc/releases/download/v1.0.1/inkdoc-linux.zip"><img src="assets/readme/download-linux.svg" width="400" alt="Download InkDoc for Linux: Portable bundle (inkdoc-linux.zip)" /></a>
+  <a href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-setup.exe"><img src="assets/readme/download-windows-setup.svg" width="400" alt="Download InkDoc for Windows: Setup installer (inkdoc-setup.exe)" /></a>
+  <a href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc.exe"><img src="assets/readme/download-windows-portable.svg" width="400" alt="Download InkDoc for Windows: Portable executable (inkdoc.exe)" /></a>
+  <a href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-macos.zip"><img src="assets/readme/download-macos.svg" width="400" alt="Download InkDoc for macOS: Apple Silicon application (inkdoc-macos.zip)" /></a>
+  <a href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-linux.zip"><img src="assets/readme/download-linux.svg" width="400" alt="Download InkDoc for Linux: Portable bundle (inkdoc-linux.zip)" /></a>
 </p>
 
 <details>
@@ -60,11 +60,11 @@ Ready-to-run desktop packages with every dependency and runtime bundled — **no
 
 | Operating system | Package | Architecture | Requirements | Download |
 | :--- | :--- | :--- | :--- | :--- |
-| **Windows 10 / 11** | Setup wizard | x86_64 | Windows 10 build 19041+ (WebView2 built-in) | [`inkdoc-setup.exe`](https://github.com/AbdoslamB/inkdoc/releases/download/v1.0.1/inkdoc-setup.exe) |
-| **Windows 10 / 11** | Portable executable | x86_64 | Standalone single-file executable | [`inkdoc.exe`](https://github.com/AbdoslamB/inkdoc/releases/download/v1.0.1/inkdoc.exe) |
-| **Windows 10 / 11** | Portable ZIP archive | x86_64 | Portable folder bundle | [`inkdoc-windows.zip`](https://github.com/AbdoslamB/inkdoc/releases/download/v1.0.1/inkdoc-windows.zip) |
-| **macOS** | Application bundle | Apple Silicon (arm64) | macOS 12 Monterey or newer (Apple Silicon M1/M2/M3/M4) | [`inkdoc-macos.zip`](https://github.com/AbdoslamB/inkdoc/releases/download/v1.0.1/inkdoc-macos.zip) |
-| **Linux** | Portable bundle | x86_64 | Ubuntu 22.04 LTS+ (glibc 2.35+), WebKit2GTK runtime | [`inkdoc-linux.zip`](https://github.com/AbdoslamB/inkdoc/releases/download/v1.0.1/inkdoc-linux.zip) |
+| **Windows 10 / 11** | Setup wizard | x86_64 | Windows 10 build 19041+ (WebView2 built-in) | [`inkdoc-setup.exe`](https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-setup.exe) |
+| **Windows 10 / 11** | Portable executable | x86_64 | Standalone single-file executable | [`inkdoc.exe`](https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc.exe) |
+| **Windows 10 / 11** | Portable ZIP archive | x86_64 | Portable folder bundle | [`inkdoc-windows.zip`](https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-windows.zip) |
+| **macOS** | Application bundle | Apple Silicon (arm64) | macOS 12 Monterey or newer (Apple Silicon M1/M2/M3/M4) | [`inkdoc-macos.zip`](https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-macos.zip) |
+| **Linux** | Portable bundle | x86_64 | Ubuntu 22.04 LTS+ (glibc 2.35+), WebKit2GTK runtime | [`inkdoc-linux.zip`](https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-linux.zip) |
 
 > [!IMPORTANT]
 > **Platform Support Note:** macOS builds are currently native for **Apple Silicon (arm64)** only. Intel Macs (x86_64) are not supported. Windows builds are compiled for **x86_64** (ARM64 Windows devices run x86_64 emulation). Linux builds are compiled and verified on **Ubuntu 22.04 LTS (glibc 2.35+)**.

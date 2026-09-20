@@ -342,8 +342,8 @@
       Downloads folder. No manual export step, no CLI required.
     </p>
     <div class="cta-row hero-animate">
-      <a class="btn btn-primary" href="https://github.com/AbdoslamB/inkdoc/releases/download/v1.0.1/inkdoc.exe" data-i18n="cta.windows">Download for Windows (.exe)</a>
-      <a class="btn btn-secondary" href="https://github.com/AbdoslamB/inkdoc/releases/tag/v1.0.1" data-i18n="cta.other">Download for macOS / Linux</a>
+      <a class="btn btn-primary" href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc.exe" data-i18n="cta.windows">Download for Windows (.exe)</a>
+      <a class="btn btn-secondary" href="https://github.com/AbdoslamB/inkdoc/releases/latest" data-i18n="cta.other">Download for macOS / Linux</a>
     </div>
     <p class="cta-note hero-animate" data-i18n="cta.note">Unofficial, open-source, not affiliated with Microsoft.</p>
     <div class="badges hero-animate">
@@ -441,8 +441,8 @@
           <p class="platform-note" data-i18n="download.windows.note">Setup wizard or portable .exe, no Python required.</p>
         </div>
         <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-          <a class="btn btn-primary" href="https://github.com/AbdoslamB/inkdoc/releases/download/v1.0.1/inkdoc-setup.exe" data-i18n="download.setup.button">Setup (.exe)</a>
-          <a class="btn btn-secondary" href="https://github.com/AbdoslamB/inkdoc/releases/download/v1.0.1/inkdoc.exe" data-i18n="download.portable.button">Portable (.exe)</a>
+          <a class="btn btn-primary" href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-setup.exe" data-i18n="download.setup.button">Setup (.exe)</a>
+          <a class="btn btn-secondary" href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc.exe" data-i18n="download.portable.button">Portable (.exe)</a>
         </div>
       </div>
       <div class="download-row">
@@ -450,7 +450,7 @@
           <p class="platform">macOS<span class="platform-icon platform-icon-apple" aria-hidden="true"><img src="icons/apple.svg" alt="" /></span></p>
           <p class="platform-note" data-i18n="download.bundle.note">Packaged app bundle, zipped.</p>
         </div>
-        <a class="btn btn-secondary" href="https://github.com/AbdoslamB/inkdoc/releases/download/v1.0.1/inkdoc-macos.zip" data-i18n="download.zip.button">Download .zip</a>
+        <a class="btn btn-secondary" href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-macos.zip" data-i18n="download.zip.button">Download .zip</a>
       </div>
       <div class="download-row">
         <div>
@@ -458,7 +458,7 @@
           <p class="platform-note" data-i18n="download.bundle.note">Packaged app bundle, zipped.</p>
           <p class="platform-note">Requires glibc 2.35+ and the WebKit2GTK runtime.</p>
         </div>
-        <a class="btn btn-secondary" href="https://github.com/AbdoslamB/inkdoc/releases/download/v1.0.1/inkdoc-linux.zip" data-i18n="download.zip.button">Download .zip</a>
+        <a class="btn btn-secondary" href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-linux.zip" data-i18n="download.zip.button">Download .zip</a>
       </div>
     </div>
 
@@ -833,12 +833,14 @@ python3 -m pip install -r requirements.txt
         clearTimeout(timeout);
         if (!Array.isArray(releases)) return;
         var appRelease = releases.find(function (r) {
-          return r && !r.draft && /^v\d+\.\d+\.\d+/.test(r.tag_name) && !r.tag_name.includes("pack");
+          return r && !r.draft && !r.prerelease && !r.tag_name.includes("-")
+            && /^v\d+\.\d+\.\d+$/.test(r.tag_name) && !r.tag_name.includes("pack");
         });
         if (!appRelease || !appRelease.tag_name) return;
         var targetTag = appRelease.tag_name;
-        document.querySelectorAll('a[href*="/releases/download/v"], a[href*="/releases/tag/v"]').forEach(function (link) {
-          link.href = link.href.replace(/\/releases\/download\/v[^\/]+/, "/releases/download/" + targetTag)
+        document.querySelectorAll('a[href*="/releases/latest/download/"], a[href*="/releases/download/v"], a[href*="/releases/tag/v"]').forEach(function (link) {
+          link.href = link.href.replace(/\/releases\/latest\/download\//, "/releases/download/" + targetTag + "/")
+                               .replace(/\/releases\/download\/v[^\/]+/, "/releases/download/" + targetTag)
                                .replace(/\/releases\/tag\/v[^\/]+/, "/releases/tag/" + targetTag);
         });
       })

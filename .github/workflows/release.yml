@@ -257,12 +257,13 @@ jobs:
         run: |
           python scripts/smoke_test_artifact.py --artifact "release/inkdoc-${{ matrix.asset_name }}.zip" --type zip --expected-version "${{ steps.ver.outputs.version }}"
 
-      - name: Upload smoke test logs on failure
-        if: failure()
+      - name: Upload smoke test logs
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: smoke-logs-${{ matrix.asset_name }}
           path: smoke-logs/*
+          if-no-files-found: ignore
 
       - name: Generate SHA-256 checksums
         shell: pwsh

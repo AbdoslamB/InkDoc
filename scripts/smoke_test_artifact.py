@@ -186,6 +186,15 @@ def send_file_conversion(port: int, filename: str, content: bytes, content_type:
         return markdown
 
 
+def record_summary_line(line: str) -> None:
+    """Print a labeled smoke result and expose it in GitHub Actions summaries."""
+    print(line)
+    step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if step_summary:
+        with open(step_summary, "a", encoding="utf-8") as summary:
+            summary.write(f"{line}\n")
+
+
 def run_smoke_test(
     artifact_path: Path,
     artifact_type: str,
@@ -227,14 +236,16 @@ def run_smoke_test(
         try:
             out, err = selftest_proc.communicate(timeout=15.0)
             if selftest_proc.returncode != 0:
+                record_summary_line(f"[SELFTEST] {artifact_path.name}: FAIL (exit code {selftest_proc.returncode})")
                 raise RuntimeError(
                     f"--selftest failed with code {selftest_proc.returncode}:\n"
                     f"STDOUT:\n{out}\n"
                     f"STDERR:\n{err}"
                 )
-            print(f"[SELFTEST] {artifact_path.name}: PASS (exit code {selftest_proc.returncode})")
+            record_summary_line(f"[SELFTEST] {artifact_path.name}: PASS (exit code {selftest_proc.returncode})")
         except subprocess.TimeoutExpired as e:
             kill_process_tree(selftest_proc.pid)
+            record_summary_line(f"[SELFTEST] {artifact_path.name}: TIMEOUT")
             raise RuntimeError(f"--selftest timed out after 15s for {artifact_path.name}") from e
 
         port = get_free_port()
@@ -251,7 +262,7 @@ def run_smoke_test(
                 kwargs["start_new_session"] = True
 
             cmd = [str(exe_path), "--headless", "--port", str(port)]
-            print(f"[LAUNCH-PATH] {artifact_path.name}: {exe_path}")
+            record_summary_line(f"[LAUNCH-PATH] {artifact_path.name}: {exe_path}")
             print(f"[*] Launching: {' '.join(cmd)}")
             proc = subprocess.Popen(cmd, **kwargs)
 
@@ -283,7 +294,9 @@ def run_smoke_test(
                                 status_val = data.get("status")
                                 if status_val == "ok":
                                     health_ok = True
-                                    print(f"[HEALTH] {artifact_path.name}: status={status_val} version='{reported_version}'")
+                                    record_summary_line(
+                                        f"[HEALTH] {artifact_path.name}: status={status_val} version='{reported_version}'"
+                                    )
                                     break
                     except (urllib.error.URLError, ConnectionResetError, OSError):
                         pass
@@ -314,7 +327,7 @@ def run_smoke_test(
                 txt_md = send_file_conversion(port, "sample.txt", txt_data, "text/plain")
                 if "Sample Heading" not in txt_md:
                     raise AssertionError(f"Expected content in text markdown output, got: {txt_md[:200]}")
-                print(f"[CONVERT-TXT] {artifact_path.name}: PASS (output length: {len(txt_md)} bytes)")
+                record_summary_line(f"[CONVERT-TXT] {artifact_path.name}: PASS (output length: {len(txt_md)} bytes)")
 
                 # 4b. Word Document (.docx)
                 docx_data = generate_sample_docx()
@@ -326,7 +339,7 @@ def run_smoke_test(
                 )
                 if "DOCX Smoke Test" not in docx_md:
                     raise AssertionError(f"Expected content in docx markdown output, got: {docx_md[:200]}")
-                print(f"[CONVERT-DOCX] {artifact_path.name}: PASS (output length: {len(docx_md)} bytes)")
+                record_summary_line(f"[CONVERT-DOCX] {artifact_path.name}: PASS (output length: {len(docx_md)} bytes)")
 
                 # 4c. Excel Workbook (.xlsx)
                 xlsx_data = generate_sample_xlsx()
@@ -338,14 +351,14 @@ def run_smoke_test(
                 )
                 if "TestRun" not in xlsx_md and "Metric" not in xlsx_md:
                     raise AssertionError(f"Expected content in xlsx markdown output, got: {xlsx_md[:200]}")
-                print(f"[CONVERT-XLSX] {artifact_path.name}: PASS (output length: {len(xlsx_md)} bytes)")
+                record_summary_line(f"[CONVERT-XLSX] {artifact_path.name}: PASS (output length: {len(xlsx_md)} bytes)")
 
                 # 4d. PDF Document (.pdf)
                 pdf_data = generate_sample_pdf()
                 pdf_md = send_file_conversion(port, "sample.pdf", pdf_data, "application/pdf")
                 if "PDF Smoke Test" not in pdf_md:
                     raise AssertionError(f"Expected content in pdf markdown output, got: {pdf_md[:200]}")
-                print(f"[CONVERT-PDF] {artifact_path.name}: PASS (output length: {len(pdf_md)} bytes)")
+                record_summary_line(f"[CONVERT-PDF] {artifact_path.name}: PASS (output length: {len(pdf_md)} bytes)")
 
             finally:
                 print(f"[*] Terminating process tree for PID {proc.pid} ...")
@@ -356,7 +369,8 @@ def run_smoke_test(
                     pass
                 time.sleep(1.0)
 
-    print(f"[ALL PASS] Smoke test succeeded for {artifact_path.name}\n")
+    record_summary_line(f"[ALL PASS] Smoke test succeeded for {artifact_path.name}")
+    print()
 
 
 def main() -> int:
@@ -384,6 +398,7 @@ def main() -> int:
         )
         return 0
     except Exception as e:
+        record_summary_line(f"[FAIL] {args.artifact.name}: {e}")
         print(f"\n[FAIL] Smoke test failed: {e}", file=sys.stderr)
         log_file = (args.log_dir or (Path.cwd() / "smoke-logs")) / f"{args.artifact.stem}.smoke.log"
         if log_file.is_file():

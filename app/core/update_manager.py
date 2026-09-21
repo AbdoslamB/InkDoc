@@ -289,9 +289,15 @@ class UpdateManager:
                 self._last_check_timestamp = now
                 self._status.last_checked = datetime.now(timezone.utc).isoformat()
                 self._status.latest_version = manifest["version"]
-                self._status.release_notes = manifest.get("notes") or ""
+                # Accept either spelling. scripts/sign_manifest.py emitted
+                # release_notes/release_url while this read notes/html_url, so the
+                # notes panel and release link would have come up empty on the first
+                # signed release. The signer now emits notes/html_url; the fallbacks
+                # keep a manifest produced by an older signer from silently losing
+                # both fields, since these are display-only and default to empty.
+                self._status.release_notes = manifest.get("notes") or manifest.get("release_notes") or ""
                 self._status.release_date = manifest.get("issued_at")
-                self._status.release_url = manifest.get("html_url")
+                self._status.release_url = manifest.get("html_url") or manifest.get("release_url")
 
                 # Platform compatibility check (Requirement 4)
                 if not self._platform_supported:
@@ -595,12 +601,18 @@ class UpdateManager:
             if hasattr(subprocess, "DETACHED_PROCESS") and hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
                 creationflags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
 
+            # /RESTARTAPP=1 is an InkDoc-specific parameter read by installer.iss.
+            # Inno skips [Run] entries flagged "postinstall" under /VERYSILENT, so
+            # without this the update installs and the app never comes back. The
+            # installer only honours it when the install is silent, so a plain
+            # unattended install still does not launch a GUI.
             subprocess.Popen(
                 [
                     str(installer_path),
                     "/VERYSILENT",
                     "/SUPPRESSMSGBOXES",
                     "/NORESTART",
+                    "/RESTARTAPP=1",
                 ],
                 creationflags=creationflags,
                 close_fds=True,

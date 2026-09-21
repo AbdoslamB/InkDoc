@@ -2,11 +2,12 @@
 """Generate an encrypted offline Ed25519 signing keypair for InkDoc releases.
 
 Usage:
-    python scripts/generate_signing_key.py [--out-key inkdoc_signing_key.pem]
+    python scripts/generate_signing_key.py [--out-key ~/.inkdoc-keys/inkdoc_signing_key.pem]
 
 Security rules:
 - Private key is encrypted using PKCS#8 with AES-256 and a strong passphrase.
-- Private key must NEVER be committed to Git or uploaded to GitHub.
+- Private key must NEVER be committed to Git or uploaded to GitHub. This script
+  refuses to write anywhere inside the InkDoc repository for that reason.
 - Public key hex is displayed so it can be embedded in app/core/update_verifier.py.
 """
 from __future__ import annotations
@@ -19,18 +20,42 @@ from pathlib import Path
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_KEY_PATH = Path.home() / ".inkdoc-keys" / "inkdoc_signing_key.pem"
+
+
+def reject_path_inside_repo(out_path: Path) -> str | None:
+    """Return an error message if out_path would land inside the InkDoc repository."""
+    try:
+        resolved = out_path.expanduser().resolve()
+    except OSError:
+        return None
+    if resolved == REPO_ROOT or REPO_ROOT in resolved.parents:
+        return (
+            f"Refusing to write a private signing key inside the repository ({resolved}).\n"
+            f"        The key must stay offline and out of version control. "
+            f"Try --out-key {DEFAULT_KEY_PATH} instead."
+        )
+    return None
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate encrypted Ed25519 keypair for InkDoc updates")
     parser.add_argument(
         "--out-key",
         type=Path,
-        default=Path("inkdoc_signing_key.pem"),
-        help="Path where the encrypted private key will be saved (default: inkdoc_signing_key.pem)",
+        default=DEFAULT_KEY_PATH,
+        help=f"Path where the encrypted private key will be saved (default: {DEFAULT_KEY_PATH})",
     )
     args = parser.parse_args()
 
-    out_path: Path = args.out_key
+    out_path: Path = args.out_key.expanduser()
+
+    repo_error = reject_path_inside_repo(out_path)
+    if repo_error:
+        print(f"[Error] {repo_error}", file=sys.stderr)
+        return 1
+
     if out_path.exists():
         print(f"[Error] Key file already exists at {out_path}. Refusing to overwrite.", file=sys.stderr)
         return 1
@@ -59,6 +84,13 @@ def main() -> int:
         format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.BestAvailableEncryption(p1.encode("utf-8")),
     )
+
+    # Create the containing directory owner-only, before the key lands in it.
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        out_path.parent.chmod(0o700)
+    except OSError:
+        pass
 
     out_path.write_bytes(encrypted_pem)
     # Set restrictive file permissions (read/write only by owner) on POSIX

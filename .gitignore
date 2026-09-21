@@ -11,8 +11,18 @@ dist/
 .vscode/
 .idea/
 
+# Release signing keys — MUST never be committed.
+# scripts/generate_signing_key.py refuses to write inside this repository, but
+# these patterns are a second line of defence against a stray `git add -A`.
+*.pem
+*.key
+*.p8
+*.pfx
+inkdoc_signing_key*
+
 # Local Claude Code context — not for the public repo
 CLAUDE.md
+.claude/
 .atl/
 .work/
 

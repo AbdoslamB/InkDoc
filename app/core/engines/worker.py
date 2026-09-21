@@ -29,6 +29,14 @@ os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 os.environ.setdefault("DOCLING_ARTIFACTS_PATH", str(Path(__file__).resolve().parent / "models"))
+# Pin inference to CPU. Docling's accelerator device defaults to "auto", which selects
+# the Metal (MPS) backend on Apple Silicon. The pack deliberately installs CPU-only
+# torch, and MPS cannot be exercised on a CI runner at all -- the macOS pack build fails
+# loading the layout model with "MPS backend out of memory" while trying to allocate
+# 3.5 KiB. Pinning CPU makes inference identical on Windows, Linux and macOS, and makes
+# the post-build smoke test validate the same code path users run. set via setdefault so
+# the launcher can still override it deliberately.
+os.environ.setdefault("DOCLING_DEVICE", "cpu")
 os.environ.setdefault("DO_NOT_TRACK", "1")
 os.environ.setdefault("SCARF_NO_ANALYTICS", "1")
 

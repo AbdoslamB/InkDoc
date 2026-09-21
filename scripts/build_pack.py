@@ -35,6 +35,19 @@ from app.core.engine_manifest import get_current_platform_key
 
 MAX_ALLOWED_PACK_SIZE = 1900 * 1024 * 1024  # 1.9 GiB maximum limit
 DEFAULT_RELEASE_TAG = "docling-pack-v2"
+
+# Models to prefetch into the pack, matching exactly what the worker's pipeline uses.
+#
+# `docling-tools models download` with no model arguments fetches a predefined set that
+# includes code_formula and picture_classifier. app/core/engines/worker.py sets
+# do_picture_description=False and do_picture_classification=False and never enables
+# code or formula enrichment, so those weights are dead payload the user still has to
+# download. The default set came to 1.44 GB across 142 files.
+#
+# layout and tableformer back do_table_structure / PDF layout analysis; rapidocr backs
+# do_ocr=True. The post-build smoke test converts a PDF with ocr=True and
+# table_structure=True offline, so an omission here fails the build rather than shipping.
+PREFETCH_MODELS = ["layout", "tableformer", "rapidocr"]
 MINIMAL_PDF_BYTES = (
     b"%PDF-1.4\n"
     b"1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
@@ -135,10 +148,15 @@ def run_post_build_smoke_test(
             "MKL_NUM_THREADS": "1",
             "OMP_NUM_THREADS": "1",
             "DOCLING_ARTIFACTS_PATH": str(extracted_models),
+            # Match DoclingWorkerClient's minimal_env: CPU inference, never MPS.
+            "DOCLING_DEVICE": "cpu",
         })
 
         # 1. Ping RPC test
-        cmd = [str(extracted_python), "-I", "-s", "-S", str(extracted_worker)]
+        # Must match the launch arguments in DoclingWorkerClient._ensure_worker_running
+        # exactly, or this smoke test stops validating what production actually runs.
+        # In particular: no -S. See the comment there for why.
+        cmd = [str(extracted_python), "-I", str(extracted_worker)]
         proc = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
@@ -268,8 +286,11 @@ def build_pack(
     # not an option.
     models_dir = staging_dir / "models"
     model_tool = venv_dir / ("Scripts/docling-tools.exe" if sys.platform.startswith("win") else "bin/docling-tools")
-    print(f"[*] Prefetching Docling models into {models_dir}...")
-    subprocess.run([str(model_tool), "models", "download", "--output-dir", str(models_dir)], check=True)
+    print(f"[*] Prefetching Docling models into {models_dir}: {', '.join(PREFETCH_MODELS)}...")
+    subprocess.run(
+        [str(model_tool), "models", "download", "--output-dir", str(models_dir), *PREFETCH_MODELS],
+        check=True,
+    )
     model_count, model_bytes = count_model_files(models_dir)
     print(f"    [OK] Bundled Docling models: {model_count} files, {model_bytes} bytes.")
 

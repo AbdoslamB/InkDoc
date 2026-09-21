@@ -224,10 +224,16 @@ jobs:
           fi
           echo "target_tag=$TARGET_TAG" >> "$GITHUB_OUTPUT"
 
+      # This job intentionally has no checkout: it verifies what the public release
+      # actually serves. gh therefore cannot infer the repository from a git remote,
+      # so GH_REPO must be set explicitly or every gh call dies with
+      # "failed to run git: fatal: not a git repository". Same defect release.yml
+      # hit in #16; build-packs.yml never got the same treatment.
       - name: Download public assets and verify size and SHA-256
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           TARGET_TAG: ${{ steps.tag.outputs.target_tag }}
         run: |
           set -euo pipefail
@@ -242,7 +248,7 @@ jobs:
           for asset in "${expected_assets[@]}"; do
             expected_size=$(python -c 'import json, sys; assets = json.load(open("release_assets.json"))["assets"]; name = sys.argv[1]; matches = [a for a in assets if a["name"] == name]; assert len(matches) == 1, f"Expected exactly one release asset named {name}, found {len(matches)}"; print(matches[0]["size"])' "$asset")
             expected_digest=$(python -c 'import json, sys; assets = json.load(open("release_assets.json"))["assets"]; name = sys.argv[1]; matches = [a for a in assets if a["name"] == name]; assert len(matches) == 1, f"Expected exactly one release asset named {name}, found {len(matches)}"; print(matches[0]["digest"])' "$asset")
-            public_url="https://github.com/AbdoslamB/InkDoc/releases/download/${TARGET_TAG}/${asset}"
+            public_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TARGET_TAG}/${asset}"
             curl --fail --location --retry 3 --retry-all-errors --output "published-assets/${asset}" "$public_url"
             actual_size=$(wc -c < "published-assets/${asset}")
             actual_digest="sha256:$(sha256sum "published-assets/${asset}" | awk '{print $1}')"
@@ -255,9 +261,10 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           for asset in published-assets/*; do
-            gh attestation verify "$asset" --repo AbdoslamB/InkDoc
+            gh attestation verify "$asset" --repo "${GITHUB_REPOSITORY}"
             echo "[PASS] Attestation verified: $(basename "$asset")"
           done

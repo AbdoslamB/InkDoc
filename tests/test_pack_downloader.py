@@ -263,5 +263,198 @@ class TestDownloaderHardening(unittest.TestCase):
             server.server_close()
 
 
+class TestPartFileCleanupScope(unittest.TestCase):
+    """stream_download must never delete a .part file it did not create.
+
+    For an update with install_method "download_reveal" the destination directory
+    is the user's Downloads folder, and ".part" is the extension Firefox gives its
+    own in-progress downloads.
+    """
+
+    def setUp(self) -> None:
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="inkdoc_partscope_"))
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def _age(self, path: Path, days: float) -> None:
+        old = time.time() - days * 86400
+        os.utime(path, (old, old))
+
+    def test_foreign_part_files_are_left_alone(self) -> None:
+        # Two days old, so well past the 1 day stale threshold.
+        firefox = self.tmp_dir / "family-photos.zip.part"
+        firefox.write_bytes(b"a user download that is still in progress")
+        self._age(firefox, 2)
+
+        other_app = self.tmp_dir / "something-else.part"
+        other_app.write_bytes(b"not ours either")
+        self._age(other_app, 2)
+
+        payload = b"inkdoc installer payload"
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *args):  # silence test server output
+                return
+
+        server = socketserver.TCPServer(("127.0.0.1", 0), Handler)
+        port = server.server_address[1]
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            dest = self.tmp_dir / "inkdoc-setup.exe"
+            stream_download(
+                url=f"http://127.0.0.1:{port}/inkdoc-setup.exe",
+                destination_path=dest,
+                expected_size=len(payload),
+                allowed_hosts=frozenset({"127.0.0.1"}),
+            )
+            self.assertEqual(dest.read_bytes(), payload)
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        self.assertTrue(
+            firefox.is_file(),
+            "stream_download deleted an unrelated .part file in the destination directory",
+        )
+        self.assertTrue(other_app.is_file(), "stream_download deleted a foreign .part file")
+
+    def test_own_stale_part_is_still_discarded(self) -> None:
+        """The legitimate cleanup must survive: our own stale partial is not resumed."""
+        dest = self.tmp_dir / "inkdoc-setup.exe"
+        own_part = self.tmp_dir / "inkdoc-setup.exe.part"
+        own_part.write_bytes(b"GARBAGE FROM AN ABANDONED RUN")
+        self._age(own_part, 2)
+
+        payload = b"a completely different payload"
+        seen_range_header: list[str | None] = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802
+                seen_range_header.append(self.headers.get("Range"))
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *args):
+                return
+
+        server = socketserver.TCPServer(("127.0.0.1", 0), Handler)
+        port = server.server_address[1]
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            stream_download(
+                url=f"http://127.0.0.1:{port}/inkdoc-setup.exe",
+                destination_path=dest,
+                expected_size=len(payload),
+                allowed_hosts=frozenset({"127.0.0.1"}),
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        # The stale partial was dropped rather than resumed, so no Range was sent
+        # and the garbage bytes are not present in the final file.
+        self.assertEqual(seen_range_header, [None])
+        self.assertEqual(dest.read_bytes(), payload)
+
+
+class TestConcurrentInstallLock(unittest.TestCase):
+    """A rejected second install must not disturb the install already running."""
+
+    def setUp(self) -> None:
+        self.tmp_dir = Path(tempfile.mkdtemp(prefix="inkdoc_lock_"))
+        os.environ["INKDOC_ENGINES_DIR"] = str(self.tmp_dir)
+
+    def tearDown(self) -> None:
+        os.environ.pop("INKDOC_ENGINES_DIR", None)
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def test_rejected_second_install_leaves_first_cancellable(self) -> None:
+        from app.core.engine_manager import EngineInstallError, EngineManager
+        from app.core.engine_manifest import (
+            EngineManifest,
+            PlatformPackInfo,
+            get_current_platform_key,
+        )
+
+        platform_key = get_current_platform_key()
+        manifest = EngineManifest(
+            manifest_version="1.0.0",
+            pack_version="1.0.0",
+            min_app_version="1.0.0",
+            supported_platforms={
+                platform_key: PlatformPackInfo(
+                    url="https://github.com/AbdoslamB/InkDoc/releases/download/docling-pack-v1/docling.tar.gz",
+                    archive_format="tar.gz",
+                    sha256="a" * 64,
+                    size_bytes=1024,
+                    uncompressed_size_bytes=4096,
+                    interpreter_path="env/bin/python",
+                )
+            },
+        )
+        mgr = EngineManager(manifest=manifest)
+
+        download_started = threading.Event()
+        release_download = threading.Event()
+
+        def blocking_download(*args, **kwargs):
+            download_started.set()
+            release_download.wait(timeout=15)
+            raise DownloadError("halted by test")
+
+        def run_first() -> None:
+            try:
+                mgr.install_engine("docling")
+            except Exception:
+                pass
+
+        with patch("app.core.engine_manager.stream_download", side_effect=blocking_download):
+            first = threading.Thread(target=run_first, daemon=True)
+            first.start()
+            self.assertTrue(download_started.wait(timeout=15), "first install never started downloading")
+
+            first_event = mgr._cancel_events.get("docling")
+            first_progress = mgr._progress.get("docling")
+            self.assertIsNotNone(first_event)
+            self.assertIsNotNone(first_progress)
+
+            # A second request must be refused...
+            with self.assertRaises(EngineInstallError):
+                mgr.install_engine("docling")
+
+            # ...without having replaced the running install's shared state first.
+            self.assertIs(
+                mgr._cancel_events.get("docling"),
+                first_event,
+                "second install replaced the running install's cancel event",
+            )
+            self.assertIs(
+                mgr._progress.get("docling"),
+                first_progress,
+                "second install replaced the running install's progress object",
+            )
+
+            # The consequence that matters: cancel still reaches the running install.
+            mgr.cancel_install("docling")
+            self.assertTrue(
+                first_event.is_set(),
+                "cancel_install signalled an Event the running install is not watching",
+            )
+
+            release_download.set()
+            first.join(timeout=15)
+
+        self.assertFalse(first.is_alive(), "first install thread did not finish")
+
+
 if __name__ == "__main__":
     unittest.main()

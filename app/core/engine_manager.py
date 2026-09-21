@@ -512,6 +512,19 @@ class EngineManager:
             )
 
         target_dir = self.get_engine_dir(engine_name)
+
+        # Acquire the install lock BEFORE publishing any shared state.
+        #
+        # This used to happen last. A second concurrent install request therefore
+        # overwrote self._cancel_events[engine_name] and self._progress[engine_name]
+        # and only then discovered the lock was taken and raised. The first install
+        # kept running against a cancel event nobody holds a reference to any more,
+        # so /engines/{name}/cancel signalled the wrong Event and the UI polled a
+        # progress object the running install never updates: an install that cannot
+        # be cancelled and appears frozen at 0%.
+        if not self._install_lock.acquire(blocking=False):
+            raise EngineInstallError("An installation or update is already in progress.")
+
         cancel_event = threading.Event()
         self._cancel_events[engine_name] = cancel_event
 
@@ -521,10 +534,6 @@ class EngineManager:
             started_at=time.time(),
         )
         self._progress[engine_name] = progress
-
-        # Acquire per-engine install lock
-        if not self._install_lock.acquire(blocking=False):
-            raise EngineInstallError("An installation or update is already in progress.")
 
         arch_ext = "zip" if (pack_info.archive_format == "zip" or pack_info.url.endswith(".zip")) else "tar.gz"
         tmp_download_file = target_dir.parent / f"{engine_name}.download.{arch_ext}"

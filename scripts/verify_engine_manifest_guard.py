@@ -93,6 +93,67 @@ def check_remote_asset_cheap(url: str, expected_size: int, timeout: float = 15.0
         return False, f"Network check failed: {exc}"
 
 
+def check_pack_is_usable(plat_key: str, plat_info: dict) -> list[str]:
+    """Return errors if the manifest describes a pack that cannot run for a user.
+
+    This is the gate that would have stopped v1.0.3-rc2. That build bundled a manifest
+    pointing at docling-pack-v2, whose interpreter was a virtualenv: the standard
+    library stayed in the build runner's toolcache, so the worker died during
+    interpreter startup on every machine that was not the builder. The release
+    pipeline had no way to notice, because it never looked at what the manifest
+    described -- only that its hashes were well formed.
+
+    These are properties rather than a list of known-bad tags, so re-pointing the
+    manifest at any non-relocatable pack fails, whatever it is called.
+    """
+    errors: list[str] = []
+    files = plat_info.get("sha256_files", {})
+    if not files:
+        return errors  # already reported as a missing tree index
+
+    strays = sorted(f for f in files if f.endswith("pyvenv.cfg"))
+    if strays:
+        errors.append(
+            f"Platform '{plat_key}' ships {strays}: the pack is a virtualenv, so its "
+            "interpreter resolves the standard library against the machine that built "
+            "it and cannot start anywhere else."
+        )
+
+    if not any(f.endswith("/encodings/__init__.py") for f in files):
+        errors.append(
+            f"Platform '{plat_key}' bundles no encodings module. CPython cannot "
+            "initialise without it; the worker exits before running any code."
+        )
+
+    if plat_key.startswith("windows") and "python/python311.dll" not in files:
+        errors.append(
+            f"Platform '{plat_key}' bundles no python/python311.dll, so python.exe "
+            "cannot start."
+        )
+
+    interpreter = plat_info.get("interpreter_path", "")
+    worker = plat_info.get("worker_script", "")
+    if interpreter.startswith("env/"):
+        errors.append(
+            f"Platform '{plat_key}' interpreter_path is '{interpreter}', the virtualenv "
+            "layout replaced by the relocatable CPython build."
+        )
+    for label, rel in (("interpreter_path", interpreter), ("worker_script", worker)):
+        if rel and rel not in files:
+            errors.append(
+                f"Platform '{plat_key}' {label} '{rel}' is not in sha256_files; "
+                "is_pack_installed() can never become true and the UI offers Install forever."
+            )
+
+    if not any(f.startswith("models/") for f in files):
+        errors.append(
+            f"Platform '{plat_key}' bundles no models/ directory. The worker runs with "
+            "HF_HUB_OFFLINE=1, so every conversion fails after a successful install."
+        )
+
+    return errors
+
+
 def extract_advertised_platforms(readme_text: str) -> set[str]:
     """Extract platform architectures claimed to be supported for Docling in the README."""
     advertised = set()
@@ -183,7 +244,10 @@ def verify_guard(
             if not is_valid_sha256(f_hash):
                 errors.append(f"Platform '{plat_key}' file '{rel_f}' has invalid SHA-256: '{f_hash}'")
 
-        # 3. Cheap Remote Network Check (if not skipped)
+        # 3. The pack must be able to start on a machine that is not the build runner.
+        errors.extend(check_pack_is_usable(plat_key, plat_info))
+
+        # 4. Cheap Remote Network Check (if not skipped)
         if not skip_network:
             ok, msg = check_remote_asset_cheap(url, size)
             if not ok:

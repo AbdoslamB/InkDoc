@@ -957,9 +957,20 @@ def test_cheap_release_guard():
                     "sha256": "e" * 64,
                     "size_bytes": 600 * 1024 * 1024,
                     "uncompressed_size_bytes": 1200 * 1024 * 1024,
-                    "interpreter_path": "python.exe",
+                    "interpreter_path": "python/python.exe",
                     "worker_script": "worker.py",
-                    "sha256_files": {"python.exe": "f" * 64},
+                    # A pack the guard should accept has to look like one a user can
+                    # actually run: its own interpreter and stdlib, the Windows runtime
+                    # DLL, the worker script, and the offline model weights. The guard
+                    # used to accept a lone python.exe, which is roughly what
+                    # docling-pack-v2 shipped and why it reached a user unable to start.
+                    "sha256_files": {
+                        "worker.py": "a" * 64,
+                        "python/python.exe": "f" * 64,
+                        "python/python311.dll": "b" * 64,
+                        "python/Lib/encodings/__init__.py": "c" * 64,
+                        "models/layout/model.safetensors": "d" * 64,
+                    },
                 }
             }
         }

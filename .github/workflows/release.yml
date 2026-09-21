@@ -24,6 +24,20 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Runs before anything is created. A tag cut from a commit whose bundled
+      # manifest points at an unusable engine pack must not produce a draft, three
+      # platform builds and a published pre-release before anyone finds out.
+      #
+      # v1.0.3-rc2 was tagged one commit before the manifest was repointed at
+      # docling-pack-v3, so it shipped pointing at v2, whose interpreter could not
+      # start outside the build runner. Nothing in the pipeline looked at what the
+      # manifest described, only that its hashes were well formed.
+      #
+      # --skip-network because this gate is about the manifest's contents; the build
+      # job runs the same guard again with the remote asset checks enabled.
+      - name: Verify the bundled engine manifest describes a usable pack
+        run: python3 scripts/verify_engine_manifest_guard.py --skip-network
+
       - name: Create Single Draft Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

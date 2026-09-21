@@ -68,7 +68,7 @@ def inspect_archive(
     platform_key: str,
     base_url: str = "https://github.com/AbdoslamB/InkDoc/releases/download",
     pack_version: str = "1.0.0",
-    release_tag: str = "docling-pack-v2",
+    release_tag: str = "docling-pack-v3",
 ) -> dict[str, Any]:
     """Extract archive to temporary directory, compute full tree hashes and metadata."""
     if not archive_path.is_file():
@@ -228,8 +228,8 @@ def main() -> int:
     parser.add_argument(
         "--release-tag",
         type=str,
-        default="docling-pack-v2",
-        help="Dedicated release tag for pack assets (default: docling-pack-v2)",
+        default="docling-pack-v3",
+        help="Dedicated release tag for pack assets (default: docling-pack-v3)",
     )
     parser.add_argument(
         "--output-fragment",

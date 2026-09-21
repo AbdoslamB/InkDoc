@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -22,7 +23,43 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from app.core.engine_manager import EngineManager
-from app.core.engine_manifest import load_engine_manifest
+from app.core.engine_manifest import get_current_platform_key, load_engine_manifest
+
+
+def _assert_interpreter_runs_from(
+    target_dir: Path, interpreter_rel: str, platform_key: str
+) -> None:
+    """Start the extracted interpreter and confirm it resolves itself inside the pack.
+
+    A pack can hash perfectly and still be unusable: docling-pack-v2 shipped a
+    virtualenv whose standard library lived in the build runner's toolcache, so it
+    started during the build and died on every user's machine with
+    "Docling worker exited prematurely".
+    """
+    interpreter = target_dir / interpreter_rel
+    if sys.platform != "win32":
+        interpreter.chmod(0o755)
+
+    probe = subprocess.run(
+        [str(interpreter), "-I", "-c", "import sys, encodings; print(sys.prefix)"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if probe.returncode != 0:
+        raise RuntimeError(
+            f"{platform_key}: extracted interpreter failed to start "
+            f"(exit {probe.returncode}). stderr: {probe.stderr.strip()[:500]}"
+        )
+
+    prefix = Path(probe.stdout.strip().splitlines()[0]).resolve()
+    if not prefix.is_relative_to(target_dir.resolve()):
+        raise RuntimeError(
+            f"{platform_key}: interpreter is not relocatable. sys.prefix is {prefix}, "
+            f"outside the installed pack at {target_dir}. It depends on a Python "
+            "installation that will not exist on a user's machine."
+        )
+    print(f"[PASS] {platform_key}: interpreter starts and is self-contained (sys.prefix={prefix}).")
 
 
 def sha256_file(path: Path) -> str:
@@ -90,6 +127,14 @@ def verify_packs(manifest_path: Path, archives_dir: Path) -> None:
                 if not manager.verify_launch_integrity("docling"):
                     raise RuntimeError(f"{platform_key}: EngineManager.verify_launch_integrity() failed")
                 print(f"[PASS] {platform_key}: EngineManager extraction and launch integrity passed.")
+
+                # verify_launch_integrity() only re-hashes files. It cannot tell whether
+                # the interpreter can actually start, which is how docling-pack-v2 got
+                # published: it shipped a virtualenv whose stdlib lived in the build
+                # runner's toolcache, so every file hashed correctly and nothing ran.
+                # Only the pack matching this runner can be executed here.
+                if platform_key == get_current_platform_key():
+                    _assert_interpreter_runs_from(target_dir, pack.interpreter_path, platform_key)
         finally:
             if previous_base is None:
                 os.environ.pop("INKDOC_ENGINES_DIR", None)

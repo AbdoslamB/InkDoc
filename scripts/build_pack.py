@@ -22,6 +22,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import urllib.request
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -34,7 +35,19 @@ if str(REPO_ROOT) not in sys.path:
 from app.core.engine_manifest import get_current_platform_key
 
 MAX_ALLOWED_PACK_SIZE = 1900 * 1024 * 1024  # 1.9 GiB maximum limit
-DEFAULT_RELEASE_TAG = "docling-pack-v2"
+DEFAULT_RELEASE_TAG = "docling-pack-v3"
+
+# Relocatable CPython. See install_standalone_python() for why a virtualenv cannot
+# be used here. Pin the exact release so a rebuild is reproducible; the archive is
+# verified against the release's published SHA256SUMS before extraction.
+PBS_RELEASE = "20260901"
+PBS_PYTHON_VERSION = "3.11.16"
+PBS_PYTHON_SERIES = "3.11"
+PBS_TRIPLES = {
+    "windows-x86_64": "x86_64-pc-windows-msvc",
+    "linux-x86_64": "x86_64-unknown-linux-gnu",
+    "macos-arm64": "aarch64-apple-darwin",
+}
 
 # Models to prefetch into the pack, matching exactly what the worker's pipeline uses.
 #
@@ -75,6 +88,119 @@ def compute_tree_hashes(root_dir: Path) -> dict[str, str]:
             rel = p.relative_to(root_dir).as_posix()
             tree[rel] = compute_sha256(p)
     return tree
+
+
+def install_standalone_python(staging_dir: Path, platform_key: str) -> Path:
+    """Download and unpack a relocatable CPython into staging_dir/python.
+
+    Returns the interpreter root. The archive is verified against the release's
+    published SHA256SUMS before anything is extracted.
+    """
+    triple = PBS_TRIPLES.get(platform_key)
+    if not triple:
+        raise RuntimeError(f"No python-build-standalone triple mapped for '{platform_key}'")
+
+    asset = f"cpython-{PBS_PYTHON_VERSION}+{PBS_RELEASE}-{triple}-install_only.tar.gz"
+    base = f"https://github.com/astral-sh/python-build-standalone/releases/download/{PBS_RELEASE}"
+
+    with tempfile.TemporaryDirectory(prefix="inkdoc_pbs_") as tmp:
+        tarball = Path(tmp) / asset
+        print(f"[*] Downloading relocatable CPython {PBS_PYTHON_VERSION} ({triple})...")
+        urllib.request.urlretrieve(f"{base}/{asset}", tarball)
+
+        sums_path = Path(tmp) / "SHA256SUMS"
+        urllib.request.urlretrieve(f"{base}/SHA256SUMS", sums_path)
+        expected = ""
+        for line in sums_path.read_text(encoding="utf-8").splitlines():
+            parts = line.split()
+            if len(parts) == 2 and parts[1] == asset:
+                expected = parts[0].lower()
+                break
+        if not expected:
+            raise RuntimeError(f"{asset} is not listed in the release SHA256SUMS")
+
+        actual = compute_sha256(tarball)
+        if actual != expected:
+            raise RuntimeError(
+                f"CPython download checksum mismatch for {asset}: expected {expected}, got {actual}"
+            )
+        print(f"    [OK] Verified against published SHA256SUMS ({actual[:16]}...).")
+
+        with tarfile.open(tarball, "r:*") as tf:
+            tf.extractall(staging_dir)
+
+    python_root = staging_dir / "python"
+    if not python_root.is_dir():
+        raise RuntimeError(f"Expected extracted interpreter at {python_root}")
+    return python_root
+
+
+def assert_pack_is_self_contained(staging_dir: Path, platform_key: str) -> None:
+    """Fail the build unless the pack carries its own interpreter and stdlib.
+
+    This is the check that would have caught docling-pack-v2. It needs no runtime
+    and cannot be fooled by running on the machine that produced the pack, which is
+    exactly how the previous breakage escaped every test.
+    """
+    if platform_key.startswith("windows"):
+        required = [
+            "python/python.exe",
+            "python/python311.dll",
+            "python/Lib/os.py",
+            "python/Lib/encodings/__init__.py",
+        ]
+        stdlib_root = staging_dir / "python" / "Lib"
+    else:
+        required = [
+            "python/bin/python3",
+            f"python/lib/python{PBS_PYTHON_SERIES}/os.py",
+            f"python/lib/python{PBS_PYTHON_SERIES}/encodings/__init__.py",
+        ]
+        stdlib_root = staging_dir / "python" / "lib" / f"python{PBS_PYTHON_SERIES}"
+
+    missing = [r for r in required if not (staging_dir / r).exists()]
+    if missing:
+        raise RuntimeError(
+            "Pack is not self-contained; these must ship inside the archive: "
+            + ", ".join(missing)
+        )
+
+    # A pyvenv.cfg means the interpreter resolves its stdlib through an external
+    # `home` path that will not exist on a user's machine.
+    strays = [p.relative_to(staging_dir).as_posix() for p in staging_dir.rglob("pyvenv.cfg")]
+    if strays:
+        raise RuntimeError(
+            f"Pack contains pyvenv.cfg ({strays}); the interpreter would depend on the "
+            "build machine's Python installation."
+        )
+
+    stdlib_count = sum(1 for p in stdlib_root.rglob("*.py") if "site-packages" not in p.parts)
+    if stdlib_count < 100:
+        raise RuntimeError(
+            f"Only {stdlib_count} standard-library modules found under {stdlib_root}; "
+            "the interpreter cannot start without its stdlib."
+        )
+    print(f"    [OK] Self-contained: {stdlib_count} stdlib modules bundled, no pyvenv.cfg.")
+
+
+def add_file_dereferenced(tf: tarfile.TarFile, path: Path, arcname: str) -> None:
+    """Add path to tar as a regular file, following symlinks.
+
+    The relocatable CPython tree contains ~1000 symlinks. InkDoc's own extractor
+    (download_utils._extract_tar) refuses archives containing symlinks, so storing
+    them would make the pack impossible to install. Writing the target's bytes under
+    the link's name keeps every path the dynamic loader and console scripts expect.
+    """
+    info = tf.gettarinfo(str(path), arcname=arcname)
+    if not info.isfile():
+        stat_result = path.stat()  # follows the symlink
+        info.type = tarfile.REGTYPE
+        info.size = stat_result.st_size
+        info.mode = stat_result.st_mode & 0o777
+        info.mtime = int(stat_result.st_mtime)
+        info.linkname = ""
+    with path.open("rb") as handle:
+        tf.addfile(info, handle)
 
 
 def count_model_files(models_dir: Path) -> tuple[int, int]:
@@ -136,6 +262,29 @@ def run_post_build_smoke_test(
         # Ensure POSIX execution permissions on Unix
         if sys.platform != "win32":
             extracted_python.chmod(0o755)
+
+        # Prove the extracted interpreter resolves itself inside the extraction
+        # directory rather than against anything on this machine. A virtualenv fails
+        # this: its sys.prefix follows pyvenv.cfg back to the build toolcache, which
+        # is why docling-pack-v2 started here and died on users' machines.
+        probe = subprocess.run(
+            [str(extracted_python), "-I", "-c", "import sys; print(sys.prefix); print(sys.executable)"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if probe.returncode != 0:
+            raise RuntimeError(
+                f"Extracted interpreter failed to start (exit {probe.returncode}): {probe.stderr}"
+            )
+        reported_prefix = probe.stdout.strip().splitlines()[0]
+        if not Path(reported_prefix).resolve().is_relative_to(clean_dir.resolve()):
+            raise RuntimeError(
+                f"Extracted interpreter is not relocatable: sys.prefix is {reported_prefix!r}, "
+                f"outside the extraction directory {clean_dir}. It depends on a Python "
+                "installation that will not exist on a user's machine."
+            )
+        print(f"    [OK] Interpreter is relocatable (sys.prefix inside {clean_dir.name}).")
 
         offline_env = os.environ.copy()
         offline_env.update({
@@ -231,25 +380,38 @@ def build_pack(
         shutil.rmtree(staging_dir)
     staging_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Create a virtual environment with copies
-    venv_dir = staging_dir / "env"
-    print(f"[*] Creating isolated virtual environment at {venv_dir}...")
-    subprocess.run([sys.executable, "-m", "venv", "--copies", str(venv_dir)], check=True)
+    # 1. Install a relocatable CPython.
+    #
+    # NOT a virtualenv. `python -m venv` never copies the standard library, not even
+    # with --copies: it copies the launcher, while the stdlib and (on Windows)
+    # python311.dll stay in the base installation, located at runtime through
+    # pyvenv.cfg's `home` key. That path is the build runner's toolcache and does not
+    # exist on a user's machine, so the interpreter died during initialisation before
+    # running a line of worker.py. docling-pack-v2 shipped that way and every
+    # conversion failed with "Docling worker exited prematurely".
+    #
+    # python-build-standalone distributions are self-contained and relocatable by
+    # design, which is the property this pack actually needs.
+    python_root = install_standalone_python(staging_dir, platform_key)
 
-    # Determine interpreter binary
     if sys.platform.startswith("win"):
-        venv_python = venv_dir / "Scripts" / "python.exe"
-        interp_rel = "env/Scripts/python.exe"
+        venv_python = python_root / "python.exe"
+        interp_rel = "python/python.exe"
+        scripts_dir = python_root / "Scripts"
         archive_format = "zip"
         archive_name = f"docling-{platform_key}.zip"
     else:
-        venv_python = venv_dir / "bin" / "python"
-        interp_rel = "env/bin/python"
+        venv_python = python_root / "bin" / "python3"
+        interp_rel = "python/bin/python3"
+        scripts_dir = python_root / "bin"
         archive_format = "tar.gz"
         archive_name = f"docling-{platform_key}.tar.gz"
 
+    if not venv_python.is_file():
+        raise RuntimeError(f"Standalone interpreter missing at {venv_python}")
+
     # 2. Upgrade pip
-    print("[*] Upgrading pip in isolated environment...")
+    print("[*] Upgrading pip in the standalone interpreter...")
     subprocess.run([str(venv_python), "-m", "pip", "install", "--upgrade", "pip"], check=True)
 
     # 3. Install PyTorch with CPU-only wheel (Requirement 4)
@@ -285,7 +447,7 @@ def build_pack(
     # runs with networking disabled, so model downloads after installation are
     # not an option.
     models_dir = staging_dir / "models"
-    model_tool = venv_dir / ("Scripts/docling-tools.exe" if sys.platform.startswith("win") else "bin/docling-tools")
+    model_tool = scripts_dir / ("docling-tools.exe" if sys.platform.startswith("win") else "docling-tools")
     print(f"[*] Prefetching Docling models into {models_dir}: {', '.join(PREFETCH_MODELS)}...")
     subprocess.run(
         [str(model_tool), "models", "download", "--output-dir", str(models_dir), *PREFETCH_MODELS],
@@ -309,26 +471,40 @@ def build_pack(
     if sys.platform == "darwin":
         resign_macos_binaries(staging_dir)
 
-    # 9. Compute full tree file hashes before archiving
+    # 9. Refuse to package a pack that cannot start on someone else's machine.
+    print("[*] Verifying the pack carries its own interpreter and standard library...")
+    assert_pack_is_self_contained(staging_dir, platform_key)
+
+    # 10. Compute full tree file hashes before archiving
     print("[*] Computing cryptographic hashes for all pack files...")
     sha256_files = compute_tree_hashes(staging_dir)
     print(f"    [+] Indexed {len(sha256_files)} files.")
 
-    # 10. Create archive
+    # 11. Create archive.
+    # Symlinks are written as regular files: InkDoc's extractor rejects archives
+    # containing symlinks, and the CPython tree ships about a thousand of them.
     archive_path = output_dir / archive_name
     print(f"[*] Packaging into {archive_path}...")
+    symlinks = 0
     if archive_format == "zip":
         with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zf:
             for p in staging_dir.rglob("*"):
                 if p.is_file():
                     rel = p.relative_to(staging_dir).as_posix()
+                    if p.is_symlink():
+                        symlinks += 1
+                    # ZipFile.write already stores the target's bytes.
                     zf.write(p, rel)
     else:
         with tarfile.open(archive_path, "w:gz") as tf:
             for p in staging_dir.rglob("*"):
                 if p.is_file():
                     rel = p.relative_to(staging_dir).as_posix()
-                    tf.add(p, arcname=rel)
+                    if p.is_symlink():
+                        symlinks += 1
+                    add_file_dereferenced(tf, p, rel)
+    if symlinks:
+        print(f"    [+] Dereferenced {symlinks} symlinks into regular files.")
 
     archive_sha256 = compute_sha256(archive_path)
     archive_size = archive_path.stat().st_size

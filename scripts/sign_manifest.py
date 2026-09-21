@@ -56,6 +56,34 @@ def load_private_key(key_path: Path) -> ed25519.Ed25519PrivateKey:
     return key
 
 
+def build_manifest_payload(
+    version: str,
+    issued_at: str,
+    release_url: str,
+    release_notes: str,
+    assets: dict[str, Any],
+    min_supported_version: str = "1.0.0",
+) -> dict[str, Any]:
+    """Build the inner manifest payload that UpdateManager consumes.
+
+    Field names matter and are not free choices: app/core/update_manager.py reads
+    `notes` and `html_url`. This payload previously emitted `release_notes` and
+    `release_url`, so the first genuinely signed release would have shown an empty
+    release-notes panel and no link to the release, silently -- both are read with
+    .get() and default to empty. Nothing caught it because the tests built their own
+    manifests by hand instead of using the signer's output.
+    """
+    return {
+        "manifest_version": "1.0.0",
+        "version": version,
+        "min_supported_version": min_supported_version,
+        "issued_at": issued_at,
+        "html_url": release_url,
+        "notes": release_notes,
+        "assets": assets,
+    }
+
+
 def build_envelope(
     manifest_payload: dict[str, Any],
     private_key: ed25519.Ed25519PrivateKey,
@@ -184,15 +212,13 @@ def main() -> int:
 
         # Construct inner manifest payload
         now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        manifest_payload = {
-            "manifest_version": "1.0.0",
-            "version": clean_version,
-            "min_supported_version": "1.0.0",
-            "issued_at": now_iso,
-            "release_url": release_info.get("url") or f"https://github.com/{args.repo}/releases/tag/{args.tag}",
-            "release_notes": release_info.get("body") or "",
-            "assets": manifest_assets,
-        }
+        manifest_payload = build_manifest_payload(
+            version=clean_version,
+            issued_at=now_iso,
+            release_url=release_info.get("url") or f"https://github.com/{args.repo}/releases/tag/{args.tag}",
+            release_notes=release_info.get("body") or "",
+            assets=manifest_assets,
+        )
 
         # Encode and sign into single-file envelope (Requirement A)
         envelope = build_envelope(manifest_payload, private_key)

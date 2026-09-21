@@ -55,6 +55,25 @@ Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "
 Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"; IconFilename: "{app}\assets\logo.ico"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\assets\logo.ico"; Tasks: desktopicon
 
+[Code]
+function ShouldRelaunchAfterSilentUpdate: Boolean;
+begin
+  { Inno skips [Run] entries flagged "postinstall" in silent mode, because those are
+    checkboxes on the "Completing Setup" wizard page and that page is never shown.
+    The in-app updater runs this installer with /VERYSILENT, so an update installed
+    successfully and then never restarted, while the app reported "InkDoc is
+    restarting...".
+
+    Relaunch only when the updater asks for it explicitly. A plain silent install
+    must not spawn a GUI: scripts/smoke_test_artifact.py installs with exactly the
+    same /VERYSILENT /SUPPRESSMSGBOXES /NORESTART flags on every release build, and
+    an unattended deployment should stay unattended. }
+  Result := WizardSilent() and (ExpandConstant('{param:RESTARTAPP|0}') = '1');
+end;
+
 [Run]
+; Interactive install: offer the usual "Launch InkDoc" checkbox on the final page.
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall
+; Silent in-app update: relaunch, but only when /RESTARTAPP=1 was passed.
+Filename: "{app}\{#MyAppExeName}"; Flags: nowait; Check: ShouldRelaunchAfterSilentUpdate
 

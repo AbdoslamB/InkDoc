@@ -107,8 +107,13 @@ def main() -> int:
 
     print(f"\n[Success] Encrypted private key saved to: {out_path}")
     print(f"Public key (hex): {pub_hex}")
-    print("\nTo configure this key in InkDoc, embed the hex string in app/core/update_verifier.py:")
-    print(f'PRIMARY_PUBLIC_KEY_HEX = "{pub_hex}"\n')
+    print("\nEmbed this hex in app/core/update_verifier.py, as EITHER:")
+    print(f'    PRIMARY_PUBLIC_KEY_HEX = "{pub_hex}"')
+    print(f'    BACKUP_PUBLIC_KEY_HEX  = "{pub_hex}"')
+    print("\nUse PRIMARY for the key you sign releases with, BACKUP for the offline")
+    print("recovery key. Do not set both constants to the same value, and never embed")
+    print("a key whose private half you cannot decrypt -- a manifest is accepted if it")
+    print("verifies against EITHER key. See docs/RELEASE_RUNBOOK.md.\n")
 
     return 0
 

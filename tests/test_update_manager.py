@@ -125,6 +125,98 @@ class TestUpdateManager(unittest.TestCase):
             self.assertIn("HTTP 404", status["error"])
             self.assertNotEqual(status["state"], UpdateState.UP_TO_DATE.value)
 
+    def test_failed_check_discards_previously_verified_asset(self) -> None:
+        """A failing check must not leave the previous check's asset usable.
+
+        download_update() accepts the ERROR state so a failed *download* can be
+        retried. The verified asset was only ever assigned on success and never
+        cleared, so after a good check followed by a failing one the manager still
+        held the older manifest's asset and would happily download it.
+        """
+        import urllib.error
+
+        mgr = UpdateManager(
+            manifest_url_override="https://github.com/AbdoslamB/InkDoc/releases/latest/download/inkdoc-update-manifest.json",
+            test_public_keys=[self.public_key],
+        )
+
+        manifest_data = {
+            "version": "2.0.0",
+            "issued_at": "2026-09-19T00:00:00Z",
+            "assets": {
+                mgr._platform_key: {
+                    "filename": "inkdoc-setup.exe",
+                    "url": "https://github.com/AbdoslamB/InkDoc/releases/download/v2.0.0/inkdoc-setup.exe",
+                    "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                    "size_bytes": 1024,
+                    "install_method": "inno_silent",
+                }
+            },
+        }
+        envelope_bytes = json.dumps(build_envelope(manifest_data, self.private_key)).encode("utf-8")
+
+        # 1. A good check arms the manager with a verified asset.
+        with patch.object(mgr, "_fetch_manifest_bytes", return_value=envelope_bytes):
+            self.assertEqual(mgr.check_for_updates(force=True)["state"], UpdateState.AVAILABLE.value)
+        self.assertIsNotNone(mgr._verified_target_asset)
+
+        # 2. The server stops serving a manifest.
+        err_404 = urllib.error.HTTPError(
+            url="https://github.com/.../inkdoc-update-manifest.json",
+            code=404,
+            msg="Not Found",
+            hdrs=MagicMock(),
+            fp=None,
+        )
+        with patch.object(mgr, "_fetch_manifest_bytes", side_effect=err_404):
+            self.assertEqual(mgr.check_for_updates(force=True)["state"], UpdateState.ERROR.value)
+
+        # 3. The stale asset must be gone and the download refused, not started.
+        self.assertIsNone(mgr._verified_target_asset)
+        self.assertIsNone(mgr._verified_manifest)
+        with self.assertRaises(ValueError) as ctx:
+            mgr.download_update()
+        self.assertIn("Check for updates first", str(ctx.exception))
+
+    def test_failed_download_can_still_be_retried(self) -> None:
+        """Clearing state on a failed *check* must not break retrying a failed *download*.
+
+        No new check runs between the failure and the retry, so the asset verified
+        by the last successful check is still legitimately in hand.
+        """
+        mgr = UpdateManager(
+            manifest_url_override="https://github.com/AbdoslamB/InkDoc/releases/latest/download/inkdoc-update-manifest.json",
+            test_public_keys=[self.public_key],
+        )
+
+        manifest_data = {
+            "version": "2.0.0",
+            "issued_at": "2026-09-19T00:00:00Z",
+            "assets": {
+                mgr._platform_key: {
+                    "filename": "inkdoc-setup.exe",
+                    "url": "https://github.com/AbdoslamB/InkDoc/releases/download/v2.0.0/inkdoc-setup.exe",
+                    "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                    "size_bytes": 1024,
+                    "install_method": "inno_silent",
+                }
+            },
+        }
+        envelope_bytes = json.dumps(build_envelope(manifest_data, self.private_key)).encode("utf-8")
+
+        with patch.object(mgr, "_fetch_manifest_bytes", return_value=envelope_bytes):
+            mgr.check_for_updates(force=True)
+
+        # Simulate a download that failed and left the manager in ERROR.
+        mgr._status.state = UpdateState.ERROR.value
+        mgr._status.error = "Network error after 3 retries"
+
+        with patch.object(mgr, "_run_download") as fake_download:
+            mgr.download_update()
+            if mgr._download_thread:
+                mgr._download_thread.join(timeout=5)
+            self.assertTrue(fake_download.called, "retry after a failed download was refused")
+
     def test_apply_pre_execution_hash_check_and_abort_on_tamper(self) -> None:
         """Requirement D: Re-hash staged installer immediately before launching it. Abort if tampered."""
         mgr = UpdateManager(test_public_keys=[self.public_key])

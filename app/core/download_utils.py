@@ -155,7 +155,18 @@ def stream_download(
     part_path = destination_path.with_suffix(destination_path.suffix + ".part")
     meta_path = destination_path.with_suffix(destination_path.suffix + ".part.meta")
 
-    # 1. Stale .part cleanup
+    # 1. Stale .part cleanup, strictly limited to this download's own partial file.
+    #
+    # There was previously a second pass that globbed the destination directory for
+    # "*.part" and deleted every match older than stale_part_age_seconds. For an
+    # update with install_method "download_reveal" the destination directory is the
+    # user's Downloads folder, and ".part" is the extension Firefox gives its own
+    # in-progress downloads -- so InkDoc silently destroyed unrelated user data.
+    #
+    # The sweep also bought nothing. Every caller writes to a fixed filename
+    # (inkdoc-setup.exe, inkdoc-windows.zip, docling.download.tar.gz), so an
+    # abandoned partial is always reclaimed by the single-file check below the next
+    # time that same asset is fetched. Never delete a file this function did not create.
     if part_path.is_file():
         try:
             age = time.time() - part_path.stat().st_mtime
@@ -164,15 +175,6 @@ def stream_download(
                 meta_path.unlink(missing_ok=True)
         except OSError:
             pass
-
-    try:
-        now = time.time()
-        for sibling in destination_path.parent.glob("*.part"):
-            if sibling.is_file() and (now - sibling.stat().st_mtime) > stale_part_age_seconds:
-                sibling.unlink(missing_ok=True)
-                sibling.with_suffix(sibling.suffix + ".meta").unlink(missing_ok=True)
-    except Exception:
-        pass
 
     existing_bytes = 0
     cached_etag: str | None = None

@@ -263,6 +263,17 @@ class UpdateManager:
             self._status.state = UpdateState.CHECKING.value
             self._status.error = None
 
+            # Discard the previous check's verified result before starting a new one.
+            # These were only ever assigned on success and never cleared, so after a
+            # successful check followed by a failing one (404, network error, or a
+            # signature that no longer verifies) the manager still held the older
+            # manifest's asset. download_update() accepts the ERROR state, so the UI
+            # would then download an asset from a manifest the server has since
+            # stopped vouching for. Clearing here also makes download_update() fail
+            # closed with "Check for updates first" instead of acting on stale data.
+            self._verified_manifest = None
+            self._verified_target_asset = None
+
         installed_ver = get_version()
         if not installed_ver or installed_ver == "0.0.0+unknown" or "unknown" in installed_ver:
             logger.error(

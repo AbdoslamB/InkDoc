@@ -2,15 +2,17 @@
 """Fetch draft release assets, verify them, build and sign the update manifest envelope.
 
 Usage:
-    python scripts/sign_manifest.py --tag v1.1.0 [--key-file inkdoc_signing_key.pem]
+    python scripts/sign_manifest.py --tag v1.1.0 [--key-file ~/.inkdoc-keys/inkdoc_signing_key.pem]
 
 Workflow:
 1. Prompts for passphrase to unlock encrypted Ed25519 private key.
 2. Fetches draft release assets for the given tag from GitHub.
 3. Computes SHA-256 for all assets and checks against SHA256SUMS-*.txt.
-4. Optionally checks `gh attestation verify` if gh CLI is available.
-5. Constructs manifest payload and signs base64 payload bytes using Ed25519.
-6. Encapsulates in single-file JSON envelope and uploads to the draft release.
+4. Constructs manifest payload and signs base64 payload bytes using Ed25519.
+5. Encapsulates in single-file JSON envelope and uploads to the draft release.
+
+Note: this script does NOT run `gh attestation verify`. Verify build provenance
+separately before signing (see docs/RELEASE_RUNBOOK.md).
 """
 from __future__ import annotations
 
@@ -30,6 +32,8 @@ from typing import Any
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
+
+DEFAULT_KEY_PATH = Path.home() / ".inkdoc-keys" / "inkdoc_signing_key.pem"
 
 
 def compute_sha256(file_path: Path) -> str:
@@ -78,8 +82,8 @@ def main() -> int:
     parser.add_argument(
         "--key-file",
         type=Path,
-        default=Path("inkdoc_signing_key.pem"),
-        help="Path to encrypted Ed25519 private key",
+        default=DEFAULT_KEY_PATH,
+        help=f"Path to encrypted Ed25519 private key (default: {DEFAULT_KEY_PATH})",
     )
     parser.add_argument("--repo", default="AbdoslamB/InkDoc", help="GitHub repository (owner/repo)")
     parser.add_argument("--dry-run", action="store_true", help="Build and sign envelope locally without uploading")
@@ -89,10 +93,11 @@ def main() -> int:
     clean_version = args.tag.lstrip("vV")
 
     # 1. Load private key
+    key_file = args.key_file.expanduser()
     try:
-        private_key = load_private_key(args.key_file)
+        private_key = load_private_key(key_file)
     except Exception as exc:
-        print(f"[Error] Failed to load private key: {exc}", file=sys.stderr)
+        print(f"[Error] Failed to load private key from {key_file}: {exc}", file=sys.stderr)
         return 1
 
     print(f"[*] Preparing signed manifest for release {args.tag} ({args.repo})...")

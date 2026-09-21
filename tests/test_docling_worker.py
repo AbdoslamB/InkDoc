@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import tempfile
 import time
@@ -13,6 +14,47 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from app.core.engines.docling_worker_client import DoclingWorkerClient  # noqa: E402
+
+
+def test_worker_launch_does_not_suppress_site_module():
+    """The worker must never be launched with -S.
+
+    -S suppresses the `site` module, and `site` is what puts a virtualenv's own
+    site-packages on sys.path. With -S the pack's interpreter starts and answers
+    ping -- the docling import is lazy, inside _get_converter -- and then every
+    conversion fails with "No module named 'docling'". This shipped in
+    docling-pack-v1 and was invisible because the build's smoke test asserted
+    nothing about the conversion result.
+
+    Asserted against the source of both launch sites, which must stay identical:
+    if they drift, the build smoke test stops validating what production runs.
+    """
+    client_src = (
+        REPO_ROOT / "app" / "core" / "engines" / "docling_worker_client.py"
+    ).read_text(encoding="utf-8")
+    build_src = (REPO_ROOT / "scripts" / "build_pack.py").read_text(encoding="utf-8")
+
+    client_cmd = re.search(
+        r"cmd = \[\s*str\(interpreter\),(.*?)\]", client_src, re.DOTALL
+    )
+    assert client_cmd, "could not locate the worker launch command in docling_worker_client.py"
+    client_flags = re.findall(r'"(-[A-Za-z])"', client_cmd.group(1))
+
+    build_cmd = re.search(r"cmd = \[str\(extracted_python\),(.*?)\]", build_src)
+    assert build_cmd, "could not locate the worker launch command in build_pack.py"
+    build_flags = re.findall(r'"(-[A-Za-z])"', build_cmd.group(1))
+
+    assert "-S" not in client_flags, (
+        "worker launched with -S: site-packages will be missing and every "
+        "conversion will fail with No module named 'docling'"
+    )
+    assert "-S" not in build_flags, "build_pack.py smoke test launches the worker with -S"
+    assert "-I" in client_flags, "worker must stay in isolated mode (-I)"
+    assert client_flags == build_flags, (
+        f"launch flags drifted: worker client {client_flags} vs build_pack {build_flags}. "
+        "The post-build smoke test must run the worker exactly as production does."
+    )
+    print("[OK] test_worker_launch_does_not_suppress_site_module passed")
 
 
 def test_docling_worker_floods_stderr():
@@ -139,6 +181,7 @@ while True:
 
 
 if __name__ == "__main__":
+    test_worker_launch_does_not_suppress_site_module()
     test_docling_worker_floods_stderr()
     test_docling_worker_hangs_mid_line()
     print("\nALL DOCLING WORKER TESTS PASSED!")

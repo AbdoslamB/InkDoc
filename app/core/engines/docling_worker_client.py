@@ -209,12 +209,24 @@ class DoclingWorkerClient:
             if val:
                 minimal_env[var] = val
 
-        # Isolated Python launch: -I (isolated mode, ignores PYTHONPATH/PYTHONHOME/user site-packages)
+        # Isolated Python launch.
+        #
+        # -I is isolated mode: it implies -E (ignore PYTHONPATH/PYTHONHOME), -s (no user
+        # site-packages) and -P (do not prepend the script directory to sys.path). That
+        # is the isolation this worker needs.
+        #
+        # -S must NOT be added. It suppresses the `site` module, and `site` is what puts
+        # a virtualenv's own site-packages on sys.path. With -S the interpreter starts
+        # and answers ping (the docling import is lazy, inside _get_converter), then
+        # every conversion fails with ModuleNotFoundError: No module named 'docling'.
+        # The pack ships its dependencies in env/, so loading them is the entire point.
+        #
+        # scripts/build_pack.py launches the worker the same way in its post-build smoke
+        # test. Keep the two argument lists identical, or the smoke test stops validating
+        # what production actually runs.
         cmd = [
             str(interpreter),
             "-I",
-            "-s",
-            "-S",
             str(worker_script),
         ]
 

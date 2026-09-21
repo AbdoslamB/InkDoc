@@ -232,6 +232,38 @@ app = FastAPI(
 )
 
 
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost"})
+
+
+def is_trusted_origin(origin: str) -> bool:
+    """Return True only for a loopback origin on this server's exact port.
+
+    Every legitimate caller is same-origin: the pywebview desktop window and any
+    browser tab both load the UI from http://127.0.0.1:<SERVER_PORT>, so they
+    present exactly that origin on state-changing requests.
+
+    Opaque origins ("null", "file://") are deliberately NOT trusted. A sandboxed
+    iframe on any website carries `Origin: null`, so trusting it would let an
+    arbitrary page read GET /InkDoc cross-origin and lift SESSION_TOKEN straight
+    out of the injected <script>, which in turn unlocks every management endpoint
+    (engine install/remove, settings, update apply). Custom schemes such as
+    pywebview:// and vscode-webview:// are likewise untrusted: no supported
+    configuration produces them, and each would be a bypass if some embedder did.
+    """
+    if not origin:
+        return False
+    parsed = urlparse(origin)
+    if parsed.scheme not in ("http", "https"):
+        return False
+    if (parsed.hostname or "").lower() not in _LOOPBACK_HOSTS:
+        return False
+    try:
+        return parsed.port == SERVER_PORT
+    except ValueError:
+        # Malformed port in the Origin header.
+        return False
+
+
 @app.middleware("http")
 async def security_and_cors_middleware(request: Request, call_next: Any) -> Response:
     """Enforce DNS rebinding protection (Host header), Origin verification, and dynamic CORS."""
@@ -242,61 +274,44 @@ async def security_and_cors_middleware(request: Request, call_next: Any) -> Resp
     if host_name and host_name not in allowed_hostnames:
         return PlainTextResponse("Forbidden: Invalid Host header (DNS rebinding protection)", status_code=403)
 
-    # 2. Origin validation on state-changing requests (Security Requirement #11)
+    # A single predicate drives rejection, preflight and response headers alike, so
+    # the three cannot drift apart and leave a read path open that the write path blocks.
     origin_header = request.headers.get("origin", "")
-    if request.method in ("POST", "PUT", "DELETE", "PATCH") and origin_header:
-        parsed_orig = urlparse(origin_header)
-        orig_host = parsed_orig.hostname or ""
-        orig_port = parsed_orig.port
+    origin_trusted = is_trusted_origin(origin_header)
 
-        is_webview_origin = (
-            origin_header in ("null", "file://")
-            or origin_header.startswith("pywebview://")
-            or origin_header.startswith("vscode-webview://")
+    # 2. Origin validation on state-changing requests (Security Requirement #11).
+    # A request with no Origin header at all is still permitted: native API clients
+    # (curl, examples/client_example.py) send none, and browsers always attach one
+    # to cross-origin state-changing requests, so this is not a browser-reachable gap.
+    if request.method in ("POST", "PUT", "DELETE", "PATCH") and origin_header and not origin_trusted:
+        logger.warning(
+            "Rejected %s %s from untrusted Origin %r (expected loopback on port %d)",
+            request.method,
+            request.url.path,
+            origin_header,
+            SERVER_PORT,
         )
-        is_valid_loopback = (
-            orig_host in ("127.0.0.1", "localhost")
-            and (orig_port == SERVER_PORT or orig_port is None or orig_host == "testserver")
-        )
-
-        if not is_webview_origin and not is_valid_loopback and orig_host != "testserver":
-            return PlainTextResponse("Forbidden: Untrusted Origin", status_code=403)
+        return PlainTextResponse("Forbidden: Cross-origin request not allowed", status_code=403)
 
     # 3. Dynamic CORS preflight (OPTIONS)
-    if request.method == "OPTIONS" and origin_header:
-        parsed_orig = urlparse(origin_header)
-        orig_host = parsed_orig.hostname or ""
-        orig_port = parsed_orig.port
-        is_allowed = (
-            origin_header in ("null", "file://")
-            or origin_header.startswith("pywebview://")
-            or orig_host == "testserver"
-            or (orig_host in ("127.0.0.1", "localhost") and (orig_port == SERVER_PORT or orig_port is None))
-        )
-        if is_allowed:
-            resp = PlainTextResponse("OK", status_code=200)
-            resp.headers["Access-Control-Allow-Origin"] = origin_header
-            resp.headers["Access-Control-Allow-Credentials"] = "true"
-            resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
-            resp.headers["Access-Control-Allow-Headers"] = request.headers.get("Access-Control-Request-Headers", "*")
-            return resp
+    if request.method == "OPTIONS" and origin_trusted:
+        resp = PlainTextResponse("OK", status_code=200)
+        resp.headers["Access-Control-Allow-Origin"] = origin_header
+        resp.headers["Access-Control-Allow-Credentials"] = "true"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = request.headers.get("Access-Control-Request-Headers", "*")
+        resp.headers["Vary"] = "Origin"
+        return resp
 
     response: Response = await call_next(request)
 
-    # 4. Attach CORS response headers for allowed origins
-    if origin_header:
-        parsed_orig = urlparse(origin_header)
-        orig_host = parsed_orig.hostname or ""
-        orig_port = parsed_orig.port
-        is_allowed = (
-            origin_header in ("null", "file://")
-            or origin_header.startswith("pywebview://")
-            or orig_host == "testserver"
-            or (orig_host in ("127.0.0.1", "localhost") and (orig_port == SERVER_PORT or orig_port is None))
-        )
-        if is_allowed:
-            response.headers["Access-Control-Allow-Origin"] = origin_header
-            response.headers["Access-Control-Allow-Credentials"] = "true"
+    # 4. Attach CORS response headers for trusted origins only
+    if origin_trusted:
+        response.headers["Access-Control-Allow-Origin"] = origin_header
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        # Responses vary by Origin; without this an intermediary could serve a
+        # cached allow-listed response to a request from a different origin.
+        response.headers["Vary"] = "Origin"
 
     # 5. Security hardening headers (Requirement M)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")

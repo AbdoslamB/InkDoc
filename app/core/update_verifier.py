@@ -33,9 +33,20 @@ def _get_crypto_primitives() -> tuple[Any, Any]:
         ) from exc
 
 
-# Embedded official Ed25519 public keys (Requirement 1 & 3)
-PRIMARY_PUBLIC_KEY_HEX = "3cb74bde9db9fd878c4a2d7a7257c522b5dd247f972763b4f92338974592604b"
-BACKUP_PUBLIC_KEY_HEX = "060b4bc65f9ef22f0e63189b59e3016f758e2e79e3f868a8a027915e3b4d99c5"
+# Embedded official Ed25519 public keys (Requirement 1 & 3).
+#
+# A manifest is accepted if its single signature verifies against EITHER key, so a
+# build can only be updated by a manifest signed with one of the keys listed here.
+# Replacing both values therefore cuts every previously released build off from
+# in-app updates — see docs/RELEASE_RUNBOOK.md before changing them.
+#
+# Rotated 2026-09-20: the previous values were superseded because no corresponding
+# private key was held, which made it impossible to sign any release manifest and
+# left builds trusting keys of unverified provenance. Both keys below were generated
+# offline with scripts/generate_signing_key.py and their private halves are held
+# encrypted off-machine.
+PRIMARY_PUBLIC_KEY_HEX = "89bb0f8cd25c437a9c4a255f4de87f1e5434db8af45ad68c5ac235605a3bf2e8"
+BACKUP_PUBLIC_KEY_HEX = "dbf402f479a61644ca107597d7964800290f7512684a7e980a941f0f3f66c480"
 
 # Official GitHub Releases URL prefix (case-insensitive comparison)
 OFFICIAL_REPO_PATH_PREFIX = "/abdoslamb/inkdoc/releases/download/"

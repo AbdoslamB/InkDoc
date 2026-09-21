@@ -134,6 +134,21 @@ def validate_manifest(manifest_path: Path) -> tuple[bool, list[str]]:
         return False, [f"Manifest JSON syntax error: {exc}"]
 
     supported = data.get("supported_platforms", {})
+
+    # An empty manifest must fail, not pass vacuously.
+    #
+    # This loop reports per-platform problems, so zero platforms produced zero
+    # errors and the guard returned success. v1.0.2 shipped a 120-byte manifest
+    # with "supported_platforms": {} through this check and through CI, and every
+    # user saw Docling as NOT AVAILABLE: engine_manifest.get_platform_pack()
+    # returns None for every host, so is_platform_supported() is False everywhere.
+    # The guard existed precisely to catch that and reported PASS.
+    if not supported:
+        return False, [
+            "Manifest has no supported_platforms entries. A manifest without platforms "
+            "makes Docling report UNSUPPORTED on every host. Refusing to pass it."
+        ]
+
     for plat_key, plat_info in supported.items():
         # 1. Main archive sha256
         sha256 = plat_info.get("sha256", "")

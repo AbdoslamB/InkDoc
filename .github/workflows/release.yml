@@ -422,7 +422,21 @@ jobs:
           done
           echo "All required draft release assets are present."
 
+      - name: Stable release maintainer handoff
+        if: ${{ !contains(github.ref_name, '-') }}
+        shell: bash
+        run: |
+          {
+            echo "### Stable release remains draft"
+            echo
+            echo "1. Sign the update manifest locally with scripts/sign_manifest.py."
+            echo "2. Upload inkdoc-update-manifest.json to draft release ${{ github.ref_name }}."
+            echo "3. Publish the draft release after signing and verifying the manifest."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Stable release remains draft; sign, upload, verify, then publish manually."
+
       - name: Publish GitHub Release
+        if: ${{ contains(github.ref_name, '-') }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}

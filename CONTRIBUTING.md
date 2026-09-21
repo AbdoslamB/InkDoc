@@ -223,7 +223,8 @@ Maintainers follow a strict release candidate rehearsal procedure before publish
 3. **Automated Pipeline**:
    - `create-draft-release` initializes a draft release marked as pre-release (`--prerelease`).
    - `build` matrix builds all platforms, runs full end-to-end smoke testing (`--selftest`, multi-format document conversions) against built artifacts, and uploads them to the draft.
-   - `publish-release` publishes the draft with `--prerelease --latest=false`.
+   - `publish-release` publishes RC tags with `--prerelease` and leaves stable tags as drafts.
+   - Stable release handoff: run `python scripts/sign_manifest.py --tag <tag>`, upload `inkdoc-update-manifest.json` to the draft, verify it, then publish the draft manually.
 4. **Validation**: Test the uploaded artifacts on real hardware.
 
 ### 2. Recovery After a Failed Tag Run

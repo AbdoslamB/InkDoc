@@ -434,17 +434,48 @@ jobs:
           done
           echo "All required draft release assets are present."
 
-      - name: Publish GitHub Release
+      # A stable tag deliberately stops at a draft.
+      #
+      # The in-app updater fetches
+      # /releases/latest/download/inkdoc-update-manifest.json, which GitHub serves
+      # only for the release marked Latest. That manifest is signed offline with a
+      # key that never touches CI, so it can only be attached after the build has
+      # produced the assets to hash. Publishing automatically would therefore make
+      # the new release Latest while the manifest it needs does not yet exist, and
+      # every install would get HTTP 404 on "Check for updates" -- which is exactly
+      # what v1.0.2 did.
+      #
+      # Pre-releases (any tag containing a hyphen) still publish automatically. They
+      # are never Latest, so they cannot affect the updater.
+      - name: Stable release stops at a draft for offline signing
+        if: ${{ !contains(github.ref_name, '-') }}
+        shell: bash
+        run: |
+          {
+            echo "### ${{ github.ref_name }} is waiting to be published"
+            echo
+            echo "The draft is complete. To finish the release:"
+            echo
+            echo '1. Verify build provenance:'
+            echo '   `gh release download ${{ github.ref_name }} --dir /tmp/r --repo ${{ github.repository }}`'
+            echo '   `for f in /tmp/r/*; do gh attestation verify "$f" --repo ${{ github.repository }}; done`'
+            echo '2. Sign the update manifest offline:'
+            echo '   `python scripts/sign_manifest.py --tag ${{ github.ref_name }}`'
+            echo '3. Confirm `inkdoc-update-manifest.json` is attached to the draft.'
+            echo '4. Publish the draft with **Set as the latest release** checked.'
+            echo
+            echo 'Step 4 matters: the updater resolves /releases/latest/download/, so a'
+            echo 'release that is published without being marked Latest still 404s.'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Stable release '${{ github.ref_name }}' left as a draft. See the job summary for the signing handoff."
+
+      - name: Publish pre-release
+        if: ${{ contains(github.ref_name, '-') }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
           TAG="${{ github.ref_name }}"
-          if [[ "$TAG" == *-* ]]; then
-            echo "Publishing pre-release: $TAG"
-            gh release edit "$TAG" -R "${{ github.repository }}" --draft=false --prerelease
-          else
-            echo "Publishing stable release: $TAG with --latest=true"
-            gh release edit "$TAG" -R "${{ github.repository }}" --draft=false --prerelease=false --latest=true
-          fi
+          echo "Publishing pre-release: $TAG"
+          gh release edit "$TAG" -R "${{ github.repository }}" --draft=false --prerelease
           gh release view "$TAG" -R "${{ github.repository }}" --json isDraft,isPrerelease,assets

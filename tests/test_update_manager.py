@@ -122,7 +122,12 @@ class TestUpdateManager(unittest.TestCase):
         with patch.object(mgr, "_fetch_manifest_bytes", side_effect=err_404):
             status = mgr.check_for_updates(force=True)
             self.assertEqual(status["state"], UpdateState.ERROR.value)
-            self.assertIn("HTTP 404", status["error"])
+            self.assertEqual(
+                status["error"],
+                "No signed update information has been published for the latest release yet.",
+            )
+            # Must not read as a fault on the user's machine.
+            self.assertNotIn("failed", status["error"].lower())
             self.assertNotEqual(status["state"], UpdateState.UP_TO_DATE.value)
 
     def test_failed_check_discards_previously_verified_asset(self) -> None:

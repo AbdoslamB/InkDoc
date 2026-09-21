@@ -57,6 +57,38 @@ def test_worker_launch_does_not_suppress_site_module():
     print("[OK] test_worker_launch_does_not_suppress_site_module passed")
 
 
+def test_docling_inference_device_is_pinned_to_cpu():
+    """Docling's accelerator device must be pinned, not left on "auto".
+
+    "auto" selects the Metal (MPS) backend on Apple Silicon. The pack installs
+    CPU-only torch, and MPS is a path CI cannot exercise at all: the macOS pack
+    build failed loading the layout model with "MPS backend out of memory" while
+    trying to allocate 3.5 KiB. Pinning CPU keeps inference identical across the
+    three platforms and keeps the build smoke test on the same path as production.
+
+    Checked at all three places that launch or configure the worker, since a value
+    set in only some of them reintroduces the divergence.
+    """
+    worker_src = (REPO_ROOT / "app" / "core" / "engines" / "worker.py").read_text(encoding="utf-8")
+    client_src = (
+        REPO_ROOT / "app" / "core" / "engines" / "docling_worker_client.py"
+    ).read_text(encoding="utf-8")
+    build_src = (REPO_ROOT / "scripts" / "build_pack.py").read_text(encoding="utf-8")
+
+    assert re.search(r'DOCLING_DEVICE"\s*,\s*"cpu"', worker_src), (
+        "worker.py must pin DOCLING_DEVICE=cpu; docling otherwise defaults to auto "
+        "and selects MPS on Apple Silicon"
+    )
+    assert re.search(r'"DOCLING_DEVICE"\s*:\s*"cpu"', client_src), (
+        "DoclingWorkerClient minimal_env must pin DOCLING_DEVICE=cpu"
+    )
+    assert re.search(r'"DOCLING_DEVICE"\s*:\s*"cpu"', build_src), (
+        "build_pack.py smoke test env must pin DOCLING_DEVICE=cpu, or it stops "
+        "validating the device production actually uses"
+    )
+    print("[OK] test_docling_inference_device_is_pinned_to_cpu passed")
+
+
 def test_docling_worker_floods_stderr():
     """Verify that a worker flooding stderr (>100KB) does not deadlock on pipe buffer (M-7)."""
     with tempfile.TemporaryDirectory() as td:
@@ -182,6 +214,7 @@ while True:
 
 if __name__ == "__main__":
     test_worker_launch_does_not_suppress_site_module()
+    test_docling_inference_device_is_pinned_to_cpu()
     test_docling_worker_floods_stderr()
     test_docling_worker_hangs_mid_line()
     print("\nALL DOCLING WORKER TESTS PASSED!")

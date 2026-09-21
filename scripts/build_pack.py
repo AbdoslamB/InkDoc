@@ -148,6 +148,8 @@ def run_post_build_smoke_test(
             "MKL_NUM_THREADS": "1",
             "OMP_NUM_THREADS": "1",
             "DOCLING_ARTIFACTS_PATH": str(extracted_models),
+            # Match DoclingWorkerClient's minimal_env: CPU inference, never MPS.
+            "DOCLING_DEVICE": "cpu",
         })
 
         # 1. Ping RPC test

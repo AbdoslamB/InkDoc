@@ -196,6 +196,11 @@ class DoclingWorkerClient:
             "HF_HUB_DISABLE_TELEMETRY": "1",
             "DO_NOT_TRACK": "1",
             "SCARF_NO_ANALYTICS": "1",
+            # Pin inference to CPU rather than docling's "auto", which picks the Metal
+            # (MPS) backend on Apple Silicon. The pack ships CPU-only torch, and MPS is
+            # a path CI cannot exercise. worker.py sets the same default itself, so the
+            # behaviour holds however the worker is launched. See worker.py for detail.
+            "DOCLING_DEVICE": "cpu",
         }
 
         # Transfer only essential OS variables

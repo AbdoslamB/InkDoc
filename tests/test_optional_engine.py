@@ -978,7 +978,19 @@ def test_cheap_release_guard():
 
 
 def test_post_build_smoke_test_and_size_guard():
-    """Requirement 4 & 5: Verify post-build smoke test extraction and size guard."""
+    """The post-build smoke test must reject a pack that is not relocatable.
+
+    This fixture is deliberately the broken shape: a bare copy of the running
+    interpreter with no standard library beside it, which is structurally what
+    docling-pack-v2 shipped. Such a pack starts on the build machine, because the
+    interpreter falls back to a Python installation that exists there, and fails on
+    every user's machine.
+
+    The test previously asserted that this arrangement *passed* the smoke test. It
+    did pass, which is why the broken pack was published. The happy path is covered
+    by the real build in build-packs.yml, which downloads a genuinely relocatable
+    CPython; it cannot be fabricated cheaply here.
+    """
     import zipfile
 
     from scripts.build_pack import run_post_build_smoke_test
@@ -1010,13 +1022,26 @@ def test_post_build_smoke_test_and_size_guard():
             # Copy current python executable into the zip to act as isolated python
             zf.write(sys.executable, "bin/python.exe")
 
-        # Run smoke test on the created archive
-        run_post_build_smoke_test(
-            archive_path=archive_path,
-            archive_format="zip",
-            interpreter_rel="bin/python.exe",
-            worker_rel="worker.py",
-        )
+        # The smoke test must refuse this pack. Either failure mode is correct: the
+        # copied interpreter may start and report a sys.prefix outside the extraction
+        # directory, or it may fail to initialise at all without its stdlib.
+        try:
+            run_post_build_smoke_test(
+                archive_path=archive_path,
+                archive_format="zip",
+                interpreter_rel="bin/python.exe",
+                worker_rel="worker.py",
+            )
+        except RuntimeError as exc:
+            message = str(exc)
+            assert ("not relocatable" in message) or ("failed to start" in message), (
+                f"smoke test failed, but not because the pack is unusable: {message}"
+            )
+        else:
+            raise AssertionError(
+                "post-build smoke test accepted a pack whose interpreter resolves "
+                "outside the pack; this is exactly how docling-pack-v2 shipped"
+            )
 
     print("[OK] test_post_build_smoke_test_and_size_guard passed")
 

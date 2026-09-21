@@ -87,6 +87,61 @@ class TestBundledManifest(unittest.TestCase):
                 self.assertLessEqual(pack.size_bytes, 2000 * 1024 * 1024)
 
 
+class TestShippedManifestDescribesARelocatablePack(unittest.TestCase):
+    """The pack the manifest points at must be able to start on a user's machine.
+
+    docling-pack-v2 shipped a virtualenv. `python -m venv` never copies the standard
+    library, so the stdlib and python311.dll stayed in the build runner's toolcache
+    and the interpreter died during initialisation on every other machine, surfacing
+    as "Docling worker exited prematurely with exit code 103".
+
+    Every check at the time passed because every check ran on the build machine.
+    These assertions read the manifest itself, so they hold regardless of where they
+    run and regardless of whether anything is installed.
+    """
+
+    def setUp(self) -> None:
+        self.platforms = load_engine_manifest(MANIFEST_PATH).supported_platforms
+
+    def test_no_platform_ships_a_virtualenv(self) -> None:
+        for key, pack in self.platforms.items():
+            with self.subTest(platform=key):
+                strays = [f for f in pack.sha256_files if f.endswith("pyvenv.cfg")]
+                self.assertEqual(
+                    strays, [],
+                    f"{key} ships {strays}: the interpreter would resolve its standard "
+                    "library against the machine that built the pack and fail to start",
+                )
+
+    def test_every_platform_bundles_its_standard_library(self) -> None:
+        for key, pack in self.platforms.items():
+            with self.subTest(platform=key):
+                encodings = [
+                    f for f in pack.sha256_files if f.endswith("/encodings/__init__.py")
+                ]
+                self.assertTrue(
+                    encodings,
+                    f"{key} bundles no encodings module; CPython cannot initialise "
+                    "without it, so the worker dies before running any code",
+                )
+                if key.startswith("windows"):
+                    self.assertIn(
+                        "python/python311.dll", pack.sha256_files,
+                        f"{key} bundles no python311.dll; python.exe cannot start",
+                    )
+
+    def test_interpreter_lives_inside_the_pack(self) -> None:
+        """A path under env/ means the old virtualenv layout came back."""
+        for key, pack in self.platforms.items():
+            with self.subTest(platform=key):
+                self.assertFalse(
+                    pack.interpreter_path.startswith("env/"),
+                    f"{key} interpreter_path is {pack.interpreter_path!r}, the "
+                    "virtualenv layout replaced by the relocatable CPython build",
+                )
+                self.assertIn(pack.interpreter_path, pack.sha256_files)
+
+
 class TestManifestGuardRejectsEmpty(unittest.TestCase):
     """The guard CI runs must fail on an empty manifest, not pass vacuously."""
 

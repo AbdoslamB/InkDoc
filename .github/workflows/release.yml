@@ -306,19 +306,19 @@ jobs:
       - name: Enforce artifact size limits
         shell: pwsh
         run: |
-          # Baselines are the v1.0.2 published sizes plus the measured cost of bundling
-          # app/core/manifest.json: 3,810,045 bytes compressed into the three zips and
-          # the onefile exe, 2,001,824 into the LZMA installer. The previous caps were
-          # set against v1.0.1 and left as little as 1.4 MB of headroom on
-          # inkdoc-macos.zip, so adding the manifest would have tripped them.
-          # Caps are baseline + 6%. Replace these baselines with the measured v1.0.3
-          # artifact sizes once that release has been built.
+          # Baselines are the measured v1.0.3-rc1 artifact sizes with the docling-pack-v2
+          # manifest swapped for v3: -3,810,045 +4,109,124 bytes deflate in the zips and
+          # the onefile exe, -2,001,824 +2,252,988 in the LZMA installer. Caps are
+          # baseline + 6%, so a real regression trips the guard while normal drift does
+          # not. Re-measure after each release rather than letting these go stale: the
+          # caps before this were still set against v1.0.1 and left 1.4 MB of headroom
+          # on inkdoc-macos.zip, which the engine manifest alone would have exceeded.
           $limits = @{
-            "inkdoc-linux.zip" = @{ Baseline = 148584060; Cap = 157499103 }
-            "inkdoc-macos.zip" = @{ Baseline = 119850560; Cap = 127041593 }
-            "inkdoc-windows.zip" = @{ Baseline = 125141207; Cap = 132649679 }
-            "inkdoc.exe" = @{ Baseline = 122403603; Cap = 129747819 }
-            "inkdoc-setup.exe" = @{ Baseline = 93539719; Cap = 99152102 }
+            "inkdoc-linux.zip" = @{ Baseline = 149151831; Cap = 158100940 }
+            "inkdoc-macos.zip" = @{ Baseline = 120399830; Cap = 127623819 }
+            "inkdoc-windows.zip" = @{ Baseline = 125443527; Cap = 132970138 }
+            "inkdoc.exe" = @{ Baseline = 122880190; Cap = 130253001 }
+            "inkdoc-setup.exe" = @{ Baseline = 93829365; Cap = 99459126 }
           }
           if ($env:RUNNER_OS -eq "Linux") {
             $names = @("inkdoc-linux.zip")

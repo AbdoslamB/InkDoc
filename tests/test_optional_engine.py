@@ -180,6 +180,64 @@ def test_cors_origin_exact_port_protection():
     print("[OK] test_cors_origin_exact_port_protection passed")
 
 
+def test_opaque_origin_cannot_read_session_token():
+    """An opaque origin must never be able to read a response or change state.
+
+    A sandboxed iframe on any website carries `Origin: null`. The UI HTML embeds
+    SESSION_TOKEN in a <script>, so echoing Access-Control-Allow-Origin back to an
+    opaque origin would let an arbitrary page fetch /InkDoc, scrape the token and
+    then drive every management endpoint. Custom embedder schemes are treated the
+    same way: no supported configuration produces them.
+    """
+    untrusted_origins = [
+        "null",
+        "file://",
+        "pywebview://inkdoc",
+        "vscode-webview://abc123",
+        "https://malicious-website.com",
+        "http://127.0.0.1:54321",      # rogue local service on another port
+        "http://evil.127.0.0.1.nip.io:13118",  # loopback-looking hostname
+        "http://localhost",            # no port: a different origin to :13118
+    ]
+
+    for origin in untrusted_origins:
+        # The read path: no CORS grant, so a browser blocks the caller from
+        # seeing the body even though the request itself succeeds.
+        read = client.get("/InkDoc", headers={"Origin": origin})
+        assert read.headers.get("access-control-allow-origin") is None, (
+            f"{origin!r} was granted read access to the token-bearing UI HTML"
+        )
+
+        # The write path: state-changing requests are refused outright.
+        write = client.post("/settings", headers={"Origin": origin}, json={})
+        assert write.status_code == 403, f"{origin!r} was allowed to POST"
+        assert "Cross-origin" in write.text
+
+        # Preflight must not hand out a grant either.
+        pre = client.options(
+            "/settings",
+            headers={"Origin": origin, "Access-Control-Request-Method": "POST"},
+        )
+        assert pre.headers.get("access-control-allow-origin") is None
+
+    # The real UI origin keeps working, and marks the response as Origin-dependent.
+    ok = client.get("/InkDoc", headers={"Origin": "http://127.0.0.1:13118"})
+    assert ok.headers.get("access-control-allow-origin") == "http://127.0.0.1:13118"
+    assert ok.headers.get("vary") == "Origin"
+
+    # localhost on the exact port is the same UI reached by a different name.
+    ok_localhost = client.get("/InkDoc", headers={"Origin": "http://localhost:13118"})
+    assert ok_localhost.headers.get("access-control-allow-origin") == "http://localhost:13118"
+
+    # Native API clients (curl, examples/client_example.py) send no Origin at all and
+    # must still reach the route. /settings then refuses them for lacking a session
+    # token, which is the point: the request got past the Origin gate, so the
+    # rejection reason distinguishes "blocked by CORS" from "blocked by auth".
+    no_origin = client.post("/settings", json={})
+    assert "Cross-origin" not in no_origin.text, "a request with no Origin was blocked by the Origin gate"
+    print("[OK] test_opaque_origin_cannot_read_session_token passed")
+
+
 # ─── 6. Security: Session Token Authentication on Management Endpoints ────────
 
 def test_session_token_required_on_management():
@@ -974,6 +1032,7 @@ if __name__ == "__main__":
     test_conversion_guards_for_unsupported_engine()
     test_host_header_dns_rebinding_protection()
     test_cors_origin_exact_port_protection()
+    test_opaque_origin_cannot_read_session_token()
     test_session_token_required_on_management()
     test_safe_path_validation_zip_slip()
     test_safe_extraction_rejects_malicious_zip()

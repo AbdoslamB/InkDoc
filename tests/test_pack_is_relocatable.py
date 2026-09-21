@@ -77,11 +77,10 @@ class TestBuildRefusesNonRelocatablePacks(unittest.TestCase):
             assert_pack_is_self_contained(self.root, "windows-x86_64")
         self.assertIn("python311.dll", str(ctx.exception))
 
-# NOTE: the assertions that the *shipped* app/core/manifest.json describes a
-# relocatable pack live in tests/test_engine_manifest_guard.py, and are added by the
-# change that lands the docling-pack-v3 manifest. They cannot pass here: the manifest
-# currently on main describes docling-pack-v2, which is the non-relocatable pack this
-# change exists to replace.
+
+# The matching assertions about the *shipped* app/core/manifest.json -- no pyvenv.cfg,
+# stdlib bundled, interpreter outside the old env/ layout -- live in
+# tests/test_engine_manifest_guard.py, next to the other guards on that file.
 
 
 if __name__ == "__main__":

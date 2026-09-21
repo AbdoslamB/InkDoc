@@ -21,6 +21,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from app.core.engine_manifest import EngineManifest, load_engine_manifest  # noqa: E402
 from scripts.generate_engine_manifest import validate_manifest  # noqa: E402
+from scripts.verify_engine_manifest_guard import check_pack_is_usable, verify_guard  # noqa: E402
 
 MANIFEST_PATH = REPO_ROOT / "app" / "core" / "manifest.json"
 
@@ -140,6 +141,103 @@ class TestShippedManifestDescribesARelocatablePack(unittest.TestCase):
                     "virtualenv layout replaced by the relocatable CPython build",
                 )
                 self.assertIn(pack.interpreter_path, pack.sha256_files)
+
+
+class TestReleaseGateRejectsUnusablePacks(unittest.TestCase):
+    """The release guard must block a tag whose manifest points at a dead pack.
+
+    v1.0.3-rc2 was tagged one commit before the manifest was repointed at
+    docling-pack-v3. It therefore built, published and reached a user still pointing
+    at v2, whose interpreter could not start outside the build runner. Nothing in the
+    pipeline looked at what the manifest described, only that its hashes were well
+    formed, so the whole release completed successfully around a broken payload.
+
+    These assert on properties rather than a list of known-bad tags, so re-pointing
+    the manifest at any non-relocatable pack fails no matter what it is called.
+    """
+
+    def _pack(self, **overrides: object) -> dict:
+        files = {
+            "worker.py": "a" * 64,
+            "python/python.exe": "b" * 64,
+            "python/python311.dll": "c" * 64,
+            "python/Lib/encodings/__init__.py": "d" * 64,
+            "models/layout/model.safetensors": "e" * 64,
+        }
+        pack = {
+            "url": "https://github.com/AbdoslamB/InkDoc/releases/download/docling-pack-v3/x.zip",
+            "archive_format": "zip",
+            "sha256": "f" * 64,
+            "size_bytes": 1,
+            "uncompressed_size_bytes": 2,
+            "interpreter_path": "python/python.exe",
+            "worker_script": "worker.py",
+            "sha256_files": files,
+        }
+        pack.update(overrides)
+        return pack
+
+    def test_accepts_a_relocatable_pack(self) -> None:
+        self.assertEqual(check_pack_is_usable("windows-x86_64", self._pack()), [])
+
+    def test_rejects_a_virtualenv_pack(self) -> None:
+        """Exactly the shape docling-pack-v2 shipped."""
+        files = {
+            "worker.py": "a" * 64,
+            "env/pyvenv.cfg": "b" * 64,
+            "env/Scripts/python.exe": "c" * 64,
+            "models/layout/model.safetensors": "d" * 64,
+        }
+        errors = check_pack_is_usable(
+            "windows-x86_64",
+            self._pack(sha256_files=files, interpreter_path="env/Scripts/python.exe"),
+        )
+        joined = " ".join(errors)
+        self.assertIn("pyvenv.cfg", joined)
+        self.assertIn("encodings", joined)
+        self.assertIn("python311.dll", joined)
+        self.assertIn("virtualenv layout", joined)
+
+    def test_rejects_pack_without_models(self) -> None:
+        """docling-pack-v1: installs cleanly, then every conversion fails offline."""
+        files = {k: v for k, v in self._pack()["sha256_files"].items() if not k.startswith("models/")}
+        errors = check_pack_is_usable("windows-x86_64", self._pack(sha256_files=files))
+        self.assertTrue(any("models/" in e for e in errors), errors)
+
+    def test_rejects_unindexed_interpreter(self) -> None:
+        """is_pack_installed() would never become true; the UI offers Install forever."""
+        errors = check_pack_is_usable(
+            "windows-x86_64", self._pack(interpreter_path="python/not-indexed.exe")
+        )
+        self.assertTrue(any("not in sha256_files" in e for e in errors), errors)
+
+    def test_blocks_the_exact_manifest_rc2_shipped(self) -> None:
+        """Regression: run the whole guard over a v2-shaped manifest."""
+        payload = {
+            "manifest_version": "1.0.0",
+            "pack_version": "1.0.0",
+            "min_app_version": "1.0.0",
+            "supported_platforms": {
+                "windows-x86_64": self._pack(
+                    sha256_files={
+                        "worker.py": "a" * 64,
+                        "env/pyvenv.cfg": "b" * 64,
+                        "env/Scripts/python.exe": "c" * 64,
+                        "models/m.bin": "d" * 64,
+                    },
+                    interpreter_path="env/Scripts/python.exe",
+                ),
+            },
+        }
+        tmp = Path(tempfile.mkdtemp(prefix="inkdoc_release_gate_")) / "manifest.json"
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        valid, errors = verify_guard(manifest_path=tmp, skip_network=True)
+        self.assertFalse(valid, "the release guard accepted a virtualenv-based pack")
+        self.assertTrue(any("pyvenv.cfg" in e for e in errors), errors)
+
+    def test_shipped_manifest_passes_the_release_gate(self) -> None:
+        valid, errors = verify_guard(manifest_path=MANIFEST_PATH, skip_network=True)
+        self.assertTrue(valid, f"the shipped manifest would block a release: {errors[:6]}")
 
 
 class TestManifestGuardRejectsEmpty(unittest.TestCase):

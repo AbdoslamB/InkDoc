@@ -331,7 +331,13 @@ class UpdateManager:
                 self._status.state = UpdateState.ERROR.value
                 # Requirement B: "A missing or 404 manifest means 'couldn't check' and must never display 'up to date'."
                 if err.code == 404:
-                    self._status.error = "Update check failed: release manifest not found on server (HTTP 404)."
+                    # A 404 means the latest release carries no signed manifest yet,
+                    # not that anything is wrong with this installation. The previous
+                    # wording read like a client-side failure and sent users hunting
+                    # for a problem on their own machine.
+                    self._status.error = (
+                        "No signed update information has been published for the latest release yet."
+                    )
                 else:
                     self._status.error = f"Update check failed: server returned HTTP {err.code}."
                 return asdict(self._status)

@@ -89,7 +89,7 @@ Ready-to-run desktop packages with every dependency and runtime bundled — **no
 
 InkDoc features a security-first update workflow designed to protect users against supply-chain tampering and man-in-the-middle attacks:
 
-- **Offline Ed25519 Signature Verification:** Release manifests (`manifest.json`) are cryptographically signed using an air-gapped Ed25519 private key. InkDoc verifies the signature over the exact, unparsed base64 envelope bytes before parsing. Any signature mismatch or payload tampering immediately aborts the update.
+- **Offline Ed25519 Signature Verification:** The update manifest (`inkdoc-update-manifest.json`) is cryptographically signed using an air-gapped Ed25519 private key. InkDoc verifies the signature over the exact, unparsed base64 envelope bytes before parsing. Any signature mismatch or payload tampering immediately aborts the update.
 - **Strict CDN Allowlist & Per-Hop Redirect Validation:** Manifest and asset transfers are restricted to official HTTPS endpoints: `github.com`, `objects.githubusercontent.com`, and `release-assets.githubusercontent.com`. Every redirect hop is checked to prevent open-redirect attacks.
 - **Pre-execution Re-hashing & Disk Checks:** Downloads stream with HTTP Range-resume support and verify 2.5× required disk headroom. Downloaded files are verified against the manifest's SHA-256 digest upon completion and re-hashed immediately prior to execution.
 - **Platform-Specific Update Scope:**

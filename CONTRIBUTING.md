@@ -223,7 +223,7 @@ Maintainers follow a strict release candidate rehearsal procedure before publish
 3. **Automated Pipeline**:
    - `create-draft-release` initializes a draft release marked as pre-release (`--prerelease`).
    - `build` matrix builds all platforms, runs full end-to-end smoke testing (`--selftest`, multi-format document conversions) against built artifacts, and uploads them to the draft.
-   - `publish-release` publishes the draft with `--prerelease --latest=false`.
+   - `publish-release` publishes a release-candidate tag automatically as a pre-release. A stable tag is left as a **draft** so the update manifest can be signed offline and attached before it becomes Latest; publish it by hand with **Set as the latest release** checked. See `docs/RELEASE_RUNBOOK.md`.
 4. **Validation**: Test the uploaded artifacts on real hardware.
 
 ### 2. Recovery After a Failed Tag Run

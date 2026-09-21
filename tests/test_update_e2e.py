@@ -183,7 +183,10 @@ class TestUpdateE2EHarness(unittest.TestCase):
 
         res = mgr.check_for_updates(force=True)
         self.assertEqual(res["state"], UpdateState.ERROR.value)
-        self.assertIn("HTTP 404", res["error"])
+        self.assertEqual(
+            res["error"],
+            "No signed update information has been published for the latest release yet.",
+        )
         self.assertNotEqual(res["state"], UpdateState.UP_TO_DATE.value)
 
     def test_envelope_payload_tampering_rejected(self) -> None:

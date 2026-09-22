@@ -76,13 +76,37 @@ class EngineManager:
     _lock = threading.Lock()
 
     def __init__(self, manifest: EngineManifest | None = None) -> None:
-        self.manifest = manifest or load_engine_manifest()
+        # Loaded on first use rather than here. app/core/manifest.json carries a
+        # SHA-256 for every file in every platform pack -- about 93,000 entries and
+        # 14 MB -- which costs roughly 140 ms to parse and 18 MB to retain.
+        #
+        # The desktop runner reads user settings before opening the window, and
+        # settings do not need the manifest. Parsing it in the constructor put that
+        # work on the critical path to the window appearing. Deferring it moves the
+        # cost to the first request that genuinely needs pack metadata, where it
+        # overlaps with the UI rendering instead of delaying it.
+        self._manifest: EngineManifest | None = manifest
+        self._manifest_lock = threading.Lock()
         self.platform_key = get_current_platform_key()
         self._install_lock = threading.Lock()
         self._cancel_events: dict[str, threading.Event] = {}
         self._progress: dict[str, InstallProgress] = {}
         self._settings_cache: dict[str, Any] | None = None
         self._settings_lock = threading.Lock()
+
+    @property
+    def manifest(self) -> EngineManifest:
+        """The bundled engine manifest, parsed on first access and then cached."""
+        if self._manifest is None:
+            with self._manifest_lock:
+                if self._manifest is None:
+                    self._manifest = load_engine_manifest()
+        return self._manifest
+
+    @manifest.setter
+    def manifest(self, value: EngineManifest) -> None:
+        with self._manifest_lock:
+            self._manifest = value
 
     @classmethod
     def get_instance(cls) -> EngineManager:

@@ -1114,6 +1114,18 @@ document.addEventListener("DOMContentLoaded", () => {
       const resp = await fetch(`${apiBase}/health`);
       if (resp.ok) {
         connectionErrorBar.classList.remove("visible");
+        // FastAPI's interactive docs are disabled in packaged builds, where /docs
+        // returns 404. Only offer the link when the server actually serves them.
+        try {
+          const health = await resp.clone().json();
+          const showDocs = health && health.docs_enabled === true;
+          const docsSection = document.getElementById("apiDocsSection");
+          const docsDivider = document.getElementById("apiDocsDivider");
+          if (docsSection) docsSection.hidden = !showDocs;
+          if (docsDivider) docsDivider.hidden = !showDocs;
+        } catch (_) {
+          /* leave the link hidden */
+        }
         await refreshEngines();
         await loadSettings();
         await fetchUpdateStatus();

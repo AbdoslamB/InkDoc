@@ -414,6 +414,31 @@ body {
   font-family: var(--font-mono);
 }
 
+/* Reassurance shown when a long phase looks stalled. Deliberately quiet: it is
+   information, not a warning, so it must not read as an error. */
+.engine-progress-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--muted);
+  text-align: left;
+}
+
+.engine-progress-note[hidden] {
+  display: none;
+}
+
+.engine-progress-note svg {
+  flex: none;
+  margin-top: 1px;
+  opacity: 0.8;
+}
+
 .engine-actions {
   display: flex;
   gap: 6px;
@@ -2137,4 +2162,65 @@ a, button, .btn, .engine-pill, .tab-btn, .chip, [role="button"], summary {
     transform: none !important;
     will-change: auto !important;
   }
+}
+
+/* ─── In-app confirmation dialog ──────────────────────────────────────────────
+   Replaces window.confirm(), which draws OS chrome titled "localhost:13118" and
+   blocks the renderer thread. Layered above the settings popover (z-index 200),
+   since Remove Docling is triggered from inside it. */
+.confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background-color: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(2px);
+}
+
+.confirm-backdrop[hidden] {
+  display: none;
+}
+
+.confirm-dialog {
+  width: 100%;
+  max-width: 400px;
+  background-color: var(--elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px 20px 16px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+}
+
+.confirm-title {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.confirm-body {
+  margin: 0 0 18px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .confirm-dialog {
+    animation: confirm-appear var(--transition-fast);
+  }
+}
+
+@keyframes confirm-appear {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: none; }
 }

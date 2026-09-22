@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from xml.etree import ElementTree as ET
 
+from app.core.process_utils import hidden_process_kwargs
+
 if TYPE_CHECKING:
     from app.core.converter import ConversionOptions
     from app.core.queue_model import QueueItem
@@ -69,6 +71,9 @@ def convert_with_markit(item: QueueItem, options: ConversionOptions) -> str:
                     errors="replace",
                     shell=False,
                     check=False,
+                    # Console CLI: without this the packaged app flashes a
+                    # Command Prompt on every Markit conversion.
+                    **hidden_process_kwargs(),
                 )
                 if result.returncode == 0 and result.stdout.strip():
                     return result.stdout
@@ -134,6 +139,9 @@ def convert_with_markit(item: QueueItem, options: ConversionOptions) -> str:
                     errors="replace",
                     shell=False,
                     check=False,
+                    # Console CLI: without this the packaged app flashes a
+                    # Command Prompt on every Markit conversion.
+                    **hidden_process_kwargs(),
                 )
                 if res.returncode == 0 and res.stdout.strip():
                     return res.stdout

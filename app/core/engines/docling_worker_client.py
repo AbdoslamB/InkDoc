@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.engine_manager import EngineManager, SecurityError
+from app.core.process_utils import hidden_process_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +116,10 @@ class DoclingWorkerClient:
         stderr_target: Any = subprocess.DEVNULL,
     ) -> subprocess.Popen:
         """Spawn isolated worker process with reader thread and redirected/drained stderr."""
+        # The pack's interpreter is a console application. Launched from the packaged
+        # (--windowed) app, Windows would give it a new console and show it, so a
+        # Command Prompt appeared on every Docling conversion -- and because that
+        # window owned the worker, closing it killed the conversion.
         proc = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
@@ -126,6 +131,7 @@ class DoclingWorkerClient:
             shell=False,
             cwd=cwd,
             env=env,
+            **hidden_process_kwargs(),
         )
         self._stop_event = threading.Event()
         self._stdout_queue = queue.Queue()

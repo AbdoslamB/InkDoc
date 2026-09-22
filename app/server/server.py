@@ -543,7 +543,8 @@ def root(request: Request):
         "markit_available": is_markit_available(),
         "markit_version": get_markit_version(),
         "web_bench_url": "/InkDoc",
-        "docs_url": "/docs",
+        # None in packaged builds, where the interactive docs are disabled.
+        "docs_url": "/docs" if _docs_enabled else None,
         "supported_extensions_count": len(SUPPORTED_EXTENSIONS),
         "endpoints": {
             "web_ui": "GET /InkDoc",
@@ -569,6 +570,9 @@ def health_check():
         "docling_version": get_docling_version(),
         "markit_available": is_markit_available(),
         "markit_version": get_markit_version(),
+        # The packaged app disables FastAPI's interactive docs, so /docs 404s there.
+        # The UI reads this to avoid offering a link that goes nowhere.
+        "docs_enabled": _docs_enabled,
     }
 
 

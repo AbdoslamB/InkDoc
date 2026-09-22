@@ -257,8 +257,10 @@
               </div>
             </div>
 
-            <div class="settings-divider"></div>
-            <div class="settings-section">
+            <!-- Hidden until /health confirms the interactive API docs exist. The
+                 packaged app disables them, so /docs 404s there. -->
+            <div class="settings-divider" id="apiDocsDivider" hidden></div>
+            <div class="settings-section" id="apiDocsSection" hidden>
               <a href="/docs" target="_blank" class="settings-link">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>

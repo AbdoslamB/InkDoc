@@ -108,6 +108,17 @@ class EngineManager:
         with self._manifest_lock:
             self._manifest = value
 
+    @manifest.deleter
+    def manifest(self) -> None:
+        """Drop the cached manifest so the next access re-reads it from disk.
+
+        Also what unittest.mock.patch.object needs in order to restore the attribute
+        it replaced; without a deleter, patching .manifest raises AttributeError on
+        exit and several existing tests fail.
+        """
+        with self._manifest_lock:
+            self._manifest = None
+
     @classmethod
     def get_instance(cls) -> EngineManager:
         with cls._lock:

@@ -64,6 +64,16 @@ class TestManifestIsLoadedLazily(unittest.TestCase):
         mgr.manifest = replacement
         self.assertIs(mgr.manifest, replacement)
 
+    def test_manifest_can_be_patched_and_restored(self) -> None:
+        """unittest.mock.patch.object restores by deleting, so the property needs a
+        deleter. Several existing tests patch .manifest and fail without it."""
+        mgr = EngineManager(manifest=EngineManifest("1.0.0", "1.1.1", "1.0.0"))
+        replacement = EngineManifest("1.0.0", "3.3.3", "1.0.0")
+        with patch.object(mgr, "manifest", replacement):
+            self.assertEqual(mgr.manifest.pack_version, "3.3.3")
+        # Restored: the deleter cleared the cache, so this re-reads from disk.
+        self.assertIsInstance(mgr.manifest, EngineManifest)
+
     def test_lazy_manifest_still_returns_real_pack_data(self) -> None:
         mgr = EngineManager()
         pack = mgr.get_platform_pack_info("docling")

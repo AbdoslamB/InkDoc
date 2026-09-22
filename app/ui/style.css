@@ -615,9 +615,11 @@ body {
   height: 44px;
   min-height: 44px;
   box-sizing: border-box;
-  padding: 0 10px 0 14px;
+  padding: 0 10px 0 13px;
   background-color: var(--elevated);
-  border: 1px solid var(--rule);
+  /* Dashed, matching the expanded .dropzone-card: collapsing changes the size of
+     the drop target, not what it is. box-sizing: border-box keeps it 44px tall. */
+  border: 2px dashed var(--rule);
   border-radius: 10px;
   position: absolute;
   top: 0;
@@ -659,6 +661,24 @@ body {
   gap: 12px;
   min-width: 0;
   flex: 1;
+}
+
+/* Keeps the drop affordance visible while collapsed, at the smaller scale the
+   44px bar allows. Sits at the same colour weight as the label so it reads as
+   part of the invitation rather than as a control. */
+.compact-drop-icon {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  margin-right: -4px;
+  color: var(--mark);
+  opacity: 0.75;
+  transition: opacity var(--transition-fast), transform var(--transition-fast);
+}
+
+.dropzone-compact-bar.drag-over .compact-drop-icon {
+  opacity: 1;
+  transform: scale(1.12);
 }
 
 .compact-bar-right {
@@ -2131,6 +2151,8 @@ a, button, .btn, .engine-pill, .tab-btn, .chip, [role="button"], summary {
   .dropzone-section.is-collapsed .dropzone-collapsible-inner,
   .dropzone-compact-bar,
   .dropzone-section.is-collapsed .dropzone-compact-bar,
+  .compact-drop-icon,
+  .dropzone-compact-bar.drag-over .compact-drop-icon,
   .chevron-icon,
   .dropzone-section.is-collapsed .chevron-icon {
     transition: opacity 80ms ease !important;

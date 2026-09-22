@@ -210,6 +210,49 @@ document.addEventListener("DOMContentLoaded", () => {
   let doclingState = "unknown";
   let pollInterval = null;
 
+  // Track how long the install has been in its current phase. Verifying the pack
+  // re-hashes ~31,000 files, which takes minutes while the bar sits at 100%, so
+  // without a word the install looks frozen. Measured per phase rather than using
+  // the API's elapsed_seconds, which counts from the start of the download.
+  let installPhase = null;
+  let installPhaseStartedAt = 0;
+  const SLOW_PHASE_AFTER_MS = 30000;
+  const SLOW_PHASE_NOTES = {
+    extracting:
+      "Unpacking and checking every file in the pack. This usually takes a couple " +
+      "of minutes and the bar stays at 100% while it runs — it has not stalled.",
+    verifying:
+      "Verifying the downloaded pack against its published checksum. This can take " +
+      "a couple of minutes — it has not stalled.",
+  };
+
+  function updateInstallPhaseNote(status) {
+    const note = document.getElementById("doclingProgressNote");
+    const noteText = document.getElementById("doclingProgressNoteText");
+    if (!note || !noteText) return;
+
+    if (status !== installPhase) {
+      installPhase = status;
+      installPhaseStartedAt = Date.now();
+    }
+
+    const message = SLOW_PHASE_NOTES[status];
+    const elapsed = Date.now() - installPhaseStartedAt;
+    if (message && elapsed >= SLOW_PHASE_AFTER_MS) {
+      noteText.textContent = message;
+      note.hidden = false;
+    } else {
+      note.hidden = true;
+    }
+  }
+
+  function resetInstallPhaseNote() {
+    installPhase = null;
+    installPhaseStartedAt = 0;
+    const note = document.getElementById("doclingProgressNote");
+    if (note) note.hidden = true;
+  }
+
   // Update the single pill group to reflect selectedEngine
   function updateEngineUI() {
     allEnginePills.forEach((btn) => {
@@ -437,6 +480,66 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  // ─── In-app confirmation dialog ──────────────────────────────────────────
+  // window.confirm() renders OS chrome titled "localhost:13118", which looks like a
+  // browser security prompt rather than part of the application, and it blocks the
+  // renderer thread while open. Nothing in InkDoc should use it.
+  function showConfirm({ title, body, confirmLabel = "Confirm", danger = true }) {
+    const backdrop = document.getElementById("confirmBackdrop");
+    const titleEl = document.getElementById("confirmTitle");
+    const bodyEl = document.getElementById("confirmBody");
+    const acceptBtn = document.getElementById("confirmAccept");
+    const cancelBtn = document.getElementById("confirmCancel");
+
+    // If the markup is somehow absent, refuse rather than silently destroying data.
+    if (!backdrop || !titleEl || !bodyEl || !acceptBtn || !cancelBtn) {
+      return Promise.resolve(false);
+    }
+
+    titleEl.textContent = title;
+    bodyEl.textContent = body;
+    acceptBtn.textContent = confirmLabel;
+    acceptBtn.className = `btn btn-sm ${danger ? "btn-danger" : "btn-primary"}`;
+
+    const previouslyFocused = document.activeElement;
+    backdrop.hidden = false;
+    // Focus Cancel, not the destructive action, so a stray Enter does nothing.
+    cancelBtn.focus();
+
+    return new Promise((resolve) => {
+      function cleanup(result) {
+        backdrop.hidden = true;
+        acceptBtn.removeEventListener("click", onAccept);
+        cancelBtn.removeEventListener("click", onCancel);
+        backdrop.removeEventListener("mousedown", onBackdrop);
+        document.removeEventListener("keydown", onKey, true);
+        if (previouslyFocused && previouslyFocused.focus) previouslyFocused.focus();
+        resolve(result);
+      }
+      function onAccept() { cleanup(true); }
+      function onCancel() { cleanup(false); }
+      function onBackdrop(e) { if (e.target === backdrop) cleanup(false); }
+      function onKey(e) {
+        if (e.key === "Escape") { e.preventDefault(); cleanup(false); return; }
+        if (e.key !== "Tab") return;
+        // Keep focus inside the dialog; there are exactly two focusable controls.
+        const focusables = [cancelBtn, acceptBtn];
+        const idx = focusables.indexOf(document.activeElement);
+        if (idx === -1) { e.preventDefault(); cancelBtn.focus(); return; }
+        const next = e.shiftKey ? idx - 1 : idx + 1;
+        if (next < 0 || next >= focusables.length) {
+          e.preventDefault();
+          focusables[e.shiftKey ? focusables.length - 1 : 0].focus();
+        }
+      }
+
+      acceptBtn.addEventListener("click", onAccept);
+      cancelBtn.addEventListener("click", onCancel);
+      backdrop.addEventListener("mousedown", onBackdrop);
+      document.addEventListener("keydown", onKey, true);
+    });
+  }
+
   // ─── Progress Polling for Engine Installation ────────────────────────────
   async function pollDoclingProgress() {
     try {
@@ -446,6 +549,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const status = prog.status || "idle";
 
       if (status === "idle") {
+        resetInstallPhaseNote();
         if (pollInterval) {
           clearInterval(pollInterval);
           pollInterval = null;
@@ -458,6 +562,7 @@ document.addEventListener("DOMContentLoaded", () => {
           clearInterval(pollInterval);
           pollInterval = null;
         }
+        resetInstallPhaseNote();
         showToast("Docling engine pack installed and ready!", "success");
         await refreshEngines();
         return;
@@ -468,7 +573,8 @@ document.addEventListener("DOMContentLoaded", () => {
           clearInterval(pollInterval);
           pollInterval = null;
         }
-        showToast(`Installation failed: ${prog.error || "Unknown error"}`, "error");
+        resetInstallPhaseNote();
+        showToast(`Installation failed: ${prog.error_message || "Unknown error"}`, "error");
         await refreshEngines();
         return;
       }
@@ -478,16 +584,18 @@ document.addEventListener("DOMContentLoaded", () => {
           clearInterval(pollInterval);
           pollInterval = null;
         }
+        resetInstallPhaseNote();
         showToast("Installation cancelled.", "info");
         await refreshEngines();
         return;
       }
 
       // Active progress: downloading, extracting, verifying
+      updateInstallPhaseNote(status);
       if (doclingProgressContainer) doclingProgressContainer.style.display = "block";
       if (doclingProgressFill) doclingProgressFill.style.width = `${Math.round(prog.percent || 0)}%`;
       if (doclingProgressText) {
-        doclingProgressText.textContent = prog.message || `${status} (${Math.round(prog.percent || 0)}%)`;
+        doclingProgressText.textContent = `${status} (${Math.round(prog.percent || 0)}%)`;
       }
       if (doclingStatusBadge) {
         doclingStatusBadge.textContent = `${status.charAt(0).toUpperCase() + status.slice(1)}…`;
@@ -1086,9 +1194,15 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (btnDoclingRemove) {
     btnDoclingRemove.addEventListener("click", async () => {
-      if (!confirm("Are you sure you want to remove the IBM Docling pack? All installed files and caches will be deleted.")) {
-        return;
-      }
+      const confirmed = await showConfirm({
+        title: "Remove IBM Docling?",
+        body:
+          "All installed engine files and cached model weights will be deleted. " +
+          "You can reinstall it later, but the pack will need to be downloaded again.",
+        confirmLabel: "Remove Docling",
+        danger: true,
+      });
+      if (!confirmed) return;
       try {
         const resp = await fetchWithToken(`${apiBase}/engines/docling/remove`, {
           method: "POST",

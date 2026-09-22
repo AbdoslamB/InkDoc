@@ -171,6 +171,15 @@
                       <div class="engine-progress-fill" id="doclingProgressFill" style="width: 0%;"></div>
                     </div>
                     <div class="engine-progress-text" id="doclingProgressText">Preparing…</div>
+                    <!-- Shown once verification has run long enough to look stuck.
+                         Hashing ~31,000 files takes minutes with the bar pinned at 100%. -->
+                    <div class="engine-progress-note" id="doclingProgressNote" hidden>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <polyline points="12 6 12 12 16 14"></polyline>
+                      </svg>
+                      <span id="doclingProgressNoteText"></span>
+                    </div>
                   </div>
 
                   <!-- Engine Actions -->
@@ -272,6 +281,20 @@
         </div>
       </div>
     </header>
+
+    <!-- In-app confirmation. Replaces window.confirm(), which renders an OS chrome
+         dialog that says "localhost:13118" and looks nothing like the application. -->
+    <div class="confirm-backdrop" id="confirmBackdrop" hidden>
+      <div class="confirm-dialog" role="alertdialog" aria-modal="true"
+           aria-labelledby="confirmTitle" aria-describedby="confirmBody">
+        <h3 class="confirm-title" id="confirmTitle"></h3>
+        <p class="confirm-body" id="confirmBody"></p>
+        <div class="confirm-actions">
+          <button type="button" class="btn btn-sm btn-secondary" id="confirmCancel">Cancel</button>
+          <button type="button" class="btn btn-sm btn-danger" id="confirmAccept">Confirm</button>
+        </div>
+      </div>
+    </div>
 
     <!-- Connection Error Banner (hidden unless disconnected) -->
     <div class="connection-error-bar" id="connectionErrorBar">

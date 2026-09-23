@@ -25,7 +25,8 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from app.core.converter import ConversionOptions
-    from app.core.queue_model import QueueItem
+from app.core.engines.code_language import apply_code_languages
+from app.core.queue_model import QueueItem
 
 logger = logging.getLogger(__name__)
 
@@ -98,13 +99,21 @@ def get_docling_version() -> str:
         return "Not installed"
 
 
-def get_document_converter(ocr: bool = True, table_structure: bool = True) -> Any:
+def get_document_converter(
+    ocr: bool = True,
+    table_structure: bool = True,
+    code_enrichment: bool = False,
+    formula_enrichment: bool = False,
+) -> Any:
     """Lazily initialize and return a cached in-process DocumentConverter instance (dev/source mode)."""
     global _CACHED_CONVERTER, _CACHED_OPTIONS
 
     _patch_omegaconf_for_windows()
 
-    current_options = (ocr, table_structure)
+    # The enrichment flags are part of the key, not just the options: Docling
+    # loads the code/formula model eagerly when either is set, so a cached
+    # converter built with enrichment on pins ~640 MB until it is replaced.
+    current_options = (ocr, table_structure, code_enrichment, formula_enrichment)
     if _CACHED_CONVERTER is not None and current_options == _CACHED_OPTIONS:
         return _CACHED_CONVERTER
 
@@ -122,6 +131,8 @@ def get_document_converter(ocr: bool = True, table_structure: bool = True) -> An
         pipeline_options = PdfPipelineOptions()
         pipeline_options.do_ocr = ocr
         pipeline_options.do_table_structure = table_structure
+        pipeline_options.do_code_enrichment = code_enrichment
+        pipeline_options.do_formula_enrichment = formula_enrichment
         pipeline_options.do_picture_description = False
         pipeline_options.do_picture_classification = False
 
@@ -138,7 +149,7 @@ def get_document_converter(ocr: bool = True, table_structure: bool = True) -> An
         logger.warning("Custom Docling pipeline init failed, falling back to default: %s", exc)
         from docling.document_converter import DocumentConverter
         _CACHED_CONVERTER = DocumentConverter()
-        _CACHED_OPTIONS = (True, True)
+        _CACHED_OPTIONS = (True, True, False, False)
         return _CACHED_CONVERTER
 
 
@@ -169,6 +180,8 @@ def convert_with_docling(item: QueueItem, options: ConversionOptions) -> str:
                 source_path=item.source,
                 ocr=getattr(options, "docling_ocr", True),
                 table_structure=getattr(options, "docling_table_structure", True),
+                code_enrichment=getattr(options, "docling_code_enrichment", False),
+                formula_enrichment=getattr(options, "docling_formula_enrichment", False),
             )
         except Exception as exc:
             # Check if user explicitly enabled fallback to MarkItDown
@@ -204,6 +217,8 @@ def convert_with_docling(item: QueueItem, options: ConversionOptions) -> str:
     converter = get_document_converter(
         ocr=getattr(options, "docling_ocr", True),
         table_structure=getattr(options, "docling_table_structure", True),
+        code_enrichment=getattr(options, "docling_code_enrichment", False),
+        formula_enrichment=getattr(options, "docling_formula_enrichment", False),
     )
 
     try:
@@ -211,6 +226,7 @@ def convert_with_docling(item: QueueItem, options: ConversionOptions) -> str:
             source_input = Path(item.source) if os.path.exists(item.source) else item.source
             conv_res = converter.convert(source_input)
             markdown_text = conv_res.document.export_to_markdown()
+            markdown_text = apply_code_languages(conv_res.document, markdown_text)
             return markdown_text
     except Exception as exc:
         settings = mgr.get_settings()

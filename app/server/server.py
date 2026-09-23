@@ -346,6 +346,29 @@ if UI_DIR.exists():
 api_router = APIRouter()
 
 
+def _docling_enrichment_options(engine_kind: EngineKind) -> dict[str, bool]:
+    """Read the user's Docling enrichment preferences.
+
+    Only consulted for the Docling route: the flags mean nothing to the other
+    engines, and reading settings takes a lock and may touch disk, which is not
+    worth paying on every MarkItDown conversion. A failure to read settings
+    yields the defaults rather than failing the conversion.
+    """
+    if engine_kind != EngineKind.DOCLING:
+        return {}
+    try:
+        settings = EngineManager.get_instance().get_settings()
+    except Exception as exc:
+        # Falling back to the defaults silently disables the toggles, which is
+        # the safe direction but invisible, so leave a trail.
+        logger.warning("Could not read Docling enrichment settings: %s", exc)
+        return {}
+    return {
+        "docling_code_enrichment": bool(settings.get("docling_code_enrichment", False)),
+        "docling_formula_enrichment": bool(settings.get("docling_formula_enrichment", False)),
+    }
+
+
 def resolve_engine(engine_name: str) -> EngineKind:
     norm = engine_name.lower().strip()
     if norm == "docling":
@@ -381,6 +404,20 @@ class SettingsPayload(BaseModel):
     check_for_updates_daily: bool | None = Field(
         default=None,
         description="Opt-in to automatic daily update checks on startup (desktop only)",
+    )
+    docling_code_enrichment: bool | None = Field(
+        default=None,
+        description=(
+            "Docling: transcribe code blocks with the code/formula model and label "
+            "their language. Requires the Docling enrichment model."
+        ),
+    )
+    docling_formula_enrichment: bool | None = Field(
+        default=None,
+        description=(
+            "Docling: recognise mathematical formulas and convert them to LaTeX. "
+            "Shares one model with code enrichment."
+        ),
     )
 
 
@@ -470,7 +507,28 @@ def _serve_bench_html() -> HTMLResponse:
         html_content = index_file.read_text(encoding="utf-8")
         # Inject per-session random token into <head> with cryptographic CSP nonce (Requirement M)
         nonce = secrets.token_hex(16)
-        token_injection = f'<script id="inkdoc-session-token" nonce="{nonce}">window.__INKDOC_SESSION_TOKEN__ = "{SESSION_TOKEN}";</script>'
+        # The custom title bar must be decided before first paint, otherwise the
+        # window controls flash in after a round trip. Only the frameless Windows
+        # desktop window has them: a browser tab and the native-framed macOS and
+        # Linux windows keep their own chrome.
+        custom_titlebar = (
+            os.environ.get("INKDOC_DESKTOP_RUNNER") == "1" and sys.platform == "win32"
+        )
+        # The class goes on <html> here rather than waiting for app.js to put it
+        # on <body>: app.js does not run until the document has been parsed, and
+        # the header would render at the wrong width until then.
+        titlebar_class = (
+            "document.documentElement.classList.add('has-custom-titlebar');"
+            if custom_titlebar
+            else ""
+        )
+        token_injection = (
+            f'<script id="inkdoc-session-token" nonce="{nonce}">'
+            f'window.__INKDOC_SESSION_TOKEN__ = "{SESSION_TOKEN}";'
+            f'window.__INKDOC_CUSTOM_TITLEBAR__ = {"true" if custom_titlebar else "false"};'
+            f'{titlebar_class}'
+            f'</script>'
+        )
         if "<head>" in html_content:
             html_content = html_content.replace("<head>", f"<head>\n  {token_injection}", 1)
         elif "</head>" in html_content:
@@ -636,6 +694,80 @@ def verify_engine(engine_name: str, request: Request):
     return EngineManager.get_instance().verify_full_installed_tree(engine_name)
 
 
+@api_router.get("/addons", tags=["Addons"])
+def list_addons():
+    """Status of every optional add-on, for the settings UI."""
+    from app.core.addon_manager import AddonManager
+
+    mgr = AddonManager.get_instance()
+    return {"addons": [mgr.get_status(name) for name in mgr.list_addon_names()]}
+
+
+@api_router.get("/addons/{addon_name}", tags=["Addons"])
+def get_addon_status(addon_name: str):
+    """Status of one add-on, including install progress."""
+    from app.core.addon_manager import AddonManager
+
+    return AddonManager.get_instance().get_status(addon_name)
+
+
+@api_router.post("/addons/{addon_name}/install", tags=["Addons"])
+def install_addon(addon_name: str, background_tasks: BackgroundTasks, request: Request):
+    """Download and install an optional add-on. Requires session token."""
+    require_session_token(request)
+    from app.core.addon_manager import AddonManager
+
+    mgr = AddonManager.get_instance()
+    status_info = mgr.get_status(addon_name)
+    if not status_info.get("installable"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=status_info.get("reason") or f"Add-on '{addon_name}' cannot be installed.",
+        )
+
+    def _run() -> None:
+        try:
+            mgr.install(addon_name)
+        except Exception as exc:
+            # Already recorded on the progress object the UI polls; logged so a
+            # background failure is not invisible in the server log either.
+            logger.error("Add-on '%s' installation failed: %s", addon_name, exc)
+
+    background_tasks.add_task(_run)
+    return {"status": "started", "addon": addon_name}
+
+
+@api_router.post("/addons/{addon_name}/cancel", tags=["Addons"])
+def cancel_addon_install(addon_name: str, request: Request):
+    """Cancel an in-flight add-on download. Requires session token."""
+    require_session_token(request)
+    from app.core.addon_manager import AddonManager
+
+    cancelled = AddonManager.get_instance().cancel(addon_name)
+    return {"status": "cancelled" if cancelled else "not_running", "addon": addon_name}
+
+
+@api_router.post("/addons/{addon_name}/remove", tags=["Addons"])
+def remove_addon(addon_name: str, request: Request):
+    """Remove an installed add-on. Requires session token."""
+    require_session_token(request)
+    from app.core.addon_manager import AddonManager
+
+    try:
+        return AddonManager.get_instance().remove(addon_name)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@api_router.post("/addons/{addon_name}/verify", tags=["Addons"])
+def verify_addon(addon_name: str, request: Request):
+    """Re-hash an installed add-on against the catalogue. Requires session token."""
+    require_session_token(request)
+    from app.core.addon_manager import AddonManager
+
+    return AddonManager.get_instance().verify(addon_name)
+
+
 @api_router.get("/settings", tags=["Settings"])
 def get_settings():
     """Retrieve current user settings."""
@@ -789,6 +921,7 @@ async def convert_file(
             enable_plugins=enable_plugins,
             keep_data_uris=keep_data_uris,
             engine=engine_kind,
+            **_docling_enrichment_options(engine_kind),
         )
         async with get_conversion_semaphore():
             markdown_text, saved_path_str = await asyncio.to_thread(
@@ -884,6 +1017,7 @@ async def convert_url(
             enable_plugins=payload.enable_plugins,
             keep_data_uris=payload.keep_data_uris,
             engine=engine_kind,
+            **_docling_enrichment_options(engine_kind),
         )
         async with get_conversion_semaphore():
             markdown_text, saved_path_str = await asyncio.to_thread(
@@ -970,7 +1104,11 @@ async def convert_batch(
     _guard_engine_availability(engine_kind)
 
     results = {}
-    base_options = ConversionOptions(enable_plugins=enable_plugins, engine=engine_kind)
+    base_options = ConversionOptions(
+        enable_plugins=enable_plugins,
+        engine=engine_kind,
+        **_docling_enrichment_options(engine_kind),
+    )
 
     for file in files:
         filename = file.filename or "file"

@@ -1,0 +1,33 @@
+{
+  "catalogue_version": "1.0.0",
+  "_comment": [
+    "Optional downloadable add-ons. Kept separate from manifest.json because CI",
+    "regenerates that file from pack fragments on every pack release and would",
+    "discard anything else in it, and because add-ons ship on their own cadence.",
+    "",
+    "The add-on is platform-neutral: it is model weights, not executables, so one",
+    "artifact serves Windows, macOS and Linux. It installs into the Docling pack's",
+    "own models directory because Docling resolves every model against a single",
+    "artifacts_path that the pack worker pins there.",
+    "",
+    "url, sha256, size_bytes, uncompressed_size_bytes and sha256_files are filled",
+    "in by scripts/build_addon.py once the artifact is published. While url or",
+    "sha256 is empty the add-on reports available=false and the UI keeps the",
+    "enrichment toggles disabled, which is the correct state before release."
+  ],
+  "addons": {
+    "code_enrichment": {
+      "title": "Code & Formula Recognition",
+      "description": "Transcribes code blocks and mathematical formulas from page images using Docling's recognition model, and labels the programming language of each code block.",
+      "model_dir": "docling-project--CodeFormulaV2",
+      "url": "",
+      "sha256": "",
+      "archive_format": "tar.gz",
+      "size_bytes": 0,
+      "uncompressed_size_bytes": 0,
+      "min_pack_version": "4.0.0",
+      "min_app_version": "",
+      "sha256_files": {}
+    }
+  }
+}

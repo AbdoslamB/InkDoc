@@ -69,6 +69,21 @@ class InstallProgress:
     started_at: float = 0.0
 
 
+# User-facing settings and their defaults. Kept in one place because the same
+# literal was previously repeated at every load and recovery path, which is
+# exactly where a newly added key gets forgotten.
+#
+# Both Docling enrichment options default off deliberately: either one causes
+# Docling to load a 640 MB vision model at pipeline construction, for every
+# conversion, whether or not the document turns out to contain code.
+DEFAULT_SETTINGS: dict[str, Any] = {
+    "fallback_to_markitdown": False,
+    "check_for_updates_daily": False,
+    "docling_code_enrichment": False,
+    "docling_formula_enrichment": False,
+}
+
+
 class EngineManager:
     """Manages installation, updates, and integrity of optional engines."""
 
@@ -135,15 +150,16 @@ class EngineManager:
             path = self.get_settings_file_path()
             if path.is_file():
                 try:
-                    self._settings_cache = json.loads(path.read_text(encoding="utf-8"))
-                    return dict(self._settings_cache)
+                    stored = json.loads(path.read_text(encoding="utf-8"))
+                    # A file written before a key existed must still report it.
+                    merged = dict(DEFAULT_SETTINGS)
+                    merged.update(stored if isinstance(stored, dict) else {})
+                    self._settings_cache = merged
+                    return dict(merged)
                 except Exception as exc:
                     logger.warning("Failed to parse settings at %s: %s", path, exc)
 
-            default_settings = {
-                "fallback_to_markitdown": False,
-                "check_for_updates_daily": False,
-            }
+            default_settings = dict(DEFAULT_SETTINGS)
             self._settings_cache = default_settings
             return dict(default_settings)
 
@@ -160,15 +176,9 @@ class EngineManager:
                         current = json.loads(path.read_text(encoding="utf-8"))
                     except Exception as exc:
                         logger.warning("Failed to parse settings at %s: %s", path, exc)
-                        current = {
-                            "fallback_to_markitdown": False,
-                            "check_for_updates_daily": False,
-                        }
+                        current = dict(DEFAULT_SETTINGS)
                 else:
-                    current = {
-                        "fallback_to_markitdown": False,
-                        "check_for_updates_daily": False,
-                    }
+                    current = dict(DEFAULT_SETTINGS)
 
             current.update(updates)
             self._settings_cache = current

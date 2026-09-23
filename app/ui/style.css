@@ -4,6 +4,7 @@
   --font-mono: 'JetBrains Mono', 'Cascadia Code', Menlo, Consolas, monospace;
 
   /* Smooth transitions */
+
   --transition-fast: 0.15s ease;
   --transition-normal: 0.25s ease;
 }
@@ -31,6 +32,18 @@
   --shadow-card: 0 8px 32px rgba(0, 0, 0, 0.4);
   --shadow-subtle: 0 2px 8px rgba(0, 0, 0, 0.25);
   --shadow-popover: 0 16px 48px rgba(0, 0, 0, 0.5);
+
+  /* Syntax colours. Declared per theme rather than inside the highlight rules
+     so the code palette follows the theme toggle like everything else. */
+  --code-comment: #6b766f;
+  --code-keyword: #56c49c;
+  --code-string: #b8d97a;
+  --code-number: #f0a071;
+  --code-function: #7fb0f5;
+  --code-type: #e8c06a;
+  --code-meta: #79cfe0;
+  --code-variable: #e6ede8;
+  --code-punct: #8a968e;
 }
 
 /* Light Theme */
@@ -56,13 +69,60 @@
   --shadow-card: 0 8px 30px rgba(0, 0, 0, 0.08);
   --shadow-subtle: 0 2px 8px rgba(0, 0, 0, 0.05);
   --shadow-popover: 0 16px 48px rgba(0, 0, 0, 0.12);
+
+  --code-comment: #7c8780;
+  --code-keyword: #0f6e56;
+  --code-string: #4f6d1a;
+  --code-number: #a8501c;
+  --code-function: #2a5db0;
+  --code-type: #8a5a00;
+  --code-meta: #0e6a75;
+  --code-variable: #1a211c;
+  --code-punct: #5e6a63;
 }
 
 /* Base resets */
-*, *::before, *::after {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+}
+
+/* ═══════════════════════════════
+   Themed Scrollbars
+   Edge/Chrome (WebView2) use the ::-webkit-scrollbar API; scrollbar-color
+   covers Firefox. Both are set from the same theme tokens so scrollbars
+   never default back to the OS's plain white/grey chrome.
+═══════════════════════════════ */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--rule) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--rule);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--faint);
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 /* Screen reader utility */
@@ -78,7 +138,8 @@
   border-width: 0;
 }
 
-html, body {
+html,
+body {
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
@@ -102,7 +163,10 @@ body {
   max-width: 1400px;
   margin: 0 auto;
   padding: 0 24px;
-  overflow: hidden;
+  /* No overflow:hidden here — .app-header intentionally breaks out to full
+     viewport width past this container's max-width, and .app-main below
+     already clips its own overflow, so nothing relies on this container
+     doing it too. */
 }
 
 /* ═══════════════════════════════
@@ -116,6 +180,104 @@ body {
   border-bottom: 1px solid var(--rule);
   margin-bottom: 14px;
   flex-shrink: 0;
+}
+
+/* ─── Custom title bar (frameless desktop window only) ────────────────────────
+   The header doubles as the window's title bar, so the app owns the whole top
+   edge instead of sitting below a system bar in system colours. */
+.has-custom-titlebar .app-header {
+  /* Slightly shorter than a default header, and stretched to the true
+     window edges (not just .app-container's centered max-width) so the
+     draggable strip and window controls reach the corners. */
+  padding: 11px 24px 10px;
+  width: 100vw;
+  margin-left: calc(50% - 50vw);
+  margin-right: calc(50% - 50vw);
+  background-color: var(--elevated);
+}
+
+.has-custom-titlebar .brand-icon,
+.has-custom-titlebar .brand-logo-img {
+  width: 32px;
+  height: 32px;
+}
+
+/* Fills the gap between the brand and the controls so the whole strip drags. */
+.titlebar-drag-spacer {
+  flex: 1;
+  align-self: stretch;
+  min-width: 0;
+}
+
+/* Hands the drag strip to WebView2 as a real caption region, so the shell sees
+   a native drag (edge snapping, drag-to-top maximise) instead of the JavaScript
+   SetWindowPos loop pywebview falls back to. Only takes effect once
+   IsNonClientRegionSupportEnabled is set on the WebView2; ignored otherwise.
+   The window buttons opt back out so their clicks still reach the DOM. */
+.has-custom-titlebar .pywebview-drag-region {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+.has-custom-titlebar .window-control,
+.has-custom-titlebar .btn-icon {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+
+/* Hidden by default and revealed by the class alone, rather than by a hidden
+   attribute that app.js clears. app.js does not run until the document has been
+   parsed, so clearing it there made the controls pop in after first paint; the
+   class is already on <html> from the server injection before the first layout,
+   so this way they are simply there. A browser tab never matches it. */
+.window-controls {
+  display: none;
+  align-items: center;
+  gap: 2px;
+  margin-left: 10px;
+  padding-left: 8px;
+  border-left: 1px solid var(--rule);
+}
+
+.has-custom-titlebar .window-controls {
+  display: flex;
+}
+
+.window-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.window-control svg {
+  width: 9px;
+  height: 9px;
+}
+
+.window-control:hover {
+  background-color: var(--sunken);
+  color: var(--ink);
+}
+
+.window-control:focus-visible {
+  outline: 2px solid var(--mark);
+  outline-offset: -2px;
+}
+
+/* Matches the platform convention that close is the one destructive control. */
+.window-control-close:hover {
+  background-color: #e11d48;
+  color: #fff;
 }
 
 .brand {
@@ -173,9 +335,20 @@ body {
 }
 
 @keyframes pulse {
-  0%   { transform: scale(0.95); opacity: 0.8; }
-  50%  { transform: scale(1.3);  opacity: 1;   }
-  100% { transform: scale(0.95); opacity: 0.8; }
+  0% {
+    transform: scale(0.95);
+    opacity: 0.8;
+  }
+
+  50% {
+    transform: scale(1.3);
+    opacity: 1;
+  }
+
+  100% {
+    transform: scale(0.95);
+    opacity: 0.8;
+  }
 }
 
 .header-actions {
@@ -214,8 +387,15 @@ body {
 }
 
 @keyframes fadeSlideIn {
-  from { opacity: 0; transform: translateY(-6px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .settings-section {
@@ -526,10 +706,21 @@ body {
   border-color: var(--muted);
 }
 
-[data-theme="dark"] .icon-moon { display: none; }
-[data-theme="dark"] .icon-sun  { display: block; }
-[data-theme="light"] .icon-sun  { display: none; }
-[data-theme="light"] .icon-moon { display: block; }
+[data-theme="dark"] .icon-moon {
+  display: none;
+}
+
+[data-theme="dark"] .icon-sun {
+  display: block;
+}
+
+[data-theme="light"] .icon-sun {
+  display: none;
+}
+
+[data-theme="light"] .icon-moon {
+  display: block;
+}
 
 .btn-sm {
   padding: 5px 10px;
@@ -574,12 +765,39 @@ body {
   transition: var(--transition-fast);
 }
 
-.toggle-switch input:checked + .toggle-slider {
+/* Enrichment options inside the Docling engine card. Shown greyed out while
+   the optional recognition model is missing, rather than hidden: a control that
+   silently does nothing is worse than one that says why it cannot run yet. */
+.engine-enrichment {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--rule-subtle);
+}
+
+.engine-enrichment-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: 8px;
+}
+
+.toggle-switch:has(input:disabled) {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.toggle-switch input:disabled+.toggle-slider {
+  cursor: not-allowed;
+}
+
+.toggle-switch input:checked+.toggle-slider {
   background-color: var(--mark);
   border-color: var(--mark);
 }
 
-.toggle-switch input:checked + .toggle-slider::before {
+.toggle-switch input:checked+.toggle-slider::before {
   transform: translateX(16px);
   background-color: var(--on-mark);
 }
@@ -1646,9 +1864,17 @@ body {
   padding-bottom: 0.3em;
 }
 
-.markdown-rendered h1 { font-size: 24px; }
-.markdown-rendered h2 { font-size: 20px; }
-.markdown-rendered h3 { font-size: 16px; }
+.markdown-rendered h1 {
+  font-size: 24px;
+}
+
+.markdown-rendered h2 {
+  font-size: 20px;
+}
+
+.markdown-rendered h3 {
+  font-size: 16px;
+}
 
 .markdown-rendered p {
   margin-bottom: 1em;
@@ -1682,6 +1908,95 @@ body {
   padding: 0;
   color: var(--ink);
   font-size: 13px;
+}
+
+/* ─── Syntax highlighting ────────────────────────────────────────────────────
+   highlight.js emits hljs-* classes rather than inline colours, which is what
+   lets the palette above drive it: one rule set serves both themes and the
+   toggle needs to do nothing. Only blocks that carry a language are touched --
+   an unlabelled fence stays plain var(--ink) text. */
+.markdown-rendered pre code.hljs {
+  display: block;
+  overflow-x: auto;
+  background: transparent;
+  padding: 0;
+}
+
+.markdown-rendered .hljs-comment,
+.markdown-rendered .hljs-quote {
+  color: var(--code-comment);
+  font-style: italic;
+}
+
+.markdown-rendered .hljs-keyword,
+.markdown-rendered .hljs-selector-tag,
+.markdown-rendered .hljs-literal,
+.markdown-rendered .hljs-section,
+.markdown-rendered .hljs-doctag,
+.markdown-rendered .hljs-operator {
+  color: var(--code-keyword);
+}
+
+.markdown-rendered .hljs-string,
+.markdown-rendered .hljs-regexp,
+.markdown-rendered .hljs-addition,
+.markdown-rendered .hljs-char.escape_ {
+  color: var(--code-string);
+}
+
+.markdown-rendered .hljs-number,
+.markdown-rendered .hljs-symbol,
+.markdown-rendered .hljs-bullet,
+.markdown-rendered .hljs-deletion {
+  color: var(--code-number);
+}
+
+.markdown-rendered .hljs-title,
+.markdown-rendered .hljs-title.function_,
+.markdown-rendered .hljs-name,
+.markdown-rendered .hljs-selector-id,
+.markdown-rendered .hljs-selector-class {
+  color: var(--code-function);
+}
+
+.markdown-rendered .hljs-type,
+.markdown-rendered .hljs-title.class_,
+.markdown-rendered .hljs-class .hljs-title,
+.markdown-rendered .hljs-built_in,
+.markdown-rendered .hljs-attr,
+.markdown-rendered .hljs-attribute {
+  color: var(--code-type);
+}
+
+.markdown-rendered .hljs-meta,
+.markdown-rendered .hljs-meta .hljs-keyword,
+.markdown-rendered .hljs-template-tag,
+.markdown-rendered .hljs-template-variable,
+.markdown-rendered .hljs-subst {
+  color: var(--code-meta);
+}
+
+.markdown-rendered .hljs-variable,
+.markdown-rendered .hljs-params,
+.markdown-rendered .hljs-property {
+  color: var(--code-variable);
+}
+
+.markdown-rendered .hljs-punctuation,
+.markdown-rendered .hljs-tag {
+  color: var(--code-punct);
+}
+
+.markdown-rendered .hljs-emphasis {
+  font-style: italic;
+}
+
+.markdown-rendered .hljs-strong {
+  font-weight: 700;
+}
+
+.markdown-rendered .hljs-link {
+  text-decoration: underline;
 }
 
 .markdown-rendered blockquote {
@@ -1996,6 +2311,7 @@ body {
   from {
     transform: rotate(0deg);
   }
+
   to {
     transform: rotate(360deg);
   }
@@ -2012,15 +2328,18 @@ body {
     flex: 1;
     min-height: 0;
   }
+
   .queue-panel {
     height: 100%;
     min-height: 0;
   }
+
   .preview-panel {
     height: 100%;
     min-height: 0;
     flex: 1;
   }
+
   .engine-pill-group {
     flex-wrap: wrap;
   }
@@ -2030,6 +2349,7 @@ body {
   .app-container {
     padding: 0 14px;
   }
+
   .header-status .status-text {
     display: none;
   }
@@ -2038,20 +2358,40 @@ body {
 /* ═══════════════════════════════
    Native Desktop Polish
 ═══════════════════════════════ */
-button, .btn, .brand, .panel-header, .preview-header, .engine-pill, .chip, .tab-btn {
+button,
+.btn,
+.brand,
+.panel-header,
+.preview-header,
+.engine-pill,
+.chip,
+.tab-btn {
   user-select: none;
   -webkit-user-select: none;
 }
 
-.app-container, .app-header, .queue-panel, .preview-panel {
+.app-container,
+.app-header,
+.queue-panel,
+.preview-panel {
   cursor: default;
 }
 
-a, button, .btn, .engine-pill, .tab-btn, .chip, [role="button"], summary {
+a,
+button,
+.btn,
+.engine-pill,
+.tab-btn,
+.chip,
+[role="button"],
+summary {
   cursor: pointer;
 }
 
-.markdown-rendered, .raw-markdown-editor, input[type="text"], input[type="url"] {
+.markdown-rendered,
+.raw-markdown-editor,
+input[type="text"],
+input[type="url"] {
   user-select: text;
   -webkit-user-select: text;
   cursor: text;
@@ -2062,34 +2402,43 @@ a, button, .btn, .engine-pill, .tab-btn, .chip, [role="button"], summary {
   .dropzone-card {
     padding: 18px 20px 16px;
   }
+
   .dropzone-icon {
     margin-bottom: 8px;
   }
+
   .dropzone-icon svg {
     width: 30px;
     height: 30px;
   }
+
   .dropzone-title {
     font-size: 16px;
     margin-bottom: 12px;
   }
+
   .engine-pill-group {
     margin-bottom: 12px;
     padding: 3px;
   }
+
   .engine-pill {
     padding: 6px 12px;
     font-size: 12px;
   }
+
   .dropzone-buttons {
     margin-bottom: 12px;
   }
+
   .url-input-container {
     margin-bottom: 12px;
   }
+
   .format-chips {
     gap: 6px;
   }
+
   .chip {
     padding: 2px 7px;
     font-size: 10px;
@@ -2100,31 +2449,115 @@ a, button, .btn, .engine-pill, .tab-btn, .chip, [role="button"], summary {
   .dropzone-card {
     padding: 10px 14px;
   }
+
   .dropzone-icon {
     display: none;
   }
+
   .dropzone-title {
     font-size: 14px;
     margin-bottom: 6px;
   }
+
   .engine-pill-group {
     margin-bottom: 8px;
   }
+
   .dropzone-buttons {
     margin-bottom: 8px;
   }
+
   .url-input-container {
     margin-bottom: 8px;
   }
+
   .format-chips {
     display: none;
   }
 }
 
 /* ═══════════════════════════════
+   App Dialog (in-app replacement for window.confirm/alert)
+═══════════════════════════════ */
+.app-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background-color: rgba(0, 0, 0, 0.5);
+  z-index: 500;
+  animation: fadeIn 0.15s ease;
+}
+
+.app-dialog-overlay[hidden] {
+  display: none;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+.app-dialog {
+  width: 100%;
+  max-width: 400px;
+  background-color: var(--elevated);
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  box-shadow: var(--shadow-popover);
+  padding: 20px;
+  animation: fadeSlideIn 0.15s ease;
+}
+
+.app-dialog-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  margin-bottom: 14px;
+  border-radius: 50%;
+  background-color: var(--danger-tint);
+  color: var(--danger);
+}
+
+.app-dialog-icon.is-neutral {
+  background-color: var(--mark-tint);
+  color: var(--mark);
+}
+
+.app-dialog-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink);
+  margin-bottom: 8px;
+}
+
+.app-dialog-message {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.app-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+/* ═══════════════════════════════
    Reduced Motion
 ═══════════════════════════════ */
 @media (prefers-reduced-motion: reduce) {
+
   .dropzone-collapsible-wrapper,
   .dropzone-section.is-collapsed .dropzone-collapsible-wrapper,
   .dropzone-collapsible-inner,
@@ -2132,8 +2565,11 @@ a, button, .btn, .engine-pill, .tab-btn, .chip, [role="button"], summary {
   .dropzone-compact-bar,
   .dropzone-section.is-collapsed .dropzone-compact-bar,
   .chevron-icon,
-  .dropzone-section.is-collapsed .chevron-icon {
+  .dropzone-section.is-collapsed .chevron-icon,
+  .app-dialog-overlay,
+  .app-dialog {
     transition: opacity 80ms ease !important;
+    animation: none !important;
     transform: none !important;
     will-change: auto !important;
   }

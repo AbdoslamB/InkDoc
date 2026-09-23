@@ -65,6 +65,14 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnDownloadMarkdown = document.getElementById("btnDownloadMarkdown");
   const toastNotification   = document.getElementById("toastNotification");
 
+  // Custom confirmation dialog (replaces window.confirm)
+  const appDialogOverlay  = document.getElementById("appDialogOverlay");
+  const appDialogIcon     = document.getElementById("appDialogIcon");
+  const appDialogTitle    = document.getElementById("appDialogTitle");
+  const appDialogMessage  = document.getElementById("appDialogMessage");
+  const appDialogCancel   = document.getElementById("appDialogCancel");
+  const appDialogConfirm  = document.getElementById("appDialogConfirm");
+
   // Conversion Notice Bar elements
   const conversionNoticeBar    = document.getElementById("conversionNoticeBar");
   const conversionNoticeIcon   = document.getElementById("conversionNoticeIcon");
@@ -150,6 +158,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // ─── Engine Management & Session Security ────────────────────────────────
   const doclingFallbackToggle   = document.getElementById("doclingFallbackToggle");
+  const doclingCodeEnrichmentToggle    = document.getElementById("doclingCodeEnrichmentToggle");
+  const doclingFormulaEnrichmentToggle = document.getElementById("doclingFormulaEnrichmentToggle");
   const engineCardDocling       = document.getElementById("engineCardDocling");
   const doclingStatusBadge       = document.getElementById("doclingStatusBadge");
   const doclingSizeInfo         = document.getElementById("doclingSizeInfo");
@@ -654,11 +664,52 @@ document.addEventListener("DOMContentLoaded", () => {
       const resp = await fetch(`${apiBase}/settings`);
       if (resp.ok) {
         const s = await resp.json();
-        if (doclingFallbackToggle) {
+        // Both enrichment toggles persist the same way and differ only in their key
+  // and wording. They are disabled in the markup until the optional recognition
+  // model is present -- enabling them is the add-on's job -- but the handlers
+  // are wired now so that step only has to clear the disabled attribute.
+  function wireEnrichmentToggle(el, key, label) {
+    if (!el) return;
+    el.addEventListener("change", async (e) => {
+      const checked = e.target.checked;
+      try {
+        const resp = await fetchWithToken(`${apiBase}/settings`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ [key]: checked }),
+        });
+        if (resp.ok) {
+          showToast(
+            checked
+              ? `${label} enabled. Docling will load the recognition model for every conversion.`
+              : `${label} disabled.`,
+            "info"
+          );
+        } else {
+          showToast(`Failed to update ${label}.`, "error");
+          e.target.checked = !checked;
+        }
+      } catch {
+        showToast(`Failed to update ${label}.`, "error");
+        e.target.checked = !checked;
+      }
+    });
+  }
+
+  wireEnrichmentToggle(doclingCodeEnrichmentToggle, "docling_code_enrichment", "Code Enrichment");
+  wireEnrichmentToggle(doclingFormulaEnrichmentToggle, "docling_formula_enrichment", "Formula Enrichment");
+
+  if (doclingFallbackToggle) {
           doclingFallbackToggle.checked = Boolean(s.fallback_to_markitdown ?? s.docling_fallback);
         }
         if (dailyUpdateToggle) {
           dailyUpdateToggle.checked = Boolean(s.check_for_updates_daily);
+        }
+        if (doclingCodeEnrichmentToggle) {
+          doclingCodeEnrichmentToggle.checked = Boolean(s.docling_code_enrichment);
+        }
+        if (doclingFormulaEnrichmentToggle) {
+          doclingFormulaEnrichmentToggle.checked = Boolean(s.docling_formula_enrichment);
         }
       }
     } catch (_) {}
@@ -1086,7 +1137,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (btnDoclingRemove) {
     btnDoclingRemove.addEventListener("click", async () => {
-      if (!confirm("Are you sure you want to remove the IBM Docling pack? All installed files and caches will be deleted.")) {
+      const confirmed = await confirmDialog({
+        title: "Remove Docling pack?",
+        message: "All installed IBM Docling files and caches will be deleted. You can reinstall the pack later from Settings.",
+        confirmText: "Remove Pack",
+        cancelText: "Cancel",
+        danger: true,
+      });
+      if (!confirmed) {
         return;
       }
       try {
@@ -1128,6 +1186,128 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   checkServerHealth();
 
+  // pywebview injects its api asynchronously; queue calls until it exists.
+  // Used by the custom title bar controls below and by in-page external
+  // links (window.pywebview exists in the desktop app on every OS, not just
+  // where the frameless custom title bar is used).
+  function withWindowApi(fn) {
+    if (window.pywebview && window.pywebview.api) {
+      fn(window.pywebview.api);
+    } else {
+      window.addEventListener("pywebviewready", () => {
+        if (window.pywebview && window.pywebview.api) fn(window.pywebview.api);
+      }, { once: true });
+    }
+  }
+
+  // ─── External Links (Settings) ─────────────────────────────────────────────
+  // Inside the desktop app, route through pywebview so links open in the OS
+  // default browser instead of navigating the app's own window. In a plain
+  // browser tab (Web Bench) there's no window.pywebview: let the anchor's
+  // normal target="_blank" behavior handle it.
+  const aboutUsLink = document.getElementById("aboutUsLink");
+  if (aboutUsLink) {
+    aboutUsLink.addEventListener("click", (e) => {
+      if (window.pywebview) {
+        e.preventDefault();
+        withWindowApi((api) => api.open_external_link(aboutUsLink.href).catch(() => {}));
+      }
+    });
+  }
+
+  // ─── Custom title bar (frameless desktop window only) ────────────────────
+  // The flag is injected into the page before first paint, so the controls never
+  // flash in. It is false in a browser tab and on macOS and Linux, which keep
+  // their native window frames.
+  if (window.__INKDOC_CUSTOM_TITLEBAR__ === true) {
+    document.body.classList.add("has-custom-titlebar");
+    const maximizeBtn = document.getElementById("winMaximize");
+
+    function setMaximizeAffordance(isMaximized) {
+      if (!maximizeBtn) return;
+      maximizeBtn.title = isMaximized ? "Restore" : "Maximise";
+      maximizeBtn.setAttribute("aria-label", maximizeBtn.title);
+    }
+
+    function toggleMaximize() {
+      withWindowApi((api) =>
+        api.toggle_maximize_window().then(setMaximizeAffordance).catch(() => {})
+      );
+    }
+
+    // Windows will only offer Snap Layouts over a maximise button it can
+    // hit-test, and WebView2's own child window sits in front of ours. The
+    // native side cuts this button's rectangle out of that child, which means
+    // it also has to draw the button -- so it needs both the exact rectangle
+    // and the active theme's colours. Only the page knows either: they move
+    // with layout, DPI and the theme toggle.
+    function cssColor(name, fallback) {
+      const raw = getComputedStyle(document.documentElement)
+        .getPropertyValue(name)
+        .trim();
+      const m = raw.match(/^#([0-9a-f]{6})$/i);
+      if (m) return parseInt(m[1], 16);
+      const rgb = raw.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+      if (rgb) return (+rgb[1] << 16) | (+rgb[2] << 8) | +rgb[3];
+      return fallback;
+    }
+
+    function reportTitlebarChrome() {
+      if (!maximizeBtn || !window.pywebview || !window.pywebview.api) return;
+      const api = window.pywebview.api;
+      const r = maximizeBtn.getBoundingClientRect();
+      if (r.width && r.height && api.set_titlebar_button_rect) {
+        const scale = window.devicePixelRatio || 1;
+        const call = api.set_titlebar_button_rect(
+          Math.round(r.left * scale),
+          Math.round(r.top * scale),
+          Math.round(r.right * scale),
+          Math.round(r.bottom * scale)
+        );
+        if (call && call.catch) call.catch(() => {});
+      }
+      if (api.set_titlebar_colors) {
+        const call = api.set_titlebar_colors(
+          cssColor("--elevated", 0x1b1e18),
+          cssColor("--sunken", 0x0f110c),
+          cssColor("--muted", 0x8e968a),
+          cssColor("--ink", 0xe8ede6)
+        );
+        if (call && call.catch) call.catch(() => {});
+      }
+    }
+
+    // Exposed so the theme toggle can re-send the palette.
+    window.__inkdocSyncTitlebar = reportTitlebarChrome;
+
+    window.__inkdocMaximizeState = (isMaximized) => {
+      setMaximizeAffordance(!!isMaximized);
+      reportTitlebarChrome();
+    };
+
+    withWindowApi(() => reportTitlebarChrome());
+    window.addEventListener("resize", reportTitlebarChrome);
+
+    const minimizeBtn = document.getElementById("winMinimize");
+    const closeBtn = document.getElementById("winClose");
+    if (minimizeBtn) {
+      minimizeBtn.addEventListener("click", () =>
+        withWindowApi((api) => api.minimize_window().catch(() => {}))
+      );
+    }
+    if (maximizeBtn) maximizeBtn.addEventListener("click", toggleMaximize);
+    if (closeBtn) {
+      closeBtn.addEventListener("click", () =>
+        withWindowApi((api) => api.close_window().catch(() => {}))
+      );
+    }
+
+    // Double-clicking the title bar toggles maximise, as every platform expects.
+    document.querySelectorAll(".pywebview-drag-region").forEach((region) => {
+      region.addEventListener("dblclick", toggleMaximize);
+    });
+  }
+
   // ─── Theme Toggle ────────────────────────────────────────────────────────
   const savedTheme = localStorage.getItem("inkdoc-theme") || localStorage.getItem("markitdown-theme") || "dark";
   document.documentElement.setAttribute("data-theme", savedTheme);
@@ -1137,6 +1317,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const next = current === "dark" ? "light" : "dark";
     document.documentElement.setAttribute("data-theme", next);
     localStorage.setItem("inkdoc-theme", next);
+    // The maximise button is drawn natively, so it can't pick up the new
+    // palette from CSS on its own.
+    if (window.__inkdocSyncTitlebar) window.__inkdocSyncTitlebar();
   });
 
   // ─── Auto-save Toggle ────────────────────────────────────────────────────
@@ -1152,7 +1335,72 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // ─── File Browsing ───────────────────────────────────────────────────────
   btnBrowseFiles.addEventListener("click", () => fileInput.click());
-  btnBrowseFolder.addEventListener("click", () => folderInput.click());
+  // Folder picking has two routes, and the difference is which dialog the user
+  // gets. A webkitdirectory input makes Chromium draw its own "upload N files?"
+  // confirmation, which lives outside the page and cannot be styled or
+  // suppressed. showDirectoryPicker() instead raises a permission request that
+  // the desktop shell auto-grants (see runner._configure_webview2), so the only
+  // confirmation left is ours, matching every other dialog in the app. The
+  // input stays as the fallback for the Web Bench and for any engine without
+  // the File System Access API, where the browser's prompt is unavoidable.
+  const SKIP_DIRS = new Set([".git", "node_modules", "__pycache__", ".venv"]);
+
+  async function collectDirectoryFiles(handle, path = "", out = []) {
+    for await (const entry of handle.values()) {
+      if (entry.kind === "directory") {
+        if (SKIP_DIRS.has(entry.name)) continue;
+        await collectDirectoryFiles(entry, `${path}${entry.name}/`, out);
+      } else {
+        const file = await entry.getFile();
+        // Mirror what a webkitdirectory input reports, so anything downstream
+        // that wants the path inside the folder still finds it.
+        try {
+          Object.defineProperty(file, "webkitRelativePath", {
+            value: `${path}${entry.name}`,
+            configurable: true,
+          });
+        } catch { /* read-only in some engines; the name alone is enough */ }
+        out.push(file);
+      }
+    }
+    return out;
+  }
+
+  btnBrowseFolder.addEventListener("click", async () => {
+    if (!window.showDirectoryPicker) {
+      folderInput.click();
+      return;
+    }
+    let handle;
+    try {
+      handle = await window.showDirectoryPicker({ id: "inkdoc-folder", mode: "read" });
+    } catch {
+      return; // the user dismissed the picker
+    }
+
+    let files;
+    try {
+      files = await collectDirectoryFiles(handle);
+    } catch (e) {
+      showToast(`Could not read that folder: ${e.message}`, "error");
+      return;
+    }
+    if (files.length === 0) {
+      showToast(`No files found in "${handle.name}".`, "info");
+      return;
+    }
+
+    const confirmed = await confirmDialog({
+      title: `Add ${files.length} file${files.length === 1 ? "" : "s"}?`,
+      message: `"${handle.name}" contains ${files.length} file${files.length === 1 ? "" : "s"}, which will be converted with ${getEngineDisplayName(selectedEngine)}.`,
+      confirmText: "Add Files",
+      cancelText: "Cancel",
+      danger: false,
+    });
+    if (!confirmed) return;
+
+    handleIncomingFiles(files);
+  });
 
   fileInput.addEventListener("change", (e) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -1586,6 +1834,106 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  // ─── Syntax Highlighting ─────────────────────────────────────────────────
+  // highlight.js is fetched on first use, not up front: a conversion with no
+  // fenced code never pays for it, and the Raw tab is a separate container so
+  // it is never touched. Highlighting runs *after* DOMPurify has written into
+  // the DOM, so what it sees is already sanitised and all it does is wrap
+  // existing text nodes in spans. The code itself is never rewritten, and Copy
+  // and Download read item.markdown rather than this DOM, so what the user
+  // takes away is always exactly what the converter produced.
+  const HLJS_SRC = "/static/vendor/highlight.min.js";
+  // Past this size the pause costs more than the colour is worth.
+  const HLJS_MAX_CHARS = 100000;
+  // Docling names the language accurately, which is what belongs in the saved
+  // .md, but a few of those names have no grammar of their own while a close
+  // relative reads almost identically. Highlighting those with the relative
+  // beats leaving them grey. Languages with no near neighbour -- bc, ceylon,
+  // cobol, dc, forth -- are deliberately absent and stay plain.
+  const HLJS_ALIASES = {
+    cuda: "cpp",
+    cython: "python",
+    octave: "matlab",
+    racket: "scheme",
+    tikz: "latex",
+  };
+  let hljsLoader = null;
+
+  function loadHighlighter() {
+    if (window.hljs) return Promise.resolve(window.hljs);
+    if (hljsLoader) return hljsLoader;
+    hljsLoader = new Promise((resolve) => {
+      const el = document.createElement("script");
+      el.src = HLJS_SRC;
+      el.async = true;
+      el.onload = () => resolve(window.hljs || null);
+      el.onerror = () => {
+        // Leave the blocks plain and allow a later render to retry.
+        hljsLoader = null;
+        resolve(null);
+      };
+      document.head.appendChild(el);
+    });
+    return hljsLoader;
+  }
+
+  function highlightCodeBlocks(root) {
+    if (!root) return;
+    let blocks;
+    try {
+      blocks = Array.from(root.querySelectorAll("pre code[class*='language-']"));
+    } catch (_) {
+      return;
+    }
+    if (blocks.length === 0) return;
+
+    loadHighlighter().then((hljs) => {
+      if (!hljs) return;
+
+      const run = (block) => {
+        try {
+          if (block.dataset.hljsDone === "1") return;
+          const cls = Array.from(block.classList).find((c) => c.startsWith("language-"));
+          const named = cls ? cls.slice("language-".length).toLowerCase() : "";
+          const lang = HLJS_ALIASES[named] || named;
+          // Only languages this build actually ships a grammar for. Without
+          // the check highlight.js warns and falls back to plaintext for every
+          // unlabelled or unsupported fence, which is noise, not information.
+          if (!lang || !hljs.getLanguage(lang)) return;
+          const source = block.textContent;
+          if (source.length > HLJS_MAX_CHARS) return;
+          block.dataset.hljsDone = "1";
+          // highlight() rather than highlightElement() so the grammar is chosen
+          // here: an aliased block keeps its accurate language- class, which
+          // highlightElement would not know how to resolve. The input is the
+          // element's own text, already sanitised, and highlight.js escapes
+          // what it returns.
+          block.innerHTML = hljs.highlight(source, {
+            language: lang,
+            ignoreIllegals: true,
+          }).value;
+          block.classList.add("hljs");
+        } catch (_) {
+          // One bad block must never cost the rest of the preview.
+        }
+      };
+
+      if (blocks.length <= 8 || typeof window.requestIdleCallback !== "function") {
+        blocks.forEach(run);
+        return;
+      }
+      // Long documents are spread over idle slices so the preview paints first.
+      let i = 0;
+      const pump = (deadline) => {
+        while (i < blocks.length && (deadline.didTimeout || deadline.timeRemaining() > 4)) {
+          run(blocks[i++]);
+        }
+        if (i < blocks.length) window.requestIdleCallback(pump, { timeout: 250 });
+      };
+      window.requestIdleCallback(pump, { timeout: 250 });
+    });
+  }
+
   // ─── Select & Display Item ───────────────────────────────────────────────
   function selectItem(id) {
     activeItemId = id;
@@ -1724,6 +2072,7 @@ document.addEventListener("DOMContentLoaded", () => {
     } else {
       renderedOutput.innerHTML = renderBasicMarkdown(md);
     }
+    highlightCodeBlocks(renderedOutput);
 
     renderQueue();
   }
@@ -1895,6 +2244,66 @@ document.addEventListener("DOMContentLoaded", () => {
     setTimeout(() => {
       toastNotification.classList.remove("show");
     }, 3000);
+  }
+
+  // ─── Custom Confirmation Dialog (replaces window.confirm) ─────────────────
+  // Resolves true on confirm, false on cancel/backdrop/Escape. Only one dialog
+  // is ever open at a time in this app, so listeners are attached and torn
+  // down per call rather than kept registered permanently.
+  function confirmDialog({ title, message, confirmText = "Confirm", cancelText = "Cancel", danger = true } = {}) {
+    return new Promise((resolve) => {
+      appDialogTitle.textContent   = title || "Are you sure?";
+      appDialogMessage.textContent = message || "";
+      appDialogConfirm.textContent = confirmText;
+      appDialogCancel.textContent  = cancelText;
+      appDialogConfirm.className   = `btn ${danger ? "btn-danger" : "btn-primary"}`;
+      appDialogIcon.classList.toggle("is-neutral", !danger);
+
+      const previouslyFocused = document.activeElement;
+      const focusables = [appDialogCancel, appDialogConfirm];
+
+      function cleanup(result) {
+        appDialogOverlay.hidden = true;
+        appDialogOverlay.removeEventListener("click", onOverlayClick);
+        appDialogConfirm.removeEventListener("click", onConfirm);
+        appDialogCancel.removeEventListener("click", onCancel);
+        document.removeEventListener("keydown", onKeydown);
+        if (previouslyFocused && typeof previouslyFocused.focus === "function") {
+          previouslyFocused.focus();
+        }
+        resolve(result);
+      }
+
+      function onConfirm() { cleanup(true); }
+      function onCancel()  { cleanup(false); }
+      function onOverlayClick(e) {
+        if (e.target === appDialogOverlay) cleanup(false);
+      }
+      function onKeydown(e) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          cleanup(false);
+        } else if (e.key === "Tab") {
+          // Minimal focus trap: the dialog only ever has these two buttons.
+          e.preventDefault();
+          const idx = focusables.indexOf(document.activeElement);
+          const nextIdx = e.shiftKey
+            ? (idx <= 0 ? focusables.length - 1 : idx - 1)
+            : (idx === focusables.length - 1 ? 0 : idx + 1);
+          focusables[nextIdx].focus();
+        }
+      }
+
+      appDialogConfirm.addEventListener("click", onConfirm);
+      appDialogCancel.addEventListener("click", onCancel);
+      appDialogOverlay.addEventListener("click", onOverlayClick);
+      document.addEventListener("keydown", onKeydown);
+
+      appDialogOverlay.hidden = false;
+      // Default focus sits on the non-destructive action so a stray Enter
+      // key press can't trigger something irreversible like Remove Pack.
+      (danger ? appDialogCancel : appDialogConfirm).focus();
+    });
   }
 
   // ─── Utilities ───────────────────────────────────────────────────────────

@@ -57,6 +57,18 @@ jobs:
           esac
           echo "target_tag=$TARGET_TAG" >> "$GITHUB_OUTPUT"
           echo "Target Release Tag: $TARGET_TAG"
+          # Derive the pack version from the tag so the two cannot drift.
+          # build_pack.py defaults to 1.0.0 and the workflow never passed
+          # anything, so v1, v2 and v3 all reported the same pack_version and
+          # nothing downstream could tell an old pack from a new one. Any check
+          # of the form "is the installed pack new enough?" needs this to be real.
+          PACK_SUFFIX="${TARGET_TAG##*-v}"
+          case "$PACK_SUFFIX" in
+            ''|*[!0-9]*) PACK_VERSION="1.0.0" ;;
+            *) PACK_VERSION="${PACK_SUFFIX}.0.0" ;;
+          esac
+          echo "pack_version=$PACK_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Pack Version: $PACK_VERSION"
 
       - name: Immutability Guard (Requirement 2)
         shell: bash
@@ -101,7 +113,8 @@ jobs:
         run: |
           python scripts/build_pack.py \
             --output-dir dist/packs \
-            --release-tag "${{ steps.tag.outputs.target_tag }}"
+            --release-tag "${{ steps.tag.outputs.target_tag }}" \
+            --pack-version "${{ steps.tag.outputs.pack_version }}"
 
       - name: Upload Pack & Fragment Artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

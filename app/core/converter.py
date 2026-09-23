@@ -179,6 +179,8 @@ class ConversionOptions:
     engine: EngineKind = EngineKind.MARKITDOWN
     docling_ocr: bool = True
     docling_table_structure: bool = True
+    docling_code_enrichment: bool = False
+    docling_formula_enrichment: bool = False
     fallback_occurred: bool = False
     fallback_reason: str = ""
 

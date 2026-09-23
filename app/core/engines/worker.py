@@ -76,11 +76,21 @@ def _patch_omegaconf() -> None:
         pass
 
 
-def _get_converter(ocr: bool = True, table_structure: bool = True):
+def _get_converter(
+    ocr: bool = True,
+    table_structure: bool = True,
+    code_enrichment: bool = False,
+    formula_enrichment: bool = False,
+):
     global _CACHED_CONVERTER, _CACHED_OPTIONS
     _patch_omegaconf()
 
-    curr_opts = (ocr, table_structure)
+    # The enrichment flags belong in the cache key, not just the options. Docling
+    # builds the code/formula stage at pipeline construction and loads its model
+    # eagerly, so a converter created with enrichment on holds ~640 MB for as
+    # long as it is cached. Keying on the flags means switching them off builds a
+    # converter without the stage and drops the old one, releasing the weights.
+    curr_opts = (ocr, table_structure, code_enrichment, formula_enrichment)
     if _CACHED_CONVERTER is not None and curr_opts == _CACHED_OPTIONS:
         return _CACHED_CONVERTER
 
@@ -91,6 +101,8 @@ def _get_converter(ocr: bool = True, table_structure: bool = True):
     pipeline_options = PdfPipelineOptions()
     pipeline_options.do_ocr = ocr
     pipeline_options.do_table_structure = table_structure
+    pipeline_options.do_code_enrichment = code_enrichment
+    pipeline_options.do_formula_enrichment = formula_enrichment
     pipeline_options.do_picture_description = False
     pipeline_options.do_picture_classification = False
 
@@ -105,12 +117,135 @@ def _get_converter(ocr: bool = True, table_structure: bool = True):
     return _CACHED_CONVERTER
 
 
+# ─── Code language fences ────────────────────────────────────────────────────
+# Docling detects the language of every code block it transcribes but the
+# Markdown serializer drops it, emitting a bare fence. This puts it back.
+#
+# This is a deliberate copy of app/core/engines/code_language.py. That module
+# cannot be imported here: this worker runs under the engine pack's own
+# interpreter, which has no access to the application package, and the pack
+# ships this single file. tests/test_code_language.py parses this literal and
+# fails if the two ever disagree.
+_CODE_LANGUAGE_SLUGS = {
+    "Ada": "ada",
+    "Awk": "awk",
+    "Bash": "bash",
+    "bc": "bc",
+    "C": "c",
+    "C#": "csharp",
+    "C++": "cpp",
+    "CMake": "cmake",
+    "COBOL": "cobol",
+    "CSS": "css",
+    "Ceylon": "ceylon",
+    "Clojure": "clojure",
+    "Crystal": "crystal",
+    "Cuda": "cuda",
+    "Cython": "cython",
+    "D": "d",
+    "Dart": "dart",
+    "dc": "dc",
+    "Dockerfile": "dockerfile",
+    "Elixir": "elixir",
+    "Erlang": "erlang",
+    "FORTRAN": "fortran",
+    "Forth": "forth",
+    "Go": "go",
+    "HTML": "html",
+    "Haskell": "haskell",
+    "Haxe": "haxe",
+    "Java": "java",
+    "JavaScript": "javascript",
+    "JSON": "json",
+    "Julia": "julia",
+    "Kotlin": "kotlin",
+    "Latex": "latex",
+    "Lisp": "lisp",
+    "Lua": "lua",
+    "Matlab": "matlab",
+    "MoonScript": "moonscript",
+    "Nim": "nim",
+    "OCaml": "ocaml",
+    "ObjectiveC": "objectivec",
+    "Octave": "octave",
+    "PHP": "php",
+    "Pascal": "pascal",
+    "Perl": "perl",
+    "Prolog": "prolog",
+    "Python": "python",
+    "Racket": "racket",
+    "Ruby": "ruby",
+    "Rust": "rust",
+    "SML": "sml",
+    "SQL": "sql",
+    "Scala": "scala",
+    "Scheme": "scheme",
+    "Swift": "swift",
+    "Tikz": "tikz",
+    "TypeScript": "typescript",
+    "VisualBasic": "vbnet",
+    "XML": "xml",
+    "YAML": "yaml",
+}
+
+def _code_language_slug(label) -> str:
+    """Map a CodeLanguageLabel (or its value) onto a Markdown fence identifier."""
+    if label is None:
+        return ""
+    value = getattr(label, "value", label)
+    if not isinstance(value, str):
+        return ""
+    return _CODE_LANGUAGE_SLUGS.get(value, "")
+
+
+def _apply_code_languages(doc, markdown: str) -> str:
+    """Rewrite bare code fences so they carry the detected language.
+
+    Driven by the document's own CodeItems walked in order and matched against a
+    moving cursor, so repeated identical blocks still line up with their own
+    languages. Anything unexpected is skipped: a missing language is cosmetic
+    and must never cost the conversion.
+    """
+    if not markdown or doc is None:
+        return markdown
+    try:
+        from docling_core.types.doc import CodeItem
+    except Exception:
+        return markdown
+    try:
+        items = [item for item, _level in doc.iterate_items(with_groups=False)]
+    except Exception:
+        try:
+            items = list(getattr(doc, "texts", []) or [])
+        except Exception:
+            return markdown
+
+    cursor = 0
+    for item in items:
+        if not isinstance(item, CodeItem):
+            continue
+        slug = _code_language_slug(getattr(item, "code_language", None))
+        text = getattr(item, "text", None)
+        if not slug or not text:
+            continue
+        nl = chr(10)
+        block = "```" + nl + text + nl + "```"
+        found = markdown.find(block, cursor)
+        if found == -1:
+            continue
+        markdown = markdown[:found] + "```" + slug + markdown[found + 3:]
+        cursor = found + len(block) + len(slug)
+    return markdown
+
+
 def _handle_convert(payload: dict) -> dict:
     job_id = payload.get("job_id", "")
     source_file = payload.get("source_file", "")
     output_file = payload.get("output_file", "")
     ocr = bool(payload.get("ocr", True))
     table_structure = bool(payload.get("table_structure", True))
+    code_enrichment = bool(payload.get("code_enrichment", False))
+    formula_enrichment = bool(payload.get("formula_enrichment", False))
 
     if not source_file or not os.path.exists(source_file):
         return {"status": "error", "job_id": job_id, "error": f"Source file does not exist: {source_file}"}
@@ -120,9 +255,15 @@ def _handle_convert(payload: dict) -> dict:
 
     with _CONVERT_LOCK:
         try:
-            converter = _get_converter(ocr=ocr, table_structure=table_structure)
+            converter = _get_converter(
+                ocr=ocr,
+                table_structure=table_structure,
+                code_enrichment=code_enrichment,
+                formula_enrichment=formula_enrichment,
+            )
             conv_res = converter.convert(Path(source_file))
             markdown_text = conv_res.document.export_to_markdown()
+            markdown_text = _apply_code_languages(conv_res.document, markdown_text)
 
             # Write result directly to the requested output file
             out_path = Path(output_file)

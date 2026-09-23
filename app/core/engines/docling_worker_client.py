@@ -11,6 +11,7 @@ import logging
 import os
 import queue
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -115,6 +116,11 @@ class DoclingWorkerClient:
         stderr_target: Any = subprocess.DEVNULL,
     ) -> subprocess.Popen:
         """Spawn isolated worker process with reader thread and redirected/drained stderr."""
+        # On Windows, launching a console-subsystem interpreter (python.exe) from a
+        # windowed app pops up a visible Command Prompt for the child; closing that
+        # window sends CTRL_CLOSE_EVENT and kills the worker mid-conversion.
+        # CREATE_NO_WINDOW stops a console from being allocated for it at all.
+        creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         proc = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
@@ -126,6 +132,7 @@ class DoclingWorkerClient:
             shell=False,
             cwd=cwd,
             env=env,
+            creationflags=creationflags,
         )
         self._stop_event = threading.Event()
         self._stdout_queue = queue.Queue()
@@ -276,6 +283,8 @@ class DoclingWorkerClient:
         source_path: str,
         ocr: bool = True,
         table_structure: bool = True,
+        code_enrichment: bool = False,
+        formula_enrichment: bool = False,
         timeout: float = CONVERSION_TIMEOUT_SECONDS,
     ) -> str:
         """Send conversion request to warm worker subprocess over file-based IPC."""
@@ -297,6 +306,8 @@ class DoclingWorkerClient:
                 "output_file": tmp_out_path,
                 "ocr": ocr,
                 "table_structure": table_structure,
+                "code_enrichment": code_enrichment,
+                "formula_enrichment": formula_enrichment,
             }
 
             try:

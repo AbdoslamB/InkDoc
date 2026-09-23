@@ -17,7 +17,9 @@
   <div class="app-container">
     <!-- Header -->
     <header class="app-header">
-      <div class="brand">
+      <!-- pywebview walks up from the click target to find a drag region, so the
+           buttons must sit outside it or every click would also drag the window. -->
+      <div class="brand pywebview-drag-region">
         <div class="brand-icon">
           <img src="/static/logo.svg" alt="InkDoc Logo" width="36" height="36" class="brand-logo-img">
         </div>
@@ -25,6 +27,8 @@
           <h1>InkDoc</h1>
         </div>
       </div>
+
+      <div class="titlebar-drag-spacer pywebview-drag-region" id="titlebarDragSpacer"></div>
 
       <div class="header-actions">
         <button id="themeToggle" class="btn btn-icon" title="Toggle Light/Dark theme">
@@ -180,6 +184,26 @@
                     <button type="button" class="btn btn-sm btn-danger" id="btnDoclingRemove" style="display: none;">Remove Pack</button>
                     <button type="button" class="btn btn-sm btn-ghost" id="btnDoclingCancel" style="display: none;">Cancel</button>
                   </div>
+
+                  <!-- Enrichment options. Disabled until the optional
+                       recognition model is installed; the state machine that
+                       enables them ships with the add-on. -->
+                  <div class="engine-enrichment" id="doclingEnrichment">
+                    <p class="engine-enrichment-title">Enrichment</p>
+                    <label class="toggle-switch" title="Transcribe code blocks with the recognition model and label their programming language">
+                      <input type="checkbox" id="doclingCodeEnrichmentToggle" disabled>
+                      <span class="toggle-slider"></span>
+                      <span class="toggle-label">Code Enrichment</span>
+                    </label>
+                    <label class="toggle-switch" style="margin-top: 8px;" title="Recognise mathematical formulas and convert them to LaTeX">
+                      <input type="checkbox" id="doclingFormulaEnrichmentToggle" disabled>
+                      <span class="toggle-slider"></span>
+                      <span class="toggle-label">Formula Enrichment</span>
+                    </label>
+                    <p class="settings-caption" id="doclingEnrichmentCaption">
+                      Requires the optional recognition model. Both options share the same model, so turning on either one loads it for <em>every</em> Docling conversion, not only documents that contain code or formulas.
+                    </p>
+                  </div>
                 </div>
               </details>
             </div>
@@ -259,16 +283,37 @@
 
             <div class="settings-divider"></div>
             <div class="settings-section">
-              <a href="/docs" target="_blank" class="settings-link">
+              <a href="https://abdoslamb.github.io/InkDoc/" target="_blank" rel="noopener noreferrer" class="settings-link" id="aboutUsLink">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
                   <polyline points="15 3 21 3 21 9"></polyline>
                   <line x1="10" y1="14" x2="21" y2="3"></line>
                 </svg>
-                API Documentation
+                About Us
               </a>
             </div>
           </div>
+        </div>
+
+        <!-- Shown only in the frameless desktop window; a browser tab and the
+             native-framed macOS and Linux windows keep their own controls. -->
+        <div class="window-controls" id="windowControls">
+          <button type="button" class="window-control" id="winMinimize" title="Minimise" aria-label="Minimise">
+            <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+              <line x1="0" y1="5" x2="10" y2="5" stroke="currentColor" stroke-width="1.3"></line>
+            </svg>
+          </button>
+          <button type="button" class="window-control" id="winMaximize" title="Maximise" aria-label="Maximise">
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+              <rect x="0.65" y="0.65" width="8.7" height="8.7" stroke="currentColor" stroke-width="1.3"></rect>
+            </svg>
+          </button>
+          <button type="button" class="window-control window-control-close" id="winClose" title="Close" aria-label="Close">
+            <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+              <line x1="0.6" y1="0.6" x2="9.4" y2="9.4" stroke="currentColor" stroke-width="1.3"></line>
+              <line x1="9.4" y1="0.6" x2="0.6" y2="9.4" stroke="currentColor" stroke-width="1.3"></line>
+            </svg>
+          </button>
         </div>
       </div>
     </header>
@@ -519,6 +564,25 @@
 
     <!-- Global Notification Banner -->
     <div id="toastNotification" class="toast-notification"></div>
+
+    <!-- Custom confirmation dialog (replaces window.confirm) -->
+    <div class="app-dialog-overlay" id="appDialogOverlay" hidden>
+      <div class="app-dialog" role="alertdialog" aria-modal="true" aria-labelledby="appDialogTitle" aria-describedby="appDialogMessage">
+        <div class="app-dialog-icon" id="appDialogIcon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+            <line x1="12" y1="9" x2="12" y2="13"></line>
+            <line x1="12" y1="17" x2="12.01" y2="17"></line>
+          </svg>
+        </div>
+        <h2 class="app-dialog-title" id="appDialogTitle"></h2>
+        <p class="app-dialog-message" id="appDialogMessage"></p>
+        <div class="app-dialog-actions">
+          <button type="button" class="btn btn-secondary" id="appDialogCancel">Cancel</button>
+          <button type="button" class="btn btn-danger" id="appDialogConfirm">Confirm</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="/static/app.js"></script>

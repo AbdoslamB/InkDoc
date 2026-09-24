@@ -709,16 +709,23 @@ def phase_verify(args, state: dict) -> None:
     run(["gh", "release", "edit", tag, "-R", REPO, "--draft=false", "--latest"], stream=True)
 
     final = gh_json(["release", "view", tag, "-R", REPO,
-                     "--json", "isDraft,isLatest,url"]) or {}
+                     "--json", "isDraft,url"]) or {}
     if final.get("isDraft"):
         raise Abort(f"{tag} is still a draft after publishing. Check the GitHub UI.")
-    if not final.get("isLatest"):
+
+    # Ask the API which release is actually Latest rather than reading a field on
+    # this one: `--json isLatest` is rejected by older gh builds, and what matters
+    # is the pointer the updater resolves, not a flag on the release object.
+    latest = out(["gh", "api", f"repos/{REPO}/releases/latest", "--jq", ".tag_name"],
+                 check=False)
+    if latest != tag:
         raise Abort(
-            f"{tag} published but is NOT marked Latest. The updater resolves\n"
-            f"  /releases/latest/download/, so it would 404 for every client.\n"
+            f"{tag} published, but GitHub still reports '{latest or 'nothing'}' as\n"
+            f"  Latest. The updater resolves /releases/latest/download/, so it would\n"
+            f"  serve the wrong release. Fix with:\n"
             f"      gh release edit {tag} -R {REPO} --latest"
         )
-    ok("Published and marked Latest")
+    ok(f"Published, and GitHub reports {tag} as Latest")
 
     mark(state, "verify")
     banner("RELEASE COMPLETE")

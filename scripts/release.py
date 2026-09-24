@@ -557,6 +557,21 @@ def phase_sign(args, state: dict) -> None:
         return
 
     mark(state, "app")  # everything before signing is durably done
+
+    # Emit commands for the shell the maintainer is actually in. A bash for-loop
+    # is a parse error in PowerShell, and this project is developed on Windows.
+    if sys.platform == "win32":
+        verify_cmd = (
+            f"gh release download {tag} --dir build/verify -R {REPO} --clobber\n"
+            f"       Get-ChildItem build/verify -File | "
+            f"ForEach-Object {{ gh attestation verify $_.FullName --repo {REPO} }}"
+        )
+    else:
+        verify_cmd = (
+            f"gh release download {tag} --dir build/verify -R {REPO} --clobber\n"
+            f'       for f in build/verify/*; do gh attestation verify "$f" --repo {REPO}; done'
+        )
+
     print(f"""
   \033[1mThis is the one step that cannot be automated.\033[0m
 
@@ -568,8 +583,7 @@ def phase_sign(args, state: dict) -> None:
   Run these now, in this order:
 
     1. Verify build provenance
-       gh release download {tag} --dir build/verify -R {REPO} --clobber
-       for f in build/verify/*; do gh attestation verify "$f" --repo {REPO}; done
+       {verify_cmd}
 
     2. Sign and upload the update manifest
        python scripts/sign_manifest.py --tag {tag}

@@ -329,25 +329,52 @@ def phase_sync(args, state: dict) -> None:
     run(["git", "push", "-u", "origin", branch], stream=True)
     ok("Pushed")
 
-    # CI only runs on main and on pull requests. A feature branch with no PR has
-    # nothing to wait for, and blocking on a run that will never exist is worse
-    # than saying so.
     if branch == "main":
         watch_run(find_run(CI_WORKFLOW, branch), f"{CI_WORKFLOW} on {branch}")
-    else:
-        pr = gh_json(["pr", "list", "-R", REPO, "--head", branch, "--json", "number,url"]) or []
+        mark(state, "sync")
+        return
+
+    # Tagging off a feature branch works: release.yml triggers on the tag pattern
+    # alone, only ever reads github.ref_name, and Actions checks out the tag's
+    # commit. Requiring main is therefore a policy, not a constraint. It stays the
+    # default because shipping unmerged code as a stable release is usually a
+    # mistake, but --allow-branch opts out -- which is what a release candidate
+    # cut from a feature branch needs.
+    pr = gh_json(["pr", "list", "-R", REPO, "--head", branch, "--json", "number,url"]) or []
+
+    if not args.allow_branch:
+        lines = [f"Branch '{branch}' is not main."]
         if pr:
-            watch_run(find_run(CI_WORKFLOW, branch), f"{CI_WORKFLOW} on {branch}")
-            warn(f"Open PR {pr[0]['url']} must be merged to main before tagging.")
-            raise Abort(
-                "Release tags are cut from main. Merge the PR, then re-run with --resume."
-            )
-        raise Abort(
-            f"Branch '{branch}' is not main and has no open PR.\n"
-            f"  Release tags must be cut from main. Open and merge a PR, then:\n"
-            f"      git switch main && git pull\n"
-            f"      python scripts/release.py --resume"
+            lines.append(f"  Open PR: {pr[0]['url']}")
+        lines += [
+            "  By default releases are cut from main. Either merge first:",
+            "      git switch main && git pull",
+            "      python scripts/release.py --resume",
+            "  or release from this branch deliberately:",
+            "      python scripts/release.py --allow-branch --resume",
+        ]
+        raise Abort("\n".join(lines))
+
+    warn(f"Releasing from '{branch}' rather than main (--allow-branch)")
+    if "-" not in VERSION:
+        warn(f"v{VERSION} is a STABLE tag cut from an unmerged branch.")
+
+    if pr:
+        watch_run(find_run(CI_WORKFLOW, branch), f"{CI_WORKFLOW} for {pr[0]['url']}")
+    else:
+        # ci.yml triggers only on pushes to main and on pull requests, so there is
+        # no run to wait for here. Say so rather than blocking on one that will
+        # never appear -- preflight already ran the same ruff/compileall/pytest set.
+        warn(
+            f"No PR for '{branch}', so {CI_WORKFLOW} will not run against it. "
+            "Preflight ran the same checks locally."
         )
+        if args.skip_tests:
+            raise Abort(
+                "Refusing to release with neither CI nor local tests: --skip-tests "
+                "was given and no PR exists for this branch.\n"
+                "  Drop --skip-tests, or open a PR so CI runs."
+            )
 
     mark(state, "sync")
 
@@ -619,6 +646,8 @@ def main() -> int:
     p.add_argument("--force-pack", action="store_true", help="Rebuild the engine pack unconditionally")
     p.add_argument("--skip-tests", action="store_true", help="Skip the local test suite in preflight")
     p.add_argument("--allow-dirty", action="store_true", help="Proceed with uncommitted changes")
+    p.add_argument("--allow-branch", action="store_true",
+                   help="Release from the current branch instead of requiring main")
     p.add_argument("--yes", action="store_true", help="Do not prompt before the first push")
     args = p.parse_args()
 

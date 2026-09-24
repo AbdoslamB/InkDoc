@@ -165,6 +165,13 @@ def run(
 
 
 def out(cmd: list[str], **kw) -> str:
+    """Stdout, stripped.
+
+    The strip is right for the metadata this is used for -- branch names, tag
+    lists, porcelain status, JSON -- but it makes this unsuitable for comparing
+    file contents, because it eats the trailing newline that almost every file
+    ends with. Ask git whether something differs; do not diff strings here.
+    """
     return (run(cmd, **kw).stdout or "").strip()
 
 
@@ -438,14 +445,22 @@ def phase_pack(args, state: dict) -> None:
 
     # A pack built from a tree without the current worker silently ships a worker
     # that ignores its options. That is exactly how docling-pack-v4 was burned.
-    head_worker = out(["git", "show", f"HEAD:{WORKER_PATH}"])
-    disk_worker = (REPO_ROOT / WORKER_PATH).read_text(encoding="utf-8", errors="replace")
-    if head_worker.replace("\r\n", "\n") != disk_worker.replace("\r\n", "\n"):
+    #
+    # Ask git rather than comparing file contents: `out()` strips, which ate the
+    # trailing newline and made this fail for every file that ends in one -- that
+    # is, all of them. git also gets autocrlf and .gitattributes right, which a
+    # hand-rolled CRLF normalisation does not.
+    worker_dirty = run(
+        ["git", "status", "--porcelain", "--", WORKER_PATH], check=False
+    ).stdout.strip()
+    if worker_dirty:
         raise Abort(
-            f"{WORKER_PATH} on disk differs from HEAD. The pack is built from the\n"
-            "  tag's tree, so uncommitted worker changes would not reach it."
+            f"{WORKER_PATH} has uncommitted changes:\n"
+            f"      {worker_dirty}\n"
+            "  The pack is built from the tag's tree, so they would not reach it.\n"
+            "  Commit them first."
         )
-    ok(f"{WORKER_PATH} at HEAD matches the working tree")
+    ok(f"{WORKER_PATH} is committed and matches HEAD")
 
     action(f"Tagging and pushing {tag}")
     run(["git", "tag", tag])

@@ -104,6 +104,9 @@ SEMVER = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.\-]+)?(?:\+[0-9A-Za-z.\-]+)?$
 
 PHASES = ["preflight", "sync", "pack", "app", "sign", "verify"]
 
+# Set from --dry-run in main(). Guards save_state so a rehearsal writes nothing.
+DRY_RUN = False
+
 
 # ─── Output ──────────────────────────────────────────────────────────────────
 
@@ -183,6 +186,10 @@ def load_state() -> dict:
 
 
 def save_state(state: dict) -> None:
+    # A rehearsal must leave nothing behind. Writing state during --dry-run made
+    # the next real run believe preflight had already passed and skip it.
+    if DRY_RUN:
+        return
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     STATE_PATH.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
 
@@ -651,11 +658,26 @@ def main() -> int:
     p.add_argument("--yes", action="store_true", help="Do not prompt before the first push")
     args = p.parse_args()
 
+    global DRY_RUN
+    DRY_RUN = args.dry_run
+
     state = load_state() if args.resume else {}
     if args.resume and state.get("version") not in (None, VERSION):
         print(f"[!] Saved state is for {state.get('version')}, not {VERSION}. Starting fresh.")
         state = {}
     done = set(state.get("done", []))
+
+    # Decisions stick across a resume. Having to remember which flags the first
+    # invocation used is exactly the kind of thing that goes wrong halfway
+    # through an hour-long release.
+    for flag in ("allow_branch", "allow_dirty", "force_pack", "skip_tests"):
+        if getattr(args, flag):
+            state[flag] = True
+        elif state.get(flag):
+            setattr(args, flag, True)
+            warn(f"--{flag.replace('_', '-')} carried over from the earlier run")
+    if not args.dry_run:
+        save_state(state)
 
     todo = [args.only] if args.only else [ph for ph in PHASES if ph not in done]
     if not todo:
@@ -670,7 +692,14 @@ def main() -> int:
     if not args.dry_run and not args.yes and not args.only:
         print("\n  This pushes commits and tags to GitHub. Tags and release assets in this")
         print("  project are immutable -- a mistake costs a version number.")
-        if input("  Continue? [y/N] ").strip().lower() not in ("y", "yes"):
+        try:
+            answer = input("  Continue? [y/N] ").strip().lower()
+        except EOFError:
+            # No terminal attached (piped input, a wrapper script, CI). Declining
+            # is the safe reading, and it beats an unhandled traceback.
+            print("\n  No terminal to confirm on. Re-run with --yes to proceed.")
+            return 1
+        if answer not in ("y", "yes"):
             print("  Aborted.")
             return 1
 
@@ -679,7 +708,11 @@ def main() -> int:
             PHASE_FUNCS[phase](args, state)
     except Abort as exc:
         print(f"\n\033[31m[ABORT]\033[0m {exc}\n", file=sys.stderr)
-        print("  Fix the above, then: python scripts/release.py --resume", file=sys.stderr)
+        # Only add the generic hint when the message did not already give a
+        # specific command. Printing "--resume" under an abort that says to use
+        # "--allow-branch --resume" contradicts the instruction above it.
+        if "release.py" not in str(exc):
+            print("  Fix the above, then: python scripts/release.py --resume", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
         print("\n[!] Interrupted. Re-run with --resume to continue.", file=sys.stderr)

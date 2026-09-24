@@ -35,7 +35,7 @@ if str(REPO_ROOT) not in sys.path:
 from app.core.engine_manifest import get_current_platform_key
 
 MAX_ALLOWED_PACK_SIZE = 1900 * 1024 * 1024  # 1.9 GiB maximum limit
-DEFAULT_RELEASE_TAG = "docling-pack-v3"
+DEFAULT_RELEASE_TAG = "docling-pack-v5"
 
 # Relocatable CPython. See install_standalone_python() for why a virtualenv cannot
 # be used here. Pin the exact release so a rebuild is reproducible; the archive is

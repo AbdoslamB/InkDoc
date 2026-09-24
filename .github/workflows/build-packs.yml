@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Dedicated release tag to publish packs to (e.g. docling-pack-v3)"
+        description: "Dedicated release tag to publish packs to (e.g. docling-pack-v5)"
         required: true
-        default: "docling-pack-v3"
+        default: "docling-pack-v5"
 
 permissions:
   contents: write
@@ -17,7 +17,7 @@ permissions:
   attestations: write
 
 env:
-  DEFAULT_RELEASE_TAG: "docling-pack-v3"
+  DEFAULT_RELEASE_TAG: "docling-pack-v5"
 
 jobs:
   build-pack:
@@ -50,8 +50,8 @@ jobs:
           # weights and with a worker that could not import docling; v2 shipped a
           # virtualenv that could not start on any machine but the build runner.
           case "$TARGET_TAG" in
-            docling-pack-v1|docling-pack-v2)
-              echo "::error::${TARGET_TAG} is published and immutable. Build a new tag (docling-pack-v3)."
+            docling-pack-v1|docling-pack-v2|docling-pack-v3|docling-pack-v4)
+              echo "::error::${TARGET_TAG} is published and immutable. Build a new tag (docling-pack-v5)."
               exit 1
               ;;
           esac
@@ -88,7 +88,7 @@ jobs:
           print("1" if exists else "0")
           ')
             if [ "$ASSET_EXISTS" = "1" ]; then
-              echo "::error::Asset for platform '${{ matrix.platform }}' already exists on release tag '${TARGET_TAG}'. Pack assets are immutable! Rebuilds must bump the release tag (e.g. docling-pack-v3)."
+              echo "::error::Asset for platform '${{ matrix.platform }}' already exists on release tag '${TARGET_TAG}'. Pack assets are immutable! Rebuilds must bump the release tag (e.g. docling-pack-v5)."
               exit 1
             fi
             echo "[OK] Immutability check passed: asset does not yet exist on release '${TARGET_TAG}'."
@@ -143,8 +143,8 @@ jobs:
           # weights and with a worker that could not import docling; v2 shipped a
           # virtualenv that could not start on any machine but the build runner.
           case "$TARGET_TAG" in
-            docling-pack-v1|docling-pack-v2)
-              echo "::error::${TARGET_TAG} is published and immutable. Build a new tag (docling-pack-v3)."
+            docling-pack-v1|docling-pack-v2|docling-pack-v3|docling-pack-v4)
+              echo "::error::${TARGET_TAG} is published and immutable. Build a new tag (docling-pack-v5)."
               exit 1
               ;;
           esac

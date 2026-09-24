@@ -99,7 +99,7 @@ def build(output_dir: Path, model_source: Path | None) -> dict:
             "archive_format": "tar.gz",
             "size_bytes": archive.stat().st_size,
             "uncompressed_size_bytes": uncompressed,
-            "min_pack_version": "4.0.0",
+            "min_pack_version": "5.0.0",
             "min_app_version": "",
             "sha256_files": sha256_files,
         }

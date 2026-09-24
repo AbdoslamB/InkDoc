@@ -51,8 +51,10 @@ def test_shipped_catalogue_is_well_formed():
     raw = json.loads(CATALOGUE.read_text(encoding="utf-8"))
     entry = raw["addons"]["code_enrichment"]
     assert entry["model_dir"] == "docling-project--CodeFormulaV2"
-    # Must match the pack version Phase 4's workflow derives from docling-pack-v4.
-    assert entry["min_pack_version"] == "4.0.0"
+    # Must match the pack version the workflow derives from the release tag.
+    # docling-pack-v4 was published from a tree without the enrichment worker,
+    # and pack assets are immutable, so v5 is the first usable pack.
+    assert entry["min_pack_version"] == "5.0.0"
     print("[OK] test_shipped_catalogue_is_well_formed passed")
 
 

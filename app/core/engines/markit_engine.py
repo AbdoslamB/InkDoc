@@ -29,6 +29,11 @@ logger = logging.getLogger(__name__)
 
 MARKIT_VERSION = "0.6.1"
 
+# On Windows, running a console-subsystem executable (npx, wsl) as a child of this
+# windowed app pops up a visible Command Prompt; closing that window kills the
+# child. CREATE_NO_WINDOW stops a console from being allocated for it at all.
+_WIN_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
 
 def is_markit_available() -> bool:
     """Return True if Markit conversion support is available."""
@@ -69,6 +74,7 @@ def convert_with_markit(item: QueueItem, options: ConversionOptions) -> str:
                     errors="replace",
                     shell=False,
                     check=False,
+                    creationflags=_WIN_NO_WINDOW,
                 )
                 if result.returncode == 0 and result.stdout.strip():
                     return result.stdout
@@ -134,6 +140,7 @@ def convert_with_markit(item: QueueItem, options: ConversionOptions) -> str:
                     errors="replace",
                     shell=False,
                     check=False,
+                    creationflags=_WIN_NO_WINDOW,
                 )
                 if res.returncode == 0 and res.stdout.strip():
                     return res.stdout

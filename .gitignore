@@ -7,6 +7,11 @@ env/
 *.egg-info/
 build/
 dist/
+
+# Local manual-test builds (scripts/build_local_exe.ps1)
+dist-local/
+build-local/
+dist-onefile/
 *.spec
 .vscode/
 .idea/

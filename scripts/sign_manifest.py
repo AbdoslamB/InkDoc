@@ -169,28 +169,69 @@ def main() -> int:
     manifest_assets: dict[str, Any] = {}
     temp_dir = Path(tempfile.mkdtemp(prefix="inkdoc_release_"))
 
-    try:
-        print("[*] Downloading and verifying release assets...")
-        for asset in assets:
-            name = asset["name"]
-            if name not in TARGET_ASSETS and not name.startswith("SHA256SUMS"):
-                continue
+    def canonical_url(filename: str) -> str:
+        """Where the asset will live once the release is published.
 
-            dl_url = asset["browser_download_url"]
-            dest = temp_dir / name
+        Deliberately not the URL the API reports now. While the release is a
+        draft that is .../releases/download/untagged-<slug>/<file>, and the slug
+        stops resolving the moment the draft is published under its tag --
+        signing it would ship dead download links to every client.
+        """
+        return f"https://github.com/{args.repo}/releases/download/{args.tag}/{filename}"
+
+    try:
+        wanted = [
+            a["name"] for a in assets
+            if a["name"] in TARGET_ASSETS or a["name"].startswith("SHA256SUMS")
+        ]
+        if not wanted:
+            print("[Error] Release has none of the expected assets.", file=sys.stderr)
+            return 1
+
+        print("[*] Downloading and verifying release assets...")
+        for name in wanted:
             print(f"  -> Fetching {name}...")
-            urllib.request.urlretrieve(dl_url, dest)
+
+        if gh_available:
+            # gh authenticates. Draft assets require it: their public download
+            # URL returns 404 until the release is published, so urlretrieve --
+            # which sends no credentials -- cannot fetch them.
+            patterns: list[str] = []
+            for name in wanted:
+                patterns += ["--pattern", name]
+            subprocess.run(
+                ["gh", "release", "download", args.tag, "--repo", args.repo,
+                 "--dir", str(temp_dir), "--clobber", *patterns],
+                check=True,
+            )
+        else:
+            # The REST fallback does expose browser_download_url, but it can only
+            # reach a published release.
+            for asset in assets:
+                if asset["name"] not in wanted:
+                    continue
+                src = asset.get("browser_download_url")
+                if not src:
+                    print(
+                        f"[Error] No download URL for {asset['name']} and the gh CLI "
+                        "is unavailable. Draft assets need gh to authenticate.",
+                        file=sys.stderr,
+                    )
+                    return 1
+                urllib.request.urlretrieve(src, temp_dir / asset["name"])
+
+        for name in wanted:
+            dest = temp_dir / name
+            if not dest.is_file():
+                print(f"[Error] {name} was not downloaded.", file=sys.stderr)
+                return 1
 
             if name in TARGET_ASSETS:
-                asset_key = TARGET_ASSETS[name]
-                file_hash = compute_sha256(dest)
-                file_size = dest.stat().st_size
-
-                manifest_assets[asset_key] = {
+                manifest_assets[TARGET_ASSETS[name]] = {
                     "filename": name,
-                    "url": dl_url,
-                    "sha256": file_hash,
-                    "size_bytes": file_size,
+                    "url": canonical_url(name),
+                    "sha256": compute_sha256(dest),
+                    "size_bytes": dest.stat().st_size,
                     "install_method": "inno_silent" if name == "inkdoc-setup.exe" else "download_reveal",
                 }
 
@@ -215,7 +256,9 @@ def main() -> int:
         manifest_payload = build_manifest_payload(
             version=clean_version,
             issued_at=now_iso,
-            release_url=release_info.get("url") or f"https://github.com/{args.repo}/releases/tag/{args.tag}",
+            # Same reason as canonical_url: for a draft, release_info["url"] is
+            # the untagged-<slug> page, which disappears on publish.
+            release_url=f"https://github.com/{args.repo}/releases/tag/{args.tag}",
             release_notes=release_info.get("body") or "",
             assets=manifest_assets,
         )

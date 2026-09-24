@@ -531,80 +531,119 @@ def phase_app(args, state: dict) -> None:
     mark(state, "app", tag=tag)
 
 
-# ─── Phase 5: offline signing (attended) ─────────────────────────────────────
+# ─── Phase 5: provenance and offline signing ─────────────────────────────────
+
+def _download_assets(tag: str) -> Path:
+    dest = REPO_ROOT / "build" / "verify"
+    if dest.exists():
+        shutil.rmtree(dest, ignore_errors=True)
+    dest.mkdir(parents=True, exist_ok=True)
+    run(["gh", "release", "download", tag, "-R", REPO, "--dir", str(dest), "--clobber"],
+        stream=True)
+    return dest
+
+
+def _verify_provenance(tag: str) -> None:
+    """Check every binary against its GitHub build attestation."""
+    dest = _download_assets(tag)
+    failures: list[str] = []
+    checked = 0
+    for f in sorted(dest.iterdir()):
+        # Checksums and the signed manifest are produced outside the build job,
+        # so they carry no build provenance of their own.
+        if not f.is_file() or f.name == SIGNED_MANIFEST_ASSET or f.name.startswith("SHA256SUMS"):
+            continue
+        checked += 1
+        if run(["gh", "attestation", "verify", str(f), "--repo", REPO],
+               check=False).returncode == 0:
+            ok(f"provenance verified: {f.name}")
+        else:
+            failures.append(f.name)
+    if failures:
+        raise Abort("Provenance verification failed for: " + ", ".join(failures))
+    if not checked:
+        raise Abort(f"No binaries downloaded from {tag} to verify.")
+
+
+def confirm(question: str, *, assume_yes: bool) -> bool:
+    """Ask a yes/no question. Declines rather than throwing when there is no tty."""
+    if assume_yes:
+        print(f"  {question} [auto-yes]")
+        return True
+    try:
+        return input(f"  {question} [y/N] ").strip().lower() in ("y", "yes")
+    except EOFError:
+        print("\n  No terminal to confirm on. Re-run with --yes to proceed.")
+        return False
+
 
 def phase_sign(args, state: dict) -> None:
-    banner("PHASE 5/6  OFFLINE SIGNING")
+    banner("PHASE 5/6  PROVENANCE AND SIGNING")
     tag = f"v{VERSION}"
 
     if args.dry_run:
         if "-" in VERSION:
-            action("[dry-run] pre-release: publishes automatically, no signing pause")
+            action("[dry-run] pre-release: publishes automatically, nothing to sign")
         else:
-            action("[dry-run] would stop here for offline signing, then --resume")
+            action("[dry-run] would verify provenance, then run sign_manifest.py")
         return
 
     if "-" in VERSION:
-        ok("Pre-release: release.yml publishes it automatically, no signing needed")
+        ok("Pre-release: release.yml publishes it automatically, nothing to sign")
         mark(state, "sign")
         return
 
     assets = {a["name"] for a in (gh_json(
         ["release", "view", tag, "-R", REPO, "--json", "assets"]) or {}).get("assets", [])}
     if SIGNED_MANIFEST_ASSET in assets:
-        ok(f"{SIGNED_MANIFEST_ASSET} is already attached")
+        ok(f"{SIGNED_MANIFEST_ASSET} is already attached -- signing already done")
         mark(state, "sign")
         return
 
-    mark(state, "app")  # everything before signing is durably done
+    # The runbook verifies provenance before signing, and so does this: signing
+    # vouches for these bytes, so their origin should be established first.
+    step("Verifying build provenance before signing")
+    _verify_provenance(tag)
 
-    # Emit commands for the shell the maintainer is actually in. A bash for-loop
-    # is a parse error in PowerShell, and this project is developed on Windows.
-    if sys.platform == "win32":
-        verify_cmd = (
-            f"gh release download {tag} --dir build/verify -R {REPO} --clobber\n"
-            f"       Get-ChildItem build/verify -File | "
-            f"ForEach-Object {{ gh attestation verify $_.FullName --repo {REPO} }}"
+    key_file = Path.home() / ".inkdoc-keys" / "inkdoc_signing_key.pem"
+    if not key_file.is_file():
+        warn(f"No signing key at {key_file}")
+        warn("sign_manifest.py will tell you where it expects one.")
+
+    print()
+    print("  The signing key is encrypted and its passphrase is never stored, so")
+    print("  this next step asks you for it directly. Nothing is published by it:")
+    print("  it only attaches the signed manifest to the draft.")
+    print()
+    if not confirm(f"Sign and upload the update manifest for {tag}?", assume_yes=args.yes):
+        raise Abort(
+            "Signing declined. The draft is intact; re-run with --resume when ready."
         )
-    else:
-        verify_cmd = (
-            f"gh release download {tag} --dir build/verify -R {REPO} --clobber\n"
-            f'       for f in build/verify/*; do gh attestation verify "$f" --repo {REPO}; done'
+
+    # stream=True inherits this terminal, which is what lets getpass prompt for
+    # the passphrase normally. Capturing stdio here would hang on a hidden prompt.
+    step("Running scripts/sign_manifest.py (it will prompt for your passphrase)")
+    run([sys.executable, "scripts/sign_manifest.py", "--tag", tag], stream=True)
+
+    assets = {a["name"] for a in (gh_json(
+        ["release", "view", tag, "-R", REPO, "--json", "assets"]) or {}).get("assets", [])}
+    if SIGNED_MANIFEST_ASSET not in assets:
+        raise Abort(
+            f"sign_manifest.py finished but {SIGNED_MANIFEST_ASSET} is not attached "
+            f"to {tag}. Check its output above."
         )
-
-    print(f"""
-  \033[1mThis is the one step that cannot be automated.\033[0m
-
-  scripts/sign_manifest.py unlocks an encrypted Ed25519 key with a passphrase.
-  That key is what the in-app updater verifies against and it never touches CI.
-  Automating it would mean storing it unencrypted, which is the thing the design
-  is built to avoid.
-
-  Run these now, in this order:
-
-    1. Verify build provenance
-       {verify_cmd}
-
-    2. Sign and upload the update manifest
-       python scripts/sign_manifest.py --tag {tag}
-
-    3. Come back and finish:
-       python scripts/release.py --resume
-
-  Step 3 verifies the signed manifest landed, checks provenance on every asset,
-  and then tells you how to publish. Nothing is published until you do.
-""")
-    raise SystemExit(0)
+    ok(f"{SIGNED_MANIFEST_ASSET} attached to the draft")
+    mark(state, "sign")
 
 
-# ─── Phase 6: verification ───────────────────────────────────────────────────
+# ─── Phase 6: final verification and publication ─────────────────────────────
 
 def phase_verify(args, state: dict) -> None:
-    banner("PHASE 6/6  VERIFY")
+    banner("PHASE 6/6  VERIFY AND PUBLISH")
     tag = f"v{VERSION}"
 
     if args.dry_run:
-        action("[dry-run] would verify assets, provenance and publication state")
+        action("[dry-run] would verify every asset, then offer to publish")
         return
 
     info = gh_json(["release", "view", tag, "-R", REPO,
@@ -616,52 +655,76 @@ def phase_verify(args, state: dict) -> None:
         raise Abort(f"Release {tag} is missing: {', '.join(missing)}")
     ok(f"All {len(REQUIRED_ASSETS)} binaries present")
 
-    if not any(a.startswith("SHA256SUMS") for a in assets):
-        warn("No SHA256SUMS-*.txt asset found")
-    else:
+    if any(a.startswith("SHA256SUMS") for a in assets):
         ok("Checksum files present")
+    else:
+        warn("No SHA256SUMS-*.txt asset found")
 
     is_pre = bool(info.get("isPrerelease"))
     if not is_pre:
         if SIGNED_MANIFEST_ASSET not in assets:
             raise Abort(
                 f"{SIGNED_MANIFEST_ASSET} is not attached to {tag}.\n"
-                f"  Run: python scripts/sign_manifest.py --tag {tag}"
+                f"  Run: python scripts/release.py --resume"
             )
         ok(f"{SIGNED_MANIFEST_ASSET} is attached")
 
-    step("Verifying build provenance attestations")
-    dest = REPO_ROOT / "build" / "verify"
-    if dest.exists():
-        shutil.rmtree(dest, ignore_errors=True)
-    dest.mkdir(parents=True, exist_ok=True)
-    run(["gh", "release", "download", tag, "-R", REPO, "--dir", str(dest), "--clobber"],
-        stream=True)
-    failures = []
-    for f in sorted(dest.iterdir()):
-        if not f.is_file() or f.name in (SIGNED_MANIFEST_ASSET,) or f.name.startswith("SHA256SUMS"):
-            continue
-        r = run(["gh", "attestation", "verify", str(f), "--repo", REPO], check=False)
-        (ok if r.returncode == 0 else failures.append)(
-            f"provenance verified: {f.name}" if r.returncode == 0 else f.name)
-    if failures:
-        raise Abort("Provenance verification failed for: " + ", ".join(failures))
+    # Phase 5 verified provenance before signing; re-run only if it was skipped
+    # (a pre-release, or a resume that found the manifest already attached).
+    if "sign" not in set(state.get("done", [])) or is_pre:
+        step("Verifying build provenance")
+        _verify_provenance(tag)
+
+    if not info.get("isDraft"):
+        ok("Release is already published")
+        mark(state, "verify")
+        banner("RELEASE COMPLETE")
+        print(f"  {info.get('url', '')}\n")
+        return
+
+    if is_pre:
+        ok("Pre-release published by CI")
+        mark(state, "verify")
+        return
+
+    # The one decision left that a script should not make on its own.
+    print()
+    print("  Everything checks out. Publishing marks this release \033[1mLatest\033[0m, which")
+    print("  is what /releases/latest/download/ resolves to -- so every existing")
+    print("  install will see it as the update on their next check.")
+    print()
+    print(f"  Draft: {info.get('url', '')}")
+    print()
+    if not confirm(f"Publish {tag} and mark it Latest?", assume_yes=args.yes):
+        mark(state, "verify")
+        banner("VERIFIED, NOT PUBLISHED")
+        print(
+            f"  The draft is complete and signed. Publish it when you are ready:\n\n"
+            f"      gh release edit {tag} -R {REPO} --draft=false --latest\n\n"
+            f"  or re-run: python scripts/release.py --resume\n"
+        )
+        return
+
+    step("Publishing and marking Latest")
+    run(["gh", "release", "edit", tag, "-R", REPO, "--draft=false", "--latest"], stream=True)
+
+    final = gh_json(["release", "view", tag, "-R", REPO,
+                     "--json", "isDraft,isLatest,url"]) or {}
+    if final.get("isDraft"):
+        raise Abort(f"{tag} is still a draft after publishing. Check the GitHub UI.")
+    if not final.get("isLatest"):
+        raise Abort(
+            f"{tag} published but is NOT marked Latest. The updater resolves\n"
+            f"  /releases/latest/download/, so it would 404 for every client.\n"
+            f"      gh release edit {tag} -R {REPO} --latest"
+        )
+    ok("Published and marked Latest")
 
     mark(state, "verify")
-    banner("RELEASE READY")
-    print(f"  {info.get('url', '')}\n")
-    if info.get("isDraft"):
-        print(
-            "  The release is still a \033[1mdraft\033[0m, which is intentional.\n\n"
-            "  Publish it in the GitHub UI with \033[1mSet as the latest release\033[0m ticked.\n"
-            "  That tick matters: the updater resolves /releases/latest/download/, so a\n"
-            "  release published without it still 404s for every client.\n"
-        )
-    else:
-        print("  Published.\n")
+    banner("RELEASE COMPLETE")
+    print(f"  {final.get('url', '')}\n")
 
 
-# ─── Driver ──────────────────────────────────────────────────────────────────
 
 PHASE_FUNCS = {
     "preflight": phase_preflight,

@@ -1,0 +1,662 @@
+#!/usr/bin/env python3
+"""One-command InkDoc release driver.
+
+Set VERSION below, run the script, and it carries the release from the current
+working tree through to a verified, published release -- pausing only where a
+human genuinely has to act.
+
+    python scripts/release.py                 # preflight, plan, then run
+    python scripts/release.py --dry-run       # show the plan, touch nothing
+    python scripts/release.py --resume        # continue after offline signing
+    python scripts/release.py --only preflight
+
+What it does NOT do, on purpose
+-------------------------------
+Two steps are deliberately left to you, because automating them would remove the
+security property they exist to provide:
+
+1. `scripts/sign_manifest.py` unlocks an encrypted Ed25519 key with a passphrase.
+   That key is what the in-app updater verifies against, and it never touches CI
+   or disk in plaintext. A script that could sign unattended would defeat the
+   threat model in docs/RELEASE_RUNBOOK.md section 1.
+
+2. Publishing a stable release with "Set as the latest release" ticked. The
+   updater resolves /releases/latest/download/, so marking a release Latest
+   before its signed manifest is attached makes every client 404 -- which is
+   exactly what v1.0.2 did. release.yml stops stable tags at a draft for this
+   reason; this script respects that and stops with instructions.
+
+Everything else -- pushing, waiting on CI, the conditional engine-pack rebuild,
+the manifest commit-back, tagging, asset and provenance verification -- runs
+without intervention.
+
+Ordering, and why it is not linear
+----------------------------------
+build_pack.py copies exactly one repository file into an engine pack:
+app/core/engines/worker.py. So a pack only needs rebuilding when that file has
+changed since the last pack tag, and this script checks rather than assuming --
+a pack build is roughly an hour across three runners.
+
+When a pack IS rebuilt there is a cycle to respect: the pack workflow emits a
+manifest.json that must be committed back into app/core/manifest.json, because
+release.yml runs verify_engine_manifest_guard.py, which makes live HEAD/Range
+requests against the published pack URLs. The app release therefore cannot start
+until the pack release has finished and its manifest has landed on main.
+
+Failure and resumption
+----------------------
+Progress is written to build/.release-state.json after every phase, so a failure
+during a forty-minute CI wait resumes instead of restarting. Tags and release
+assets are immutable in this project; the script asserts preconditions and
+aborts rather than guessing, because every incident in this repo's history came
+from a precondition nobody checked -- a pack that shipped a virtualenv which
+could not start, a pack built from a tree without the enrichment worker, and a
+commit made on a detached HEAD that a later checkout orphaned.
+"""
+from __future__ import annotations
+
+# ─── The only line you normally change ───────────────────────────────────────
+VERSION = "1.0.4"
+# A tag containing a hyphen (e.g. "1.0.4-rc1") is a pre-release: release.yml
+# publishes those automatically and they are never marked Latest, so the signing
+# pause below does not apply to them.
+# ─────────────────────────────────────────────────────────────────────────────
+
+import argparse
+import json
+import re
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+STATE_PATH = REPO_ROOT / "build" / ".release-state.json"
+
+REPO = "AbdoslamB/InkDoc"
+WORKER_PATH = "app/core/engines/worker.py"
+MANIFEST_PATH = REPO_ROOT / "app" / "core" / "manifest.json"
+
+RELEASE_WORKFLOW = "Release"
+CI_WORKFLOW = "CI"
+PACK_WORKFLOW = "Build Engine Packs"
+
+# Asserted by release.yml's publish-release job before it will go further.
+REQUIRED_ASSETS = [
+    "inkdoc-setup.exe",
+    "inkdoc.exe",
+    "inkdoc-windows.zip",
+    "inkdoc-macos.zip",
+    "inkdoc-linux.zip",
+]
+SIGNED_MANIFEST_ASSET = "inkdoc-update-manifest.json"
+
+# Pack tags are immutable once published; the workflow refuses to reuse them.
+BURNED_PACK_TAGS = {
+    "docling-pack-v1",  # shipped without model weights
+    "docling-pack-v2",  # shipped a virtualenv that could not start
+    "docling-pack-v3",  # superseded
+    "docling-pack-v4",  # built from a tree without the enrichment worker
+}
+
+SEMVER = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.\-]+)?(?:\+[0-9A-Za-z.\-]+)?$")
+
+PHASES = ["preflight", "sync", "pack", "app", "sign", "verify"]
+
+
+# ─── Output ──────────────────────────────────────────────────────────────────
+
+class Abort(Exception):
+    """A precondition failed. The message explains what to do about it."""
+
+
+def banner(text: str) -> None:
+    print(f"\n\033[1m{'=' * 72}\n{text}\n{'=' * 72}\033[0m", flush=True)
+
+
+def step(text: str) -> None:
+    print(f"  [*] {text}", flush=True)
+
+
+def ok(text: str) -> None:
+    print(f"  \033[32m[OK]\033[0m {text}", flush=True)
+
+
+def warn(text: str) -> None:
+    print(f"  \033[33m[!]\033[0m {text}", flush=True)
+
+
+def action(text: str) -> None:
+    print(f"  \033[36m[>]\033[0m {text}", flush=True)
+
+
+# ─── Process helpers ─────────────────────────────────────────────────────────
+
+def run(
+    cmd: list[str],
+    *,
+    capture: bool = True,
+    check: bool = True,
+    cwd: Path | None = None,
+    stream: bool = False,
+) -> subprocess.CompletedProcess:
+    """Run a command. `stream` lets long CI waits print as they go."""
+    if stream:
+        proc = subprocess.run(cmd, cwd=cwd or REPO_ROOT)
+        if check and proc.returncode != 0:
+            raise Abort(f"Command failed ({proc.returncode}): {' '.join(cmd)}")
+        return proc
+    proc = subprocess.run(
+        cmd,
+        cwd=cwd or REPO_ROOT,
+        capture_output=capture,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if check and proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()
+        raise Abort(f"Command failed ({proc.returncode}): {' '.join(cmd)}\n{detail}")
+    return proc
+
+
+def out(cmd: list[str], **kw) -> str:
+    return (run(cmd, **kw).stdout or "").strip()
+
+
+def git(*args: str, **kw) -> str:
+    return out(["git", *args], **kw)
+
+
+def gh_json(args: list[str]) -> object:
+    return json.loads(out(["gh", *args]) or "null")
+
+
+# ─── State ───────────────────────────────────────────────────────────────────
+
+def load_state() -> dict:
+    try:
+        return json.loads(STATE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_state(state: dict) -> None:
+    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    STATE_PATH.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+
+
+def mark(state: dict, phase: str, **extra) -> None:
+    state.setdefault("done", [])
+    if phase not in state["done"]:
+        state["done"].append(phase)
+    state.update(extra)
+    state["version"] = VERSION
+    save_state(state)
+
+
+# ─── CI helpers ──────────────────────────────────────────────────────────────
+
+def find_run(workflow: str, head: str, timeout: float = 300.0) -> int:
+    """Find the workflow run for a branch or tag, waiting for it to appear.
+
+    A tag push takes a few seconds to register a run, so this polls rather than
+    failing on the first empty result.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        runs = gh_json([
+            "run", "list", "-R", REPO, "--workflow", workflow,
+            "--limit", "30", "--json", "databaseId,headBranch,status,conclusion",
+        ]) or []
+        for r in runs:
+            if r.get("headBranch") == head:
+                return int(r["databaseId"])
+        time.sleep(5)
+    raise Abort(
+        f"No '{workflow}' run appeared for '{head}' within {int(timeout)}s.\n"
+        f"Check https://github.com/{REPO}/actions"
+    )
+
+
+def watch_run(run_id: int, label: str) -> None:
+    action(f"Watching {label} (run {run_id}) -- this can take a while")
+    run(["gh", "run", "watch", str(run_id), "-R", REPO, "--exit-status", "--compact"],
+        stream=True)
+    conclusion = out([
+        "gh", "run", "view", str(run_id), "-R", REPO, "--json", "conclusion",
+        "-q", ".conclusion",
+    ])
+    if conclusion != "success":
+        raise Abort(
+            f"{label} concluded '{conclusion}'.\n"
+            f"  gh run view {run_id} -R {REPO} --log-failed"
+        )
+    ok(f"{label} succeeded")
+
+
+# ─── Phase 1: preflight ──────────────────────────────────────────────────────
+
+def phase_preflight(args, state: dict) -> None:
+    banner("PHASE 1/6  PREFLIGHT")
+
+    if not SEMVER.match(VERSION):
+        raise Abort(f"VERSION '{VERSION}' is not semantic (expected e.g. 1.0.4 or 1.0.4-rc1).")
+    ok(f"VERSION {VERSION} is well formed")
+
+    for tool in ("git", "gh"):
+        if not shutil.which(tool):
+            raise Abort(f"'{tool}' is not on PATH.")
+    ok("git and gh are available")
+
+    # The failure that orphaned a commit once already: committing on a detached
+    # HEAD, then losing it to the next checkout.
+    branch = git("rev-parse", "--abbrev-ref", "HEAD")
+    if branch == "HEAD":
+        raise Abort(
+            "HEAD is detached. Commits made here are not on any branch and a later\n"
+            "  checkout will orphan them. Create a branch first:\n"
+            "      git switch -c <branch-name>"
+        )
+    ok(f"On branch '{branch}'")
+    state["branch"] = branch
+
+    run(["gh", "auth", "status"])
+    remote = git("remote", "get-url", "origin")
+    if REPO.lower() not in remote.lower():
+        raise Abort(f"origin is '{remote}', expected it to point at {REPO}.")
+    ok(f"gh authenticated, origin is {REPO}")
+
+    dirty = git("status", "--porcelain")
+    if dirty and not args.allow_dirty:
+        raise Abort(
+            "Working tree has uncommitted changes. Commit them (they must be in the\n"
+            "  tag for the build to contain them), or re-run with --allow-dirty if\n"
+            "  they are deliberately not part of this release:\n"
+            + "\n".join(f"      {ln}" for ln in dirty.splitlines()[:12])
+        )
+    ok("Working tree is clean" if not dirty else "Working tree dirty (--allow-dirty)")
+
+    tag = f"v{VERSION}"
+    if git("tag", "--list", tag):
+        raise Abort(f"Tag {tag} already exists locally. Bump VERSION or delete it.")
+    if out(["git", "ls-remote", "--tags", "origin", tag]):
+        raise Abort(f"Tag {tag} already exists on origin. Bump VERSION.")
+    # release.yml aborts if a release or draft already exists for the tag.
+    existing = run(["gh", "release", "view", tag, "-R", REPO], check=False)
+    if existing.returncode == 0:
+        raise Abort(f"A release or draft already exists for {tag}. Bump VERSION.")
+    ok(f"Tag {tag} is free locally, on origin, and as a release")
+
+    changelog = REPO_ROOT / "CHANGELOG.md"
+    if changelog.is_file():
+        text = changelog.read_text(encoding="utf-8", errors="replace")
+        if f"## [{VERSION}]" in text:
+            ok(f"CHANGELOG has a [{VERSION}] section")
+        else:
+            warn(
+                f"CHANGELOG.md has no '## [{VERSION}]' section. The release notes are "
+                "generated by GitHub, so this is not fatal, but the changelog will lag."
+            )
+
+    if args.skip_tests:
+        warn("Local test suite skipped (--skip-tests)")
+    else:
+        py = sys.executable
+        step("ruff check .")
+        run([py, "-m", "ruff", "check", "."], stream=True)
+        step("compileall")
+        run([py, "-m", "compileall", "-q", "main.py", "app", "tests", "scripts"], stream=True)
+        step("pytest tests/")
+        run([py, "-m", "pytest", "tests/", "-q"], stream=True)
+        ok("Lint, compile and tests pass")
+
+    mark(state, "preflight")
+
+
+# ─── Phase 2: sync ───────────────────────────────────────────────────────────
+
+def phase_sync(args, state: dict) -> None:
+    banner("PHASE 2/6  PUSH AND WAIT FOR CI")
+    branch = state.get("branch") or git("rev-parse", "--abbrev-ref", "HEAD")
+
+    if args.dry_run:
+        action(f"[dry-run] would push '{branch}' to origin and wait for {CI_WORKFLOW}")
+        return
+
+    action(f"Pushing '{branch}' to origin")
+    run(["git", "push", "-u", "origin", branch], stream=True)
+    ok("Pushed")
+
+    # CI only runs on main and on pull requests. A feature branch with no PR has
+    # nothing to wait for, and blocking on a run that will never exist is worse
+    # than saying so.
+    if branch == "main":
+        watch_run(find_run(CI_WORKFLOW, branch), f"{CI_WORKFLOW} on {branch}")
+    else:
+        pr = gh_json(["pr", "list", "-R", REPO, "--head", branch, "--json", "number,url"]) or []
+        if pr:
+            watch_run(find_run(CI_WORKFLOW, branch), f"{CI_WORKFLOW} on {branch}")
+            warn(f"Open PR {pr[0]['url']} must be merged to main before tagging.")
+            raise Abort(
+                "Release tags are cut from main. Merge the PR, then re-run with --resume."
+            )
+        raise Abort(
+            f"Branch '{branch}' is not main and has no open PR.\n"
+            f"  Release tags must be cut from main. Open and merge a PR, then:\n"
+            f"      git switch main && git pull\n"
+            f"      python scripts/release.py --resume"
+        )
+
+    mark(state, "sync")
+
+
+# ─── Phase 3: engine pack (conditional) ──────────────────────────────────────
+
+def last_pack_tag() -> str | None:
+    tags = git("tag", "--list", "docling-pack-v*").split()
+    if not tags:
+        return None
+    def n(t: str) -> int:
+        m = re.search(r"v(\d+)$", t)
+        return int(m.group(1)) if m else -1
+    return max(tags, key=n)
+
+
+def next_pack_tag() -> str:
+    nums = [int(m.group(1))
+            for t in git("tag", "--list", "docling-pack-v*").split()
+            if (m := re.search(r"v(\d+)$", t))]
+    nums += [int(m.group(1)) for t in BURNED_PACK_TAGS if (m := re.search(r"v(\d+)$", t))]
+    return f"docling-pack-v{max(nums, default=0) + 1}"
+
+
+def phase_pack(args, state: dict) -> None:
+    banner("PHASE 3/6  ENGINE PACK (conditional)")
+
+    prev = last_pack_tag()
+    if args.force_pack:
+        changed = True
+        step("--force-pack given")
+    elif prev is None:
+        changed = True
+        step("No previous pack tag found")
+    else:
+        # The only repository file build_pack.py copies into a pack.
+        diff = run(["git", "diff", "--quiet", prev, "HEAD", "--", WORKER_PATH], check=False)
+        changed = diff.returncode != 0
+        step(f"{WORKER_PATH} {'changed' if changed else 'unchanged'} since {prev}")
+
+    if not changed:
+        ok("Engine pack is up to date -- skipping a ~1 hour rebuild")
+        mark(state, "pack", pack_skipped=True)
+        return
+
+    tag = next_pack_tag()
+    if tag in BURNED_PACK_TAGS:
+        raise Abort(f"{tag} is published and immutable. Bump past it.")
+    ok(f"Next pack tag: {tag}")
+
+    if args.dry_run:
+        action(f"[dry-run] would tag {tag}, watch {PACK_WORKFLOW}, commit its manifest")
+        return
+
+    # A pack built from a tree without the current worker silently ships a worker
+    # that ignores its options. That is exactly how docling-pack-v4 was burned.
+    head_worker = out(["git", "show", f"HEAD:{WORKER_PATH}"])
+    disk_worker = (REPO_ROOT / WORKER_PATH).read_text(encoding="utf-8", errors="replace")
+    if head_worker.replace("\r\n", "\n") != disk_worker.replace("\r\n", "\n"):
+        raise Abort(
+            f"{WORKER_PATH} on disk differs from HEAD. The pack is built from the\n"
+            "  tag's tree, so uncommitted worker changes would not reach it."
+        )
+    ok(f"{WORKER_PATH} at HEAD matches the working tree")
+
+    action(f"Tagging and pushing {tag}")
+    run(["git", "tag", tag])
+    run(["git", "push", "origin", tag], stream=True)
+    watch_run(find_run(PACK_WORKFLOW, tag), f"{PACK_WORKFLOW} ({tag})")
+
+    # Pull the number out first: a backslash inside an f-string needs 3.12+,
+    # and this has to run on whatever Python the maintainer has.
+    pack_num = re.search(r"v(\d+)$", tag).group(1)
+    expected_version = pack_num + ".0.0"
+    dest = REPO_ROOT / "build" / "packs"
+    dest.mkdir(parents=True, exist_ok=True)
+    action("Downloading the merged manifest")
+    run(["gh", "release", "download", tag, "-R", REPO,
+         "--pattern", "manifest.json", "--dir", str(dest), "--clobber"], stream=True)
+
+    data = json.loads((dest / "manifest.json").read_text(encoding="utf-8"))
+    got = data.get("pack_version")
+    if got != expected_version:
+        raise Abort(
+            f"Published pack reports pack_version '{got}', expected '{expected_version}'.\n"
+            "  That means the tag was cut from a tree without the workflow's\n"
+            "  --pack-version wiring, so the pack cannot be told apart from older\n"
+            "  ones. Do not ship it: fix main and cut the next tag."
+        )
+    ok(f"Manifest reports pack_version {got}")
+
+    shutil.copyfile(dest / "manifest.json", MANIFEST_PATH)
+    if git("status", "--porcelain", "--", str(MANIFEST_PATH.relative_to(REPO_ROOT))):
+        run(["git", "add", str(MANIFEST_PATH.relative_to(REPO_ROOT))])
+        run(["git", "commit", "-m", f"chore(docling): ship the {tag} manifest"])
+        run(["git", "push"], stream=True)
+        ok("Manifest committed and pushed")
+    else:
+        ok("Manifest already current")
+
+    mark(state, "pack", pack_tag=tag)
+
+
+# ─── Phase 4: app release ────────────────────────────────────────────────────
+
+def phase_app(args, state: dict) -> None:
+    banner("PHASE 4/6  APP RELEASE")
+    tag = f"v{VERSION}"
+
+    # release.yml runs this guard against the live pack URLs before it builds.
+    # Running it here turns a forty-minute CI failure into an instant one.
+    step("verify_engine_manifest_guard.py (live asset checks)")
+    run([sys.executable, "scripts/verify_engine_manifest_guard.py"], stream=True)
+    ok("Engine manifest guard passes")
+
+    if args.dry_run:
+        action(f"[dry-run] would tag {tag}, watch {RELEASE_WORKFLOW}, verify draft assets")
+        return
+
+    action(f"Tagging and pushing {tag}")
+    run(["git", "tag", tag])
+    run(["git", "push", "origin", tag], stream=True)
+    watch_run(find_run(RELEASE_WORKFLOW, tag), f"{RELEASE_WORKFLOW} ({tag})")
+
+    assets = {a["name"] for a in (gh_json(
+        ["release", "view", tag, "-R", REPO, "--json", "assets"]) or {}).get("assets", [])}
+    missing = [a for a in REQUIRED_ASSETS if a not in assets]
+    if missing:
+        raise Abort(f"Draft {tag} is missing required assets: {', '.join(missing)}")
+    ok(f"All {len(REQUIRED_ASSETS)} required assets present on the draft")
+
+    mark(state, "app", tag=tag)
+
+
+# ─── Phase 5: offline signing (attended) ─────────────────────────────────────
+
+def phase_sign(args, state: dict) -> None:
+    banner("PHASE 5/6  OFFLINE SIGNING")
+    tag = f"v{VERSION}"
+
+    if args.dry_run:
+        if "-" in VERSION:
+            action("[dry-run] pre-release: publishes automatically, no signing pause")
+        else:
+            action("[dry-run] would stop here for offline signing, then --resume")
+        return
+
+    if "-" in VERSION:
+        ok("Pre-release: release.yml publishes it automatically, no signing needed")
+        mark(state, "sign")
+        return
+
+    assets = {a["name"] for a in (gh_json(
+        ["release", "view", tag, "-R", REPO, "--json", "assets"]) or {}).get("assets", [])}
+    if SIGNED_MANIFEST_ASSET in assets:
+        ok(f"{SIGNED_MANIFEST_ASSET} is already attached")
+        mark(state, "sign")
+        return
+
+    mark(state, "app")  # everything before signing is durably done
+    print(f"""
+  \033[1mThis is the one step that cannot be automated.\033[0m
+
+  scripts/sign_manifest.py unlocks an encrypted Ed25519 key with a passphrase.
+  That key is what the in-app updater verifies against and it never touches CI.
+  Automating it would mean storing it unencrypted, which is the thing the design
+  is built to avoid.
+
+  Run these now, in this order:
+
+    1. Verify build provenance
+       gh release download {tag} --dir build/verify -R {REPO} --clobber
+       for f in build/verify/*; do gh attestation verify "$f" --repo {REPO}; done
+
+    2. Sign and upload the update manifest
+       python scripts/sign_manifest.py --tag {tag}
+
+    3. Come back and finish:
+       python scripts/release.py --resume
+
+  Step 3 verifies the signed manifest landed, checks provenance on every asset,
+  and then tells you how to publish. Nothing is published until you do.
+""")
+    raise SystemExit(0)
+
+
+# ─── Phase 6: verification ───────────────────────────────────────────────────
+
+def phase_verify(args, state: dict) -> None:
+    banner("PHASE 6/6  VERIFY")
+    tag = f"v{VERSION}"
+
+    if args.dry_run:
+        action("[dry-run] would verify assets, provenance and publication state")
+        return
+
+    info = gh_json(["release", "view", tag, "-R", REPO,
+                    "--json", "assets,isDraft,isPrerelease,url"]) or {}
+    assets = {a["name"] for a in info.get("assets", [])}
+
+    missing = [a for a in REQUIRED_ASSETS if a not in assets]
+    if missing:
+        raise Abort(f"Release {tag} is missing: {', '.join(missing)}")
+    ok(f"All {len(REQUIRED_ASSETS)} binaries present")
+
+    if not any(a.startswith("SHA256SUMS") for a in assets):
+        warn("No SHA256SUMS-*.txt asset found")
+    else:
+        ok("Checksum files present")
+
+    is_pre = bool(info.get("isPrerelease"))
+    if not is_pre:
+        if SIGNED_MANIFEST_ASSET not in assets:
+            raise Abort(
+                f"{SIGNED_MANIFEST_ASSET} is not attached to {tag}.\n"
+                f"  Run: python scripts/sign_manifest.py --tag {tag}"
+            )
+        ok(f"{SIGNED_MANIFEST_ASSET} is attached")
+
+    step("Verifying build provenance attestations")
+    dest = REPO_ROOT / "build" / "verify"
+    if dest.exists():
+        shutil.rmtree(dest, ignore_errors=True)
+    dest.mkdir(parents=True, exist_ok=True)
+    run(["gh", "release", "download", tag, "-R", REPO, "--dir", str(dest), "--clobber"],
+        stream=True)
+    failures = []
+    for f in sorted(dest.iterdir()):
+        if not f.is_file() or f.name in (SIGNED_MANIFEST_ASSET,) or f.name.startswith("SHA256SUMS"):
+            continue
+        r = run(["gh", "attestation", "verify", str(f), "--repo", REPO], check=False)
+        (ok if r.returncode == 0 else failures.append)(
+            f"provenance verified: {f.name}" if r.returncode == 0 else f.name)
+    if failures:
+        raise Abort("Provenance verification failed for: " + ", ".join(failures))
+
+    mark(state, "verify")
+    banner("RELEASE READY")
+    print(f"  {info.get('url', '')}\n")
+    if info.get("isDraft"):
+        print(
+            "  The release is still a \033[1mdraft\033[0m, which is intentional.\n\n"
+            "  Publish it in the GitHub UI with \033[1mSet as the latest release\033[0m ticked.\n"
+            "  That tick matters: the updater resolves /releases/latest/download/, so a\n"
+            "  release published without it still 404s for every client.\n"
+        )
+    else:
+        print("  Published.\n")
+
+
+# ─── Driver ──────────────────────────────────────────────────────────────────
+
+PHASE_FUNCS = {
+    "preflight": phase_preflight,
+    "sync": phase_sync,
+    "pack": phase_pack,
+    "app": phase_app,
+    "sign": phase_sign,
+    "verify": phase_verify,
+}
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--dry-run", action="store_true", help="Plan only; change nothing")
+    p.add_argument("--resume", action="store_true", help="Skip phases already recorded as done")
+    p.add_argument("--only", choices=PHASES, help="Run a single phase")
+    p.add_argument("--force-pack", action="store_true", help="Rebuild the engine pack unconditionally")
+    p.add_argument("--skip-tests", action="store_true", help="Skip the local test suite in preflight")
+    p.add_argument("--allow-dirty", action="store_true", help="Proceed with uncommitted changes")
+    p.add_argument("--yes", action="store_true", help="Do not prompt before the first push")
+    args = p.parse_args()
+
+    state = load_state() if args.resume else {}
+    if args.resume and state.get("version") not in (None, VERSION):
+        print(f"[!] Saved state is for {state.get('version')}, not {VERSION}. Starting fresh.")
+        state = {}
+    done = set(state.get("done", []))
+
+    todo = [args.only] if args.only else [ph for ph in PHASES if ph not in done]
+    if not todo:
+        print("Nothing to do -- every phase is already recorded as complete.")
+        return 0
+
+    banner(f"InkDoc release v{VERSION}"
+           + ("  [DRY RUN]" if args.dry_run else "")
+           + (f"\nresuming; already done: {', '.join(sorted(done))}" if done else ""))
+    print("  Plan: " + " -> ".join(todo))
+
+    if not args.dry_run and not args.yes and not args.only:
+        print("\n  This pushes commits and tags to GitHub. Tags and release assets in this")
+        print("  project are immutable -- a mistake costs a version number.")
+        if input("  Continue? [y/N] ").strip().lower() not in ("y", "yes"):
+            print("  Aborted.")
+            return 1
+
+    try:
+        for phase in todo:
+            PHASE_FUNCS[phase](args, state)
+    except Abort as exc:
+        print(f"\n\033[31m[ABORT]\033[0m {exc}\n", file=sys.stderr)
+        print("  Fix the above, then: python scripts/release.py --resume", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("\n[!] Interrupted. Re-run with --resume to continue.", file=sys.stderr)
+        return 130
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

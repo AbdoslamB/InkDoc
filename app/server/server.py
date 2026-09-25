@@ -17,6 +17,7 @@ import secrets
 import sys
 import tempfile
 import threading
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -219,7 +220,37 @@ def require_session_token(request: Request) -> None:
 _is_frozen = getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")
 _docs_enabled = (not _is_frozen) or os.environ.get("INKDOC_ENABLE_DOCS", "").lower() in ("1", "true")
 
+# Result of the startup reconciliation, served with GET /settings so the UI can
+# tell the user a toggle was turned off for them and why. Module level rather
+# than app.state because get_settings is a plain function, and this is read-only
+# after startup.
+_ADDON_RECONCILIATION: dict[str, Any] = {"cleared": [], "reason": ""}
+
+
+@contextlib.asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Reconcile settings against installed add-ons once, before serving.
+
+    Startup is the only place this can happen exactly once per run with the
+    filesystem in its final state. Doing it per request would repeat a disk check
+    on a hot path; doing it per conversion is what the removed
+    _effective_enrichment did, and that hid the inconsistency rather than
+    resolving it.
+    """
+    global _ADDON_RECONCILIATION
+    try:
+        from app.core.engine_manager import reconcile_addon_gated_settings
+
+        _ADDON_RECONCILIATION = reconcile_addon_gated_settings()
+    except Exception as exc:
+        # A failed reconciliation must never stop the server starting: every
+        # gated setting is still enforced at the point of use by the worker.
+        logger.warning("Add-on settings reconciliation failed: %s", exc)
+    yield
+
+
 app = FastAPI(
+    lifespan=_lifespan,
     title="InkDoc Local API",
     description=(
         "High-performance local REST API server for InkDoc multi-engine document-to-markdown workbench. "
@@ -694,6 +725,14 @@ def verify_engine(engine_name: str, request: Request):
     return EngineManager.get_instance().verify_full_installed_tree(engine_name)
 
 
+# Settings that cannot be turned on unless the recognition-model add-on is
+# usable. Docling loads the CodeFormula weights from the pack's pinned
+# artifacts_path at pipeline construction and raises when they are absent, so
+# persisting either flag without the model would break every Docling conversion.
+ENRICHMENT_SETTING_KEYS = ("docling_code_enrichment", "docling_formula_enrichment")
+ENRICHMENT_ADDON_NAME = "code_enrichment"
+
+
 @api_router.get("/addons", tags=["Addons"])
 def list_addons():
     """Status of every optional add-on, for the settings UI."""
@@ -754,9 +793,19 @@ def remove_addon(addon_name: str, request: Request):
     from app.core.addon_manager import AddonManager
 
     try:
-        return AddonManager.get_instance().remove(addon_name)
+        result = AddonManager.get_instance().remove(addon_name)
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    # The weights are gone, so any flag that depended on them has to go off too.
+    # Leaving them set would persist a state the update endpoint below refuses to
+    # accept, and every later Docling conversion would be refused by the worker.
+    if addon_name == ENRICHMENT_ADDON_NAME:
+        EngineManager.get_instance().update_settings(
+            {key: False for key in ENRICHMENT_SETTING_KEYS}
+        )
+
+    return result
 
 
 @api_router.post("/addons/{addon_name}/verify", tags=["Addons"])
@@ -770,8 +819,10 @@ def verify_addon(addon_name: str, request: Request):
 
 @api_router.get("/settings", tags=["Settings"])
 def get_settings():
-    """Retrieve current user settings."""
-    return EngineManager.get_instance().get_settings()
+    """Retrieve current user settings, plus anything startup had to correct."""
+    settings = dict(EngineManager.get_instance().get_settings())
+    settings["addon_reconciliation"] = _ADDON_RECONCILIATION
+    return settings
 
 
 @api_router.post("/settings", tags=["Settings"])
@@ -779,6 +830,20 @@ def update_settings(payload: SettingsPayload, request: Request):
     """Update user settings (e.g. fallback toggle, daily update check). Requires session token."""
     require_session_token(request)
     updates = {k: v for k, v in payload.dict().items() if v is not None}
+
+    if any(updates.get(key) for key in ENRICHMENT_SETTING_KEYS):
+        from app.core.addon_manager import AddonManager
+
+        status_info = AddonManager.get_instance().get_status(ENRICHMENT_ADDON_NAME)
+        if not status_info.get("usable"):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    status_info.get("reason")
+                    or "The code and formula recognition model is not installed."
+                ),
+            )
+
     return EngineManager.get_instance().update_settings(updates)
 
 

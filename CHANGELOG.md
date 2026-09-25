@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Code & Formula Enrichment could never be enabled.** Both toggles were
+  hardcoded `disabled` in the markup and no client code ever cleared the
+  attribute or called `/addons`, so a complete add-on backend shipped with no way
+  to install anything. Settings now carries an add-on card that renders every
+  state `AddonManager` reports and enables the toggles only when it reports
+  `usable`.
+- **The add-on artifact had no publication path.** `build_addon.py` printed a
+  catalogue entry containing the literal URL placeholder
+  `<publish the archive and put its URL here>` for someone to paste into
+  `addons.json` by hand. It now derives the asset URL from the release tag, the
+  same way `build_pack.py` does, and `build-addon.yml` publishes, attests and
+  re-verifies the asset before `release.py` commits the generated catalogue back.
+- **`get_status()` and `install()` disagreed on what "installable" meant.** Status
+  asked `bool(url) and bool(sha256)`, which the placeholder satisfied, so the UI
+  would have offered an Install button that always failed mid-download. Both now
+  use one `validate_addon_entry` predicate, which also classifies the legitimate
+  pre-release state instead of conflating it with a broken entry.
+- Enrichment toggle change handlers were registered inside `loadSettings()`,
+  which runs on every settings-popover open, so listeners accumulated one per
+  open. Registered once at startup instead.
+- An enrichment toggle can no longer be left checked while disabled, in either
+  order the settings popover's two concurrent refreshes resolve.
+
+### Added
+- `scripts/verify_addon_catalogue.py`, a fail-closed catalogue guard in CI
+  alongside the existing engine-manifest guard. An unreleased add-on passes; a
+  placeholder, half-filled or malformed entry does not.
+- A `capabilities` worker RPC reporting whether Docling can load the recognition
+  model, reading the model directory name off Docling's own class rather than
+  trusting a name in the catalogue. Installs are confirmed through it, and a pack
+  carrying a different Docling version marks the add-on as needing reinstall
+  instead of reporting it ready.
+- `tests/enrichment_addon_ui.test.js`, covering the toggle-enable invariant
+  across every add-on state and both popover refresh orders, and
+  `tests/test_addon_catalogue.py`, which installs over real HTTP — the download,
+  extraction and per-file hashing had only ever run with `stream_download`
+  stubbed out.
+- An `addon` phase in `release.py`, conditional like `pack`, which refuses to
+  publish an add-on that requires a pack newer than the one the app ships.
+
+### Changed
+- The add-on requires Docling pack **6.0.0**. `worker.py` is hashed into the pack
+  manifest and the launcher rejects a modified copy, so an older pack cannot be
+  given the capability RPC or the enrichment precheck.
+- Requesting enrichment without the model now fails with an actionable error
+  instead of silently converting without it. The error is exempt from
+  `fallback_to_markitdown`, which exists for documents Docling cannot parse, not
+  for a configuration inconsistency the user needs to see and fix.
+- Add-on-gated settings are reconciled against what is installed once at startup,
+  so a stale enabled flag is corrected where it is stored rather than worked
+  around on every conversion. `GET /settings` reports what was corrected and why.
+
+### Security
+- `POST /settings` refuses to enable either enrichment flag while the recognition
+  model is not usable, returning HTTP 409 with the reason, and removing the
+  add-on clears both flags. Previously the only thing preventing a persisted flag
+  with no model behind it was a disabled attribute in the markup.
+
 ## [1.0.1] - 2026-09-20
 
 ### Fixed & Hardened

@@ -185,11 +185,35 @@
                     <button type="button" class="btn btn-sm btn-ghost" id="btnDoclingCancel" style="display: none;">Cancel</button>
                   </div>
 
-                  <!-- Enrichment options. Disabled until the optional
-                       recognition model is installed; the state machine that
-                       enables them ships with the add-on. -->
+                  <!-- Enrichment options. Both toggles stay disabled until the
+                       optional recognition model add-on reports usable=true
+                       from /addons/code_enrichment; the add-on card below is
+                       what installs it. -->
                   <div class="engine-enrichment" id="doclingEnrichment">
                     <p class="engine-enrichment-title">Enrichment</p>
+
+                    <div class="engine-enrichment-addon">
+                      <div class="engine-enrichment-addon-head">
+                        <span class="engine-enrichment-addon-title" id="addonTitle">Code &amp; Formula Recognition</span>
+                        <span class="engine-badge engine-badge-not-installed" id="addonStatusBadge">Not Installed</span>
+                      </div>
+                      <p class="engine-enrichment-addon-reason" id="addonReason">Checking availability…</p>
+
+                      <div class="engine-progress-wrapper" id="addonProgressContainer" style="display: none;">
+                        <div class="engine-progress-bar">
+                          <div class="engine-progress-fill" id="addonProgressFill" style="width: 0%;"></div>
+                        </div>
+                        <div class="engine-progress-text" id="addonProgressText">Preparing…</div>
+                      </div>
+
+                      <div class="engine-actions">
+                        <button type="button" class="btn btn-sm btn-primary" id="btnAddonInstall">Install Model</button>
+                        <button type="button" class="btn btn-sm btn-secondary" id="btnAddonVerify" style="display: none;">Verify Integrity</button>
+                        <button type="button" class="btn btn-sm btn-danger" id="btnAddonRemove" style="display: none;">Remove Model</button>
+                        <button type="button" class="btn btn-sm btn-ghost" id="btnAddonCancel" style="display: none;">Cancel</button>
+                      </div>
+                    </div>
+
                     <label class="toggle-switch" title="Transcribe code blocks with the recognition model and label their programming language">
                       <input type="checkbox" id="doclingCodeEnrichmentToggle" disabled>
                       <span class="toggle-slider"></span>

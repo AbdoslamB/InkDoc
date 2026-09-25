@@ -174,6 +174,18 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnDoclingRemove        = document.getElementById("btnDoclingRemove");
   const btnDoclingCancel        = document.getElementById("btnDoclingCancel");
 
+  // Recognition-model add-on (gates the two enrichment toggles above it).
+  const addonTitleEl            = document.getElementById("addonTitle");
+  const addonStatusBadge        = document.getElementById("addonStatusBadge");
+  const addonReason             = document.getElementById("addonReason");
+  const addonProgressContainer  = document.getElementById("addonProgressContainer");
+  const addonProgressFill       = document.getElementById("addonProgressFill");
+  const addonProgressText       = document.getElementById("addonProgressText");
+  const btnAddonInstall         = document.getElementById("btnAddonInstall");
+  const btnAddonVerify          = document.getElementById("btnAddonVerify");
+  const btnAddonRemove          = document.getElementById("btnAddonRemove");
+  const btnAddonCancel          = document.getElementById("btnAddonCancel");
+
   const previewEngineTag        = document.getElementById("previewEngineTag");
   const previewFallbackBadge    = document.getElementById("previewFallbackBadge");
 
@@ -438,6 +450,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (isOpen) {
       loadSettings();
       fetchUpdateStatus();
+      refreshAddonStatus();
     }
   });
 
@@ -655,7 +668,278 @@ document.addEventListener("DOMContentLoaded", () => {
           setEngine("markitdown");
         }
       }
+    } catch (_) {
+      // Existing behaviour: a failed engine refresh is silent.
+    } finally {
+      // The add-on's installability is derived from pack state, so it has to be
+      // re-read whenever that changes. refreshEngines returns early on several
+      // paths, so this belongs in finally rather than at the end of the body.
+      refreshAddonStatus();
+    }
+  }
+
+  // ─── Recognition-Model Add-On ────────────────────────────────────────────
+  // The two enrichment toggles are inert without the CodeFormula weights, and
+  // Docling resolves models only against the pack's pinned artifacts_path, so
+  // there is no way to just try it: the model is either installed there or the
+  // conversion fails. This renders the four states the backend already
+  // distinguishes (unavailable / installable / busy / usable) and clears the
+  // toggles' disabled attribute only when it reports usable.
+  const ADDON_NAME = "code_enrichment";
+  const ADDON_BUSY_STATES = ["downloading", "verifying", "extracting", "installing"];
+  let addonPollInterval = null;
+
+  function formatBytes(bytes) {
+    if (!bytes || bytes <= 0) return null;
+    const mb = bytes / (1024 * 1024);
+    return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(0)} MB`;
+  }
+
+  function setEnrichmentTogglesEnabled(enabled) {
+    [doclingCodeEnrichmentToggle, doclingFormulaEnrichmentToggle].forEach((el) => {
+      if (!el) return;
+      el.disabled = !enabled;
+      // A checked-but-disabled toggle would claim enrichment is on while the
+      // engine refuses the job for want of the model. Assigning checked does not
+      // dispatch a change event, so this does not write anything back.
+      if (!enabled) el.checked = false;
+    });
+  }
+
+  function showAddonButtons({ install, verify, remove, cancel }) {
+    if (btnAddonInstall) btnAddonInstall.style.display = install ? "inline-flex" : "none";
+    if (btnAddonVerify)  btnAddonVerify.style.display  = verify  ? "inline-flex" : "none";
+    if (btnAddonRemove)  btnAddonRemove.style.display  = remove  ? "inline-flex" : "none";
+    if (btnAddonCancel)  btnAddonCancel.style.display  = cancel  ? "inline-flex" : "none";
+  }
+
+  function applyAddonStatus(st) {
+    if (!st || !addonStatusBadge) return;
+
+    if (addonTitleEl && st.title) addonTitleEl.textContent = st.title;
+
+    const progress = st.progress || {};
+    const size = formatBytes(st.size_bytes);
+
+    if (ADDON_BUSY_STATES.includes(progress.status)) {
+      // Progress polling owns the badge and buttons while an install runs.
+      startAddonPolling();
+      return;
+    }
+
+    if (addonProgressContainer) addonProgressContainer.style.display = "none";
+
+    if (st.usable) {
+      addonStatusBadge.textContent = "Installed";
+      addonStatusBadge.className = "engine-badge engine-badge-installed";
+      if (addonReason) {
+        addonReason.textContent =
+          "Recognition model installed. Both enrichment options are available.";
+      }
+      showAddonButtons({ install: false, verify: true, remove: true, cancel: false });
+      setEnrichmentTogglesEnabled(true);
+      // Now that the controls are live, re-read the persisted values they were
+      // held back from showing.
+      loadSettings();
+      return;
+    }
+
+    // Not usable from here on, so the toggles must stay disabled.
+    setEnrichmentTogglesEnabled(false);
+    addonStatusBadge.className = "engine-badge engine-badge-not-installed";
+
+    if (st.installed) {
+      // On disk, but blocked by a pack or app version requirement.
+      addonStatusBadge.textContent = "Unusable";
+      if (addonReason) {
+        addonReason.textContent =
+          st.reason || "The installed model cannot be used by this build.";
+      }
+      showAddonButtons({ install: false, verify: true, remove: true, cancel: false });
+      return;
+    }
+
+    if (st.installable) {
+      addonStatusBadge.textContent = "Not Installed";
+      if (addonReason) {
+        addonReason.textContent = size
+          ? `Optional ${size} download. Required by both enrichment options.`
+          : "Optional download. Required by both enrichment options.";
+      }
+      if (btnAddonInstall) {
+        btnAddonInstall.disabled = false;
+        btnAddonInstall.textContent = size ? `Install Model (${size})` : "Install Model";
+        btnAddonInstall.title = st.description || "";
+      }
+      showAddonButtons({ install: true, verify: false, remove: false, cancel: false });
+      return;
+    }
+
+    // Not installable. Either the pack is missing or too old, or the add-on has
+    // no published artifact yet (empty url/sha256 in addons.json), which is the
+    // expected state before the model ships.
+    addonStatusBadge.textContent = st.available ? "Unavailable" : "Not Released";
+    if (addonReason) {
+      addonReason.textContent =
+        st.reason ||
+        (st.available
+          ? "This add-on cannot be installed right now."
+          : "The recognition model has not been published yet. These options will become available in a future release.");
+    }
+    if (btnAddonInstall) {
+      btnAddonInstall.disabled = true;
+      btnAddonInstall.textContent = "Install Model";
+    }
+    showAddonButtons({ install: true, verify: false, remove: false, cancel: false });
+  }
+
+  async function refreshAddonStatus() {
+    if (!addonStatusBadge) return;
+    try {
+      const resp = await fetch(`${apiBase}/addons/${ADDON_NAME}`);
+      if (!resp.ok) return;
+      applyAddonStatus(await resp.json());
     } catch (_) {}
+  }
+
+  function stopAddonPolling() {
+    if (addonPollInterval) {
+      clearInterval(addonPollInterval);
+      addonPollInterval = null;
+    }
+  }
+
+  async function pollAddonProgress() {
+    try {
+      const resp = await fetch(`${apiBase}/addons/${ADDON_NAME}`);
+      if (!resp.ok) return;
+      const st = await resp.json();
+      const prog = st.progress || {};
+      const status = prog.status || "idle";
+
+      if (ADDON_BUSY_STATES.includes(status)) {
+        const pct = Math.round(prog.percent || 0);
+        const label = status.charAt(0).toUpperCase() + status.slice(1);
+        if (addonProgressContainer) addonProgressContainer.style.display = "block";
+        if (addonProgressFill) addonProgressFill.style.width = `${pct}%`;
+        if (addonProgressText) {
+          const done = formatBytes(prog.bytes_downloaded);
+          const total = formatBytes(prog.total_bytes);
+          const detail = done && total ? ` — ${done} of ${total}` : "";
+          addonProgressText.textContent = `${label} (${pct}%)${detail}`;
+        }
+        if (addonStatusBadge) {
+          addonStatusBadge.textContent = `${label}…`;
+          addonStatusBadge.className = "engine-badge engine-badge-busy";
+        }
+        showAddonButtons({ install: false, verify: false, remove: false, cancel: true });
+        setEnrichmentTogglesEnabled(false);
+        return;
+      }
+
+      stopAddonPolling();
+
+      if (status === "complete") {
+        showToast("Recognition model installed. Enrichment options are now available.", "success");
+      } else if (status === "error") {
+        showToast(`Model installation failed: ${prog.error_message || "Unknown error"}`, "error");
+      } else if (status === "cancelled") {
+        showToast("Model installation cancelled.", "info");
+      }
+      applyAddonStatus(st);
+    } catch (_) {}
+  }
+
+  function startAddonPolling() {
+    stopAddonPolling();
+    addonPollInterval = setInterval(pollAddonProgress, 600);
+    pollAddonProgress();
+  }
+
+  if (btnAddonInstall) {
+    btnAddonInstall.addEventListener("click", async () => {
+      btnAddonInstall.disabled = true;
+      btnAddonInstall.textContent = "Starting…";
+      try {
+        const resp = await fetchWithToken(`${apiBase}/addons/${ADDON_NAME}/install`, {
+          method: "POST",
+        });
+        if (resp.ok) {
+          showToast("Downloading the recognition model…", "info");
+          startAddonPolling();
+        } else {
+          const err = await resp.json().catch(() => ({ detail: "Failed to start install" }));
+          showToast(`Error: ${err.detail}`, "error");
+          await refreshAddonStatus();
+        }
+      } catch (e) {
+        showToast(`Error starting model download: ${e.message}`, "error");
+        await refreshAddonStatus();
+      }
+    });
+  }
+
+  if (btnAddonCancel) {
+    btnAddonCancel.addEventListener("click", async () => {
+      try {
+        await fetchWithToken(`${apiBase}/addons/${ADDON_NAME}/cancel`, { method: "POST" });
+        showToast("Cancelling model download…", "info");
+      } catch (_) {}
+    });
+  }
+
+  if (btnAddonVerify) {
+    btnAddonVerify.addEventListener("click", async () => {
+      const origText = btnAddonVerify.textContent;
+      btnAddonVerify.textContent = "Verifying…";
+      btnAddonVerify.disabled = true;
+      try {
+        const resp = await fetchWithToken(`${apiBase}/addons/${ADDON_NAME}/verify`, {
+          method: "POST",
+        });
+        const res = await resp.json();
+        if (res.valid) {
+          showToast("Integrity check passed — model files match their SHA-256 hashes.", "success");
+        } else {
+          showToast(`Integrity check failed: ${res.reason || "Hash mismatch"}`, "error");
+        }
+      } catch (e) {
+        showToast(`Verification failed: ${e.message}`, "error");
+      } finally {
+        btnAddonVerify.textContent = origText;
+        btnAddonVerify.disabled = false;
+      }
+    });
+  }
+
+  if (btnAddonRemove) {
+    btnAddonRemove.addEventListener("click", async () => {
+      const confirmed = await confirmDialog({
+        title: "Remove recognition model?",
+        message:
+          "The code and formula recognition weights will be deleted and both enrichment options will be turned off. You can reinstall the model later from Settings.",
+        confirmText: "Remove Model",
+        cancelText: "Cancel",
+        danger: true,
+      });
+      if (!confirmed) return;
+      try {
+        const resp = await fetchWithToken(`${apiBase}/addons/${ADDON_NAME}/remove`, {
+          method: "POST",
+        });
+        if (resp.ok) {
+          showToast("Recognition model removed.", "info");
+          // The server turns both flags off when the model goes away, so reload
+          // the settings to match what was actually persisted.
+          await loadSettings();
+          await refreshAddonStatus();
+        } else {
+          showToast("Failed to remove the recognition model.", "error");
+        }
+      } catch (e) {
+        showToast(`Error removing model: ${e.message}`, "error");
+      }
+    });
   }
 
   // ─── Settings Preferences ────────────────────────────────────────────────
@@ -664,10 +948,30 @@ document.addEventListener("DOMContentLoaded", () => {
       const resp = await fetch(`${apiBase}/settings`);
       if (resp.ok) {
         const s = await resp.json();
-        // Both enrichment toggles persist the same way and differ only in their key
-  // and wording. They are disabled in the markup until the optional recognition
-  // model is present -- enabling them is the add-on's job -- but the handlers
-  // are wired now so that step only has to clear the disabled attribute.
+        if (doclingFallbackToggle) {
+          doclingFallbackToggle.checked = Boolean(s.fallback_to_markitdown ?? s.docling_fallback);
+        }
+        if (dailyUpdateToggle) {
+          dailyUpdateToggle.checked = Boolean(s.check_for_updates_daily);
+        }
+        // Guarded by .disabled so this cannot race refreshAddonStatus() into
+        // showing a checked toggle the add-on state says is unusable. Whichever
+        // of the two lands last, the result is the same.
+        if (doclingCodeEnrichmentToggle && !doclingCodeEnrichmentToggle.disabled) {
+          doclingCodeEnrichmentToggle.checked = Boolean(s.docling_code_enrichment);
+        }
+        if (doclingFormulaEnrichmentToggle && !doclingFormulaEnrichmentToggle.disabled) {
+          doclingFormulaEnrichmentToggle.checked = Boolean(s.docling_formula_enrichment);
+        }
+      }
+    } catch (_) {}
+  }
+
+  // Both enrichment toggles persist the same way and differ only in their key
+  // and wording. Registered once at startup, not from loadSettings(): that runs
+  // again every time the settings popover is opened, and re-registering there
+  // would stack a fresh listener per open, firing one POST and one toast per
+  // accumulated listener on a single click.
   function wireEnrichmentToggle(el, key, label) {
     if (!el) return;
     el.addEventListener("change", async (e) => {
@@ -686,7 +990,10 @@ document.addEventListener("DOMContentLoaded", () => {
             "info"
           );
         } else {
-          showToast(`Failed to update ${label}.`, "error");
+          // The server refuses to enable either flag while the add-on is not
+          // usable, so surface its reason rather than a generic failure.
+          const err = await resp.json().catch(() => ({}));
+          showToast(err.detail || `Failed to update ${label}.`, "error");
           e.target.checked = !checked;
         }
       } catch {
@@ -698,22 +1005,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   wireEnrichmentToggle(doclingCodeEnrichmentToggle, "docling_code_enrichment", "Code Enrichment");
   wireEnrichmentToggle(doclingFormulaEnrichmentToggle, "docling_formula_enrichment", "Formula Enrichment");
-
-  if (doclingFallbackToggle) {
-          doclingFallbackToggle.checked = Boolean(s.fallback_to_markitdown ?? s.docling_fallback);
-        }
-        if (dailyUpdateToggle) {
-          dailyUpdateToggle.checked = Boolean(s.check_for_updates_daily);
-        }
-        if (doclingCodeEnrichmentToggle) {
-          doclingCodeEnrichmentToggle.checked = Boolean(s.docling_code_enrichment);
-        }
-        if (doclingFormulaEnrichmentToggle) {
-          doclingFormulaEnrichmentToggle.checked = Boolean(s.docling_formula_enrichment);
-        }
-      }
-    } catch (_) {}
-  }
 
   if (doclingFallbackToggle) {
     doclingFallbackToggle.addEventListener("change", async (e) => {

@@ -53,8 +53,12 @@ def test_shipped_catalogue_is_well_formed():
     assert entry["model_dir"] == "docling-project--CodeFormulaV2"
     # Must match the pack version the workflow derives from the release tag.
     # docling-pack-v4 was published from a tree without the enrichment worker,
-    # and pack assets are immutable, so v5 is the first usable pack.
-    assert entry["min_pack_version"] == "5.0.0"
+    # and pack assets are immutable. v6 is the first pack whose worker implements
+    # the "capabilities" RPC that the installer uses to confirm the model loads,
+    # and which refuses enrichment outright when the model is missing. worker.py
+    # is hashed into the pack manifest and the launcher rejects a modified copy,
+    # so v5 cannot acquire either behaviour.
+    assert entry["min_pack_version"] == "6.0.0"
     print("[OK] test_shipped_catalogue_is_well_formed passed")
 
 

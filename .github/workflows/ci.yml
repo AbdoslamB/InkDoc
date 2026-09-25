@@ -59,8 +59,17 @@ jobs:
         if: runner.os == 'Linux'
         run: node tests/docs_release_selector.test.js
 
+      - name: Test enrichment add-on UI state machine
+        if: runner.os == 'Linux'
+        run: node tests/enrichment_addon_ui.test.js
+
       - name: Engine manifest release guard (verify zero placeholder hashes)
         run: python scripts/generate_engine_manifest.py --verify-manifest
+
+      # Same fail-closed guard as the manifest above, for app/core/addons.json.
+      # An unreleased add-on passes; a half-filled or placeholder entry does not.
+      - name: Add-on catalogue guard (verify no placeholder or half-filled entries)
+        run: python scripts/verify_addon_catalogue.py
 
       # Collect the whole suite rather than naming files. The previous step listed
       # ten files by hand and ran each as `python tests/<file>.py`, which executes

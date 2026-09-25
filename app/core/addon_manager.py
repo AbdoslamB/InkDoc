@@ -44,6 +44,7 @@ import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -97,6 +98,100 @@ class AddonInfo:
     sha256_files: dict[str, str] = field(default_factory=dict)
 
 
+# Catalogue states, kept as an enum so status, the CI guard and the installer all
+# name the same three outcomes instead of each re-deriving them from url/sha256.
+class CatalogueState(str, Enum):
+    #: No artifact published yet: url and sha256 are both empty, everything else
+    #: describes the add-on. The correct state before a release, and the only
+    #: incomplete entry that is not a defect.
+    UNRELEASED = "unreleased"
+    #: Fully specified and safe to download.
+    PUBLISHED = "published"
+    #: Internally inconsistent -- half-filled, placeholder, malformed hash, or a
+    #: URL that fails the CDN allowlist. Never offered for install.
+    DEFECTIVE = "defective"
+
+
+def validate_addon_entry(addon: AddonInfo) -> tuple[CatalogueState, list[str]]:
+    """Classify one catalogue entry and list every defect found.
+
+    This is the single definition of "installable enough to try", shared by
+    `AddonManager.get_status`, `AddonManager.install` and
+    `scripts/verify_addon_catalogue.py`. It previously lived in three places that
+    disagreed: status asked `bool(url) and bool(sha256)`, which a placeholder
+    string satisfies, while install ran the real validators -- so a mis-pasted
+    catalogue produced an enabled Install button that always failed mid-download.
+
+    Fields that must be present whether or not an artifact exists are checked in
+    both states, so an entry cannot reach release with a missing `model_dir`.
+    """
+    defects: list[str] = []
+
+    if not addon.title:
+        defects.append("title is empty")
+    if not addon.model_dir:
+        defects.append("model_dir is empty")
+    if addon.archive_format not in ("tar.gz", "zip"):
+        defects.append(f"archive_format {addon.archive_format!r} is not tar.gz or zip")
+    if not addon.min_pack_version:
+        defects.append("min_pack_version is empty, so any pack would satisfy it")
+
+    has_url = bool(addon.url.strip())
+    has_sha = bool(addon.sha256.strip())
+
+    if not has_url and not has_sha:
+        # Unreleased. Size and hash fields must not claim otherwise.
+        if addon.size_bytes or addon.uncompressed_size_bytes or addon.sha256_files:
+            defects.append(
+                "no url or sha256, but size_bytes/uncompressed_size_bytes/sha256_files "
+                "are populated -- the entry was partially filled in"
+            )
+        return (
+            (CatalogueState.DEFECTIVE, defects) if defects
+            else (CatalogueState.UNRELEASED, [])
+        )
+
+    # From here the entry claims to be published, so everything must hold.
+    if not has_url:
+        defects.append("sha256 is set but url is empty")
+    if not has_sha:
+        defects.append("url is set but sha256 is empty")
+
+    if has_sha and not is_valid_sha256(addon.sha256):
+        defects.append(f"sha256 {addon.sha256!r} is not a 64-character hex digest")
+
+    if has_url:
+        try:
+            validate_download_url(addon.url)
+        except SecurityError as exc:
+            defects.append(f"url rejected: {exc}")
+        except Exception as exc:
+            defects.append(f"url could not be parsed: {exc}")
+
+    if addon.size_bytes <= 0:
+        defects.append("size_bytes must be positive for a published add-on")
+    if addon.uncompressed_size_bytes <= 0:
+        defects.append("uncompressed_size_bytes must be positive for a published add-on")
+
+    if not addon.sha256_files:
+        defects.append(
+            "sha256_files is empty, so extracted files could not be verified after download"
+        )
+    else:
+        bad = sorted(
+            path for path, digest in addon.sha256_files.items()
+            if not is_valid_sha256(digest)
+        )
+        if bad:
+            shown = ", ".join(bad[:5]) + (f" (+{len(bad) - 5} more)" if len(bad) > 5 else "")
+            defects.append(f"sha256_files has {len(bad)} malformed digest(s): {shown}")
+
+    return (
+        (CatalogueState.DEFECTIVE, defects) if defects
+        else (CatalogueState.PUBLISHED, [])
+    )
+
+
 def version_tuple(value: str | None) -> tuple[int, ...]:
     """Parse a dotted version into comparable integers.
 
@@ -126,6 +221,7 @@ class AddonManager:
     def __init__(self, catalogue_path: Path | None = None) -> None:
         self._catalogue_path = catalogue_path or ADDONS_CATALOGUE_PATH
         self._catalogue: dict[str, AddonInfo] | None = None
+        self._catalogue_states: dict[str, tuple[CatalogueState, list[str]]] = {}
         self._lock = threading.Lock()
         self._progress: dict[str, AddonProgress] = {}
         self._cancel_events: dict[str, threading.Event] = {}
@@ -164,11 +260,32 @@ class AddonManager:
             logger.debug("No add-on catalogue at %s", self._catalogue_path)
         except Exception as exc:
             logger.warning("Could not read add-on catalogue: %s", exc)
+
+        states: dict[str, tuple[CatalogueState, list[str]]] = {}
+        for name, addon in catalogue.items():
+            state, defects = validate_addon_entry(addon)
+            states[name] = (state, defects)
+            if state is CatalogueState.DEFECTIVE:
+                logger.error(
+                    "Add-on catalogue entry '%s' is defective and will not be offered "
+                    "for install: %s",
+                    name,
+                    "; ".join(defects),
+                )
+
         self._catalogue = catalogue
+        self._catalogue_states = states
         return catalogue
 
     def get_addon(self, name: str) -> AddonInfo | None:
         return self._load_catalogue().get(name)
+
+    def catalogue_state(self, name: str) -> tuple[CatalogueState, list[str]]:
+        """Validated state of one entry. Computed once when the catalogue loads."""
+        self._load_catalogue()
+        return self._catalogue_states.get(
+            name, (CatalogueState.DEFECTIVE, ["Unknown add-on"])
+        )
 
     def list_addon_names(self) -> list[str]:
         return sorted(self._load_catalogue())
@@ -185,6 +302,77 @@ class AddonManager:
 
     def _meta_path(self, addon: AddonInfo) -> Path:
         return self._models_dir() / f"{_META_PREFIX}{addon.name}.json"
+
+    def pack_docling_version(self) -> str:
+        """Docling version inside the installed pack, read from its dist-info.
+
+        Deliberately a directory-name read and not an interpreter launch: this is
+        consulted on the settings status path, which the UI hits on every popover
+        open, and starting the pack's Python costs seconds. The dist-info name is
+        written by pip at pack build time and is exactly as authoritative.
+        """
+        try:
+            pack = self._models_dir().parent
+            for dist in pack.rglob("docling-*.dist-info"):
+                name = dist.name
+                # "docling-2.130.0.dist-info" -> "2.130.0". Excludes the
+                # docling_core / docling_parse / docling_slim siblings, which are
+                # separate packages with their own versions.
+                stem = name[len("docling-"):-len(".dist-info")]
+                if stem and stem[0].isdigit():
+                    return stem
+        except Exception as exc:
+            logger.debug("Could not read pack Docling version: %s", exc)
+        return ""
+
+    def probe_worker_capability(self, timeout: float = 60.0) -> dict:
+        """Ask the pack worker whether it can load the recognition model.
+
+        The worker is the only component that knows the answer: it owns the
+        interpreter, the pinned artifacts_path and the Docling version, and it
+        reads the model directory name off Docling's own class rather than from
+        this catalogue. Never called from the status path -- see
+        `pack_docling_version` -- only at install time and on explicit request.
+        """
+        from app.core.engines.docling_worker_client import DoclingWorkerClient
+
+        return DoclingWorkerClient.get_instance().capabilities(timeout=timeout)
+
+    def read_install_metadata(self, name: str) -> dict[str, Any]:
+        """Metadata written when the add-on was installed, or {} if absent."""
+        addon = self.get_addon(name)
+        if not addon:
+            return {}
+        try:
+            meta = self._meta_path(addon)
+            if meta.is_file():
+                return json.loads(meta.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.debug("Could not read add-on metadata for '%s': %s", name, exc)
+        return {}
+
+    def pack_drift(self, name: str) -> str:
+        """Describe how the pack changed under an installed add-on, or "".
+
+        An add-on is installed into the pack's models directory under a name that
+        Docling chooses. When the pack is replaced by one carrying a different
+        Docling version, that name may no longer be the one Docling looks for --
+        it has already moved this model's module once. Comparing the version
+        recorded at install against the pack's current version detects that
+        without launching anything, so the UI can ask for a reinstall instead of
+        reporting a model as ready that Docling will not find.
+        """
+        meta = self.read_install_metadata(name)
+        if not meta:
+            return ""
+        recorded = str(meta.get("docling_version", ""))
+        current = self.pack_docling_version()
+        if recorded and current and recorded != current:
+            return (
+                f"Installed against Docling {recorded}, but this engine pack ships "
+                f"{current}. Reinstall the model to confirm it still matches."
+            )
+        return ""
 
     # ─── Derived state ───────────────────────────────────────────────────────
 
@@ -223,15 +411,27 @@ class AddonManager:
             logger.debug("Could not read pack state: %s", exc)
 
         installed = self.is_installed(name)
+        drift = self.pack_drift(name) if installed else ""
         pack_ok = version_at_least(pack_version, addon.min_pack_version)
         app_ok = version_at_least(get_version(), addon.min_app_version)
+        state, defects = self.catalogue_state(name)
+        published = state is CatalogueState.PUBLISHED
 
-        if not pack_installed:
+        # Ordered most-specific first: a defective catalogue is a shipping bug and
+        # must not be reported as "Docling is not installed", which would send the
+        # user to fix something that is not wrong.
+        if state is CatalogueState.DEFECTIVE:
+            reason = "This add-on's catalogue entry is invalid; it cannot be installed."
+        elif state is CatalogueState.UNRELEASED:
+            reason = "The recognition model has not been published yet."
+        elif not pack_installed:
             reason = "Docling is not installed"
         elif not pack_ok:
             reason = f"Requires Docling pack {addon.min_pack_version} or newer"
         elif not app_ok:
             reason = f"Requires InkDoc {addon.min_app_version} or newer"
+        elif drift:
+            reason = drift
         else:
             reason = ""
 
@@ -240,16 +440,25 @@ class AddonManager:
             "title": addon.title,
             "description": addon.description,
             "installed": installed,
-            "available": bool(addon.url) and bool(addon.sha256),
+            "available": published,
+            "catalogue_state": state.value,
+            # Surfaced so a defective entry is diagnosable from the API alone
+            # rather than only from the server log.
+            "catalogue_defects": defects,
             "pack_installed": pack_installed,
             "pack_version": pack_version,
             "min_pack_version": addon.min_pack_version,
             "size_bytes": addon.size_bytes,
-            # The toggles may only be enabled when this is true.
-            "usable": installed and pack_installed and pack_ok and app_ok,
+            # The toggles may only be enabled when this is true. Drift counts
+            # against it: an add-on installed against a different Docling version
+            # may sit under a directory name the current one does not look for.
+            "usable": installed and pack_installed and pack_ok and app_ok and not drift,
+            "pack_drift": drift,
+            "worker_verified": bool(self.read_install_metadata(name).get("worker_verified"))
+            if installed
+            else False,
             "installable": (
-                not installed and pack_installed and pack_ok and app_ok
-                and bool(addon.url) and bool(addon.sha256)
+                not installed and pack_installed and pack_ok and app_ok and published
             ),
             "reason": reason,
             "progress": self.get_progress(name),
@@ -294,11 +503,19 @@ class AddonManager:
             progress.error_message = status.get("reason") or "Add-on cannot be installed"
             raise AddonError(progress.error_message)
 
-        if not is_valid_sha256(addon.sha256):
+        # Defence in depth: get_status already refuses to mark a non-published
+        # entry installable, but install must not depend on its caller having
+        # asked. validate_addon_entry has already run both validate_download_url
+        # and is_valid_sha256, so a PUBLISHED entry needs no further URL or hash
+        # checking here.
+        state, defects = self.catalogue_state(name)
+        if state is not CatalogueState.PUBLISHED:
             progress.status = "error"
-            progress.error_message = "Add-on catalogue has an invalid SHA-256"
+            progress.error_message = (
+                f"Add-on catalogue entry is {state.value}"
+                + (f": {'; '.join(defects)}" if defects else "")
+            )
             raise SecurityError(progress.error_message)
-        validate_download_url(addon.url)
 
         models_dir = self._models_dir()
         model_path = self._model_path(addon)
@@ -367,6 +584,42 @@ class AddonManager:
             model_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(staged_model), str(model_path))
 
+            # Confirm the pack can actually load what was just extracted, before
+            # the completion marker goes down. A directory of the right name with
+            # the right hashes still does not prove Docling will accept it: the
+            # pack's Docling version decides the folder name it looks for and the
+            # loader decides whether the contents are usable. Doing this here
+            # means a successful install is a verified install, and the status
+            # path never has to launch an interpreter to find out.
+            worker_capability: dict[str, Any] = {}
+            verified = False
+            try:
+                probe = self.probe_worker_capability()
+                worker_capability = probe.get("code_formula") or {}
+                verified = bool(worker_capability.get("loadable"))
+                if not verified:
+                    raise AddonError(
+                        "The model was downloaded and verified, but this engine pack "
+                        "cannot load it: "
+                        + (worker_capability.get("detail") or "unknown reason")
+                    )
+                logger.info(
+                    "Add-on '%s' confirmed loadable by the worker (Docling %s, model_dir %s)",
+                    addon.name,
+                    probe.get("docling_version", "?"),
+                    worker_capability.get("model_dir", "?"),
+                )
+            except AddonError:
+                raise
+            except Exception as exc:
+                # The probe itself failed to run. That is not evidence the model
+                # is bad, so do not delete it -- but it is not a verified install
+                # either, and recording that lets the UI offer re-verification
+                # rather than claiming a confirmation that never happened.
+                logger.warning(
+                    "Could not confirm add-on '%s' with the worker: %s", addon.name, exc
+                )
+
             # Last, so an interrupted install never looks complete.
             self._meta_path(addon).write_text(
                 json.dumps(
@@ -376,10 +629,13 @@ class AddonManager:
                         "sha256": addon.sha256,
                         "min_pack_version": addon.min_pack_version,
                         "installed_at": time.time(),
+                        "docling_version": self.pack_docling_version(),
+                        "worker_verified": verified,
+                        "worker_model_dir": worker_capability.get("model_dir", ""),
                     },
                     indent=2,
                 )
-                + "\n",
+                + chr(10),
                 encoding="utf-8",
             )
 

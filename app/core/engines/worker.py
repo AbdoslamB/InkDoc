@@ -238,6 +238,96 @@ def _apply_code_languages(doc, markdown: str) -> str:
     return markdown
 
 
+def _code_formula_capability() -> dict:
+    """Report whether Docling can actually build the code/formula stage.
+
+    The model directory name is read from Docling's own class attribute rather
+    than hardcoded here or taken from the add-on catalogue. Docling has already
+    moved this model once -- `models/code_formula_model.py` became
+    `models/stages/code_formula/code_formula_model.py` -- and the folder name is
+    its business, not ours. Anything that instead pattern-matches a directory name
+    it was told about at install time will eventually report a model as present
+    while conversions fail.
+
+    `present` is a directory check; `loadable` means the weights satisfied the
+    transformers loader. They differ for a truncated or partially extracted
+    install, which is exactly the case a directory check cannot see.
+    """
+    info = {
+        "model_dir": "",
+        "present": False,
+        "loadable": False,
+        "detail": "",
+    }
+    try:
+        from docling.models.stages.code_formula.code_formula_model import CodeFormulaModel
+    except Exception:
+        # Older and newer layouts both existed; resolve the class wherever it is
+        # rather than pinning one import path.
+        try:
+            from docling.models.code_formula_model import (  # type: ignore[no-redef]
+                CodeFormulaModel,
+            )
+        except Exception as exc:
+            info["detail"] = f"Docling has no CodeFormulaModel: {exc}"
+            return info
+
+    model_dir = getattr(CodeFormulaModel, "_model_repo_folder", "")
+    info["model_dir"] = model_dir
+    if not model_dir:
+        info["detail"] = "Docling's CodeFormulaModel does not declare _model_repo_folder"
+        return info
+
+    artifacts = os.environ.get("DOCLING_ARTIFACTS_PATH", "")
+    if not artifacts:
+        info["detail"] = "DOCLING_ARTIFACTS_PATH is not set in the worker environment"
+        return info
+
+    model_path = Path(artifacts) / model_dir
+    if not model_path.is_dir():
+        info["detail"] = f"{model_path} does not exist"
+        return info
+    info["present"] = True
+
+    # Load config only. Instantiating the stage pulls ~640 MB of weights onto the
+    # CPU, which is far too heavy for a capability probe; the config read still
+    # fails for a truncated or wrong-format directory, which is what we need to
+    # distinguish.
+    try:
+        from transformers import AutoConfig
+
+        AutoConfig.from_pretrained(str(model_path), local_files_only=True)
+        info["loadable"] = True
+    except Exception as exc:
+        info["detail"] = f"{type(exc).__name__}: {exc}"
+        return info
+
+    return info
+
+
+def _handle_capabilities() -> dict:
+    """Answer what this worker can do, for the add-on installer and diagnostics."""
+    try:
+        from docling.datamodel.base_models import InputFormat  # noqa: F401
+    except Exception as exc:
+        return {"status": "error", "error": f"Docling is not importable: {exc}"}
+
+    try:
+        from importlib.metadata import version as _pkg_version
+
+        docling_version = _pkg_version("docling")
+    except Exception:
+        docling_version = ""
+
+    return {
+        "status": "ok",
+        "docling_version": docling_version,
+        "artifacts_path": os.environ.get("DOCLING_ARTIFACTS_PATH", ""),
+        "hf_offline": os.environ.get("HF_HUB_OFFLINE", "") in ("1", "true", "True"),
+        "code_formula": _code_formula_capability(),
+    }
+
+
 def _handle_convert(payload: dict) -> dict:
     job_id = payload.get("job_id", "")
     source_file = payload.get("source_file", "")
@@ -252,6 +342,28 @@ def _handle_convert(payload: dict) -> dict:
 
     if not output_file:
         return {"status": "error", "job_id": job_id, "error": "Output file path missing from request"}
+
+    # Checked before building the pipeline, not after a failure: Docling raises
+    # deep inside the transformers loader with a message about a missing local
+    # snapshot, which says nothing actionable. The worker owns the artifacts path
+    # and the Docling version, so it is the only place that can say precisely what
+    # is wrong. Converting without the enrichment that was requested is not an
+    # option -- the caller asked for transcribed code and formulas and would get a
+    # document silently missing them.
+    if code_enrichment or formula_enrichment:
+        cap = _code_formula_capability()
+        if not cap.get("loadable"):
+            return {
+                "status": "error",
+                "job_id": job_id,
+                "error_code": "enrichment_model_unavailable",
+                "error": (
+                    "The code and formula recognition model is not available in this "
+                    f"engine pack ({cap.get('detail') or 'model directory missing'}). "
+                    "Install it from Settings, or turn off Code and Formula Enrichment."
+                ),
+                "capability": cap,
+            }
 
     with _CONVERT_LOCK:
         try:
@@ -303,6 +415,10 @@ def main() -> int:
 
         if action == "ping":
             ipc_stream.write(json.dumps({"status": "pong", "pid": os.getpid()}) + "\n")
+            ipc_stream.flush()
+
+        elif action == "capabilities":
+            ipc_stream.write(json.dumps(_handle_capabilities()) + chr(10))
             ipc_stream.flush()
 
         elif action == "shutdown":

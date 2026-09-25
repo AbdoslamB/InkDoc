@@ -783,6 +783,46 @@ body {
   margin-bottom: 8px;
 }
 
+/* The add-on card that installs the recognition model the two toggles above
+   depend on. Nested inside .engine-enrichment so it reads as a prerequisite of
+   the toggles rather than as a second engine. */
+.engine-enrichment-addon {
+  background-color: var(--elevated);
+  border: 1px solid var(--rule-subtle);
+  border-radius: 6px;
+  padding: 8px;
+  margin-bottom: 12px;
+}
+
+.engine-enrichment-addon-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.engine-enrichment-addon-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.engine-enrichment-addon-reason {
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.engine-enrichment-addon .engine-progress-wrapper {
+  background-color: var(--sunken);
+  padding: 6px;
+}
+
+.engine-enrichment-addon .engine-actions {
+  margin-top: 8px;
+}
+
 .toggle-switch:has(input:disabled) {
   opacity: 0.5;
   cursor: not-allowed;

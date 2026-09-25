@@ -10,10 +10,23 @@
     "own models directory because Docling resolves every model against a single",
     "artifacts_path that the pack worker pins there.",
     "",
-    "url, sha256, size_bytes, uncompressed_size_bytes and sha256_files are filled",
-    "in by scripts/build_addon.py once the artifact is published. While url or",
-    "sha256 is empty the add-on reports available=false and the UI keeps the",
-    "enrichment toggles disabled, which is the correct state before release."
+    "url, sha256, size_bytes, uncompressed_size_bytes and sha256_files are written",
+    "by .github/workflows/build-addon.yml, which derives the URL from the release",
+    "tag and commits the result back. Do not edit them by hand: this file used to",
+    "be filled in from a printed blob, which is how it came to hold a placeholder",
+    "URL that AddonManager.get_status reported as installable.",
+    "",
+    "Both url and sha256 empty is the 'unreleased' state, and is valid: the add-on",
+    "reports available=false, install is refused, and the enrichment toggles stay",
+    "disabled. Any other incomplete combination is a defect and fails",
+    "scripts/verify_addon_catalogue.py in CI.",
+    "",
+    "min_pack_version is 6.0.0 because the installer confirms a new install with",
+    "the worker's 'capabilities' RPC, which pack v5's worker does not implement,",
+    "and because the worker refuses enrichment outright when the model is absent",
+    "instead of quietly converting without it. worker.py is hashed into the pack",
+    "manifest and the launcher rejects a modified copy, so an older pack cannot",
+    "be given either behaviour."
   ],
   "addons": {
     "code_enrichment": {
@@ -25,7 +38,7 @@
       "archive_format": "tar.gz",
       "size_bytes": 0,
       "uncompressed_size_bytes": 0,
-      "min_pack_version": "5.0.0",
+      "min_pack_version": "6.0.0",
       "min_app_version": "",
       "sha256_files": {}
     }

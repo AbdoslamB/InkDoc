@@ -84,6 +84,66 @@ DEFAULT_SETTINGS: dict[str, Any] = {
 }
 
 
+# Settings whose truth lives outside settings.json. Each names the add-on that
+# has to be usable for the setting to mean anything, so reconciliation stays a
+# table rather than a growing chain of special cases.
+ADDON_GATED_SETTINGS: dict[str, str] = {
+    "docling_code_enrichment": "code_enrichment",
+    "docling_formula_enrichment": "code_enrichment",
+}
+
+
+def reconcile_addon_gated_settings() -> dict[str, Any]:
+    """Bring add-on-gated settings back in line with what is actually installed.
+
+    settings.json and the models directory are independent pieces of state and can
+    disagree: a pack is removed and takes its add-ons with it, a settings file is
+    copied between machines, an upgrade changes which Docling version the pack
+    ships. Previously nothing noticed, and the disagreement surfaced once per
+    conversion, deep in the engine, where the only options left were to fail the
+    job or quietly drop what the user asked for.
+
+    Reconciling once at startup fixes it at the source instead: the setting is
+    corrected where it is stored, the change is logged, and the result is reported
+    so the UI can tell the user why a toggle they had switched on is now off.
+    Returns the keys that were cleared and the reason, or an empty result.
+    """
+    from app.core.addon_manager import AddonManager
+
+    mgr = EngineManager.get_instance()
+    settings = mgr.get_settings()
+    enabled = [key for key in ADDON_GATED_SETTINGS if settings.get(key)]
+    if not enabled:
+        return {"cleared": [], "reason": ""}
+
+    addon_mgr = AddonManager.get_instance()
+    cleared: list[str] = []
+    reason = ""
+    for key in enabled:
+        try:
+            status = addon_mgr.get_status(ADDON_GATED_SETTINGS[key])
+        except Exception as exc:
+            # Never block startup on a status read. Leaving the setting alone is
+            # correct here: the worker still refuses the job with a precise error
+            # if the model really is missing, so nothing silently degrades.
+            logger.warning("Could not check add-on state for '%s': %s", key, exc)
+            continue
+        if not status.get("usable"):
+            cleared.append(key)
+            reason = status.get("reason") or "The required add-on is not installed."
+
+    if not cleared:
+        return {"cleared": [], "reason": ""}
+
+    mgr.update_settings({key: False for key in cleared})
+    logger.warning(
+        "Turned off %s because the required add-on is not usable: %s",
+        ", ".join(cleared),
+        reason,
+    )
+    return {"cleared": cleared, "reason": reason}
+
+
 class EngineManager:
     """Manages installation, updates, and integrity of optional engines."""
 

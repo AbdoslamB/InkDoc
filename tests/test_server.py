@@ -435,6 +435,257 @@ def test_thread_safe_atomic_settings():
     print("[OK] test_thread_safe_atomic_settings passed")
 
 
+
+def _isolated_settings(td):
+    """Point EngineManager at a scratch settings file and clear its cache.
+
+    Returns a restore callable. Without this the test would rewrite the real
+    user settings under ~/AppData/Local/InkDoc.
+    """
+    from app.core.engine_manager import EngineManager
+
+    em = EngineManager.get_instance()
+    original_path_fn = em.get_settings_file_path
+    original_cache = em._settings_cache
+    em.get_settings_file_path = lambda: Path(td) / "settings.json"
+    em._settings_cache = None
+
+    def restore():
+        em.get_settings_file_path = original_path_fn
+        em._settings_cache = original_cache
+
+    return em, restore
+
+
+def test_enrichment_settings_require_addon():
+    """Neither enrichment flag may be enabled while the recognition model is unusable.
+
+    Docling loads the CodeFormula weights at pipeline construction and raises when
+    they are missing from its pinned artifacts_path, so a persisted flag without
+    the model would break every subsequent Docling conversion. Before this gate
+    the only thing preventing it was the disabled attribute in the markup.
+    """
+    import tempfile
+    from unittest.mock import patch
+
+    from app.core.addon_manager import AddonManager
+
+    headers = {"X-InkDoc-Token": server_module.SESSION_TOKEN}
+    mgr = AddonManager.get_instance()
+
+    with tempfile.TemporaryDirectory() as td:
+        em, restore = _isolated_settings(td)
+        try:
+            unusable = {"usable": False, "reason": "Docling is not installed"}
+            with patch.object(mgr, "get_status", return_value=unusable):
+                for key in ("docling_code_enrichment", "docling_formula_enrichment"):
+                    resp = client.post("/settings", json={key: True}, headers=headers)
+                    assert resp.status_code == 409, f"{key}: expected 409, got {resp.status_code}"
+                    assert "Docling is not installed" in resp.json()["detail"]
+                    assert em.get_settings()[key] is False, f"{key} must not have persisted"
+
+                # Turning them off must never be blocked, or a user could not
+                # recover from a stale enabled state.
+                resp = client.post(
+                    "/settings", json={"docling_code_enrichment": False}, headers=headers
+                )
+                assert resp.status_code == 200
+
+                # An unrelated setting must not be caught by the gate.
+                resp = client.post(
+                    "/settings", json={"check_for_updates_daily": True}, headers=headers
+                )
+                assert resp.status_code == 200
+                assert em.get_settings()["check_for_updates_daily"] is True
+
+            with patch.object(mgr, "get_status", return_value={"usable": True, "reason": ""}):
+                resp = client.post(
+                    "/settings", json={"docling_code_enrichment": True}, headers=headers
+                )
+                assert resp.status_code == 200
+                assert em.get_settings()["docling_code_enrichment"] is True
+        finally:
+            restore()
+
+    print("[OK] test_enrichment_settings_require_addon passed")
+
+
+def test_removing_addon_clears_enrichment_flags():
+    """Removing the model must turn off the flags it was gating.
+
+    Otherwise the settings keep claiming enrichment is on with no weights behind
+    it -- a state the update endpoint itself would refuse to accept.
+    """
+    import tempfile
+    from unittest.mock import patch
+
+    from app.core.addon_manager import AddonManager
+
+    headers = {"X-InkDoc-Token": server_module.SESSION_TOKEN}
+    mgr = AddonManager.get_instance()
+
+    with tempfile.TemporaryDirectory() as td:
+        em, restore = _isolated_settings(td)
+        try:
+            em.update_settings(
+                {"docling_code_enrichment": True, "docling_formula_enrichment": True}
+            )
+            with patch.object(mgr, "remove", return_value={"status": "removed"}):
+                resp = client.post("/addons/code_enrichment/remove", headers=headers)
+            assert resp.status_code == 200, resp.text
+
+            settings = em.get_settings()
+            assert settings["docling_code_enrichment"] is False
+            assert settings["docling_formula_enrichment"] is False
+        finally:
+            restore()
+
+    print("[OK] test_removing_addon_clears_enrichment_flags passed")
+
+
+def test_enrichment_flags_reach_the_worker_unmodified():
+    """The engine must not quietly rewrite what the user asked for.
+
+    This previously went through _effective_enrichment, which turned both flags
+    off when the model was missing and converted anyway, so the caller received a
+    document without the enrichment it requested and no indication why. The engine
+    now passes the flags through and the worker refuses the job.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from app.core.converter import ConversionOptions
+    from app.core.engines.docling_engine import convert_with_docling
+    from app.core.queue_model import QueueItem, SourceKind
+
+    options = ConversionOptions()
+    options.docling_code_enrichment = True
+    options.docling_formula_enrichment = True
+    item = QueueItem(source=__file__, kind=SourceKind.FILE, display_name="x.pdf")
+
+    client = MagicMock()
+    client.convert_file.return_value = "# ok"
+
+    with patch("app.core.engine_manager.EngineManager.get_instance") as em, \
+         patch(
+             "app.core.engines.docling_worker_client.DoclingWorkerClient.get_instance",
+             return_value=client,
+         ):
+        em.return_value.get_engine_status.return_value = "installed"
+        em.return_value.is_pack_installed.return_value = True
+        em.return_value.platform_key = "windows-x86_64"
+        convert_with_docling(item, options)
+
+    kwargs = client.convert_file.call_args.kwargs
+    assert kwargs["code_enrichment"] is True, "engine downgraded code_enrichment"
+    assert kwargs["formula_enrichment"] is True, "engine downgraded formula_enrichment"
+    print("[OK] test_enrichment_flags_reach_the_worker_unmodified passed")
+
+
+def test_enrichment_model_error_bypasses_fallback():
+    """A missing model must not be answered with a quietly un-enriched document.
+
+    fallback_to_markitdown exists for documents Docling cannot parse. An
+    enrichment model that is not installed is a configuration inconsistency with a
+    concrete remedy, and falling back would leave the setting on, the model still
+    missing, and the user unaware.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from app.core.converter import ConversionOptions
+    from app.core.engines.docling_engine import convert_with_docling
+    from app.core.engines.docling_worker_client import EnrichmentModelUnavailableError
+    from app.core.queue_model import QueueItem, SourceKind
+
+    options = ConversionOptions()
+    options.docling_code_enrichment = True
+    item = QueueItem(source=__file__, kind=SourceKind.FILE, display_name="x.pdf")
+
+    client = MagicMock()
+    client.convert_file.side_effect = EnrichmentModelUnavailableError(
+        "model missing", {"detail": "no such directory"}
+    )
+
+    with patch("app.core.engine_manager.EngineManager.get_instance") as em, \
+         patch(
+             "app.core.engines.docling_worker_client.DoclingWorkerClient.get_instance",
+             return_value=client,
+         ):
+        em.return_value.get_engine_status.return_value = "installed"
+        em.return_value.is_pack_installed.return_value = True
+        em.return_value.platform_key = "windows-x86_64"
+        # Fallback explicitly ON: it must still not swallow this error.
+        em.return_value.get_settings.return_value = {"fallback_to_markitdown": True}
+
+        raised = False
+        try:
+            convert_with_docling(item, options)
+        except EnrichmentModelUnavailableError:
+            raised = True
+        assert raised, "fallback swallowed the enrichment configuration error"
+
+    print("[OK] test_enrichment_model_error_bypasses_fallback passed")
+
+
+def test_reconcile_clears_gated_settings_when_addon_unusable():
+    """Stale enabled flags are corrected once, where they are stored."""
+    import tempfile
+    from unittest.mock import patch
+
+    from app.core.addon_manager import AddonManager
+    from app.core.engine_manager import reconcile_addon_gated_settings
+
+    with tempfile.TemporaryDirectory() as td:
+        em, restore = _isolated_settings(td)
+        try:
+            em.update_settings(
+                {"docling_code_enrichment": True, "docling_formula_enrichment": True}
+            )
+            unusable = {"usable": False, "reason": "Docling is not installed"}
+            with patch.object(AddonManager.get_instance(), "get_status", return_value=unusable):
+                result = reconcile_addon_gated_settings()
+
+            assert set(result["cleared"]) == {
+                "docling_code_enrichment",
+                "docling_formula_enrichment",
+            }
+            assert "Docling is not installed" in result["reason"]
+            settings = em.get_settings()
+            assert settings["docling_code_enrichment"] is False
+            assert settings["docling_formula_enrichment"] is False
+
+            # Idempotent: a second pass has nothing left to clear.
+            with patch.object(AddonManager.get_instance(), "get_status", return_value=unusable):
+                assert reconcile_addon_gated_settings()["cleared"] == []
+        finally:
+            restore()
+
+    print("[OK] test_reconcile_clears_gated_settings_when_addon_unusable passed")
+
+
+def test_reconcile_leaves_usable_addon_settings_alone():
+    """Reconciliation must never turn off a setting that is legitimately on."""
+    import tempfile
+    from unittest.mock import patch
+
+    from app.core.addon_manager import AddonManager
+    from app.core.engine_manager import reconcile_addon_gated_settings
+
+    with tempfile.TemporaryDirectory() as td:
+        em, restore = _isolated_settings(td)
+        try:
+            em.update_settings({"docling_code_enrichment": True})
+            with patch.object(
+                AddonManager.get_instance(), "get_status",
+                return_value={"usable": True, "reason": ""},
+            ):
+                assert reconcile_addon_gated_settings()["cleared"] == []
+            assert em.get_settings()["docling_code_enrichment"] is True
+        finally:
+            restore()
+
+    print("[OK] test_reconcile_leaves_usable_addon_settings_alone passed")
+
+
 def test_batch_conversion_options_isolation():
     """Verify that fallback flags in ConversionOptions do not leak between batch items (H-6)."""
     from unittest.mock import patch
@@ -529,6 +780,12 @@ if __name__ == "__main__":
     test_conversion_offloaded_from_event_loop()
     test_conversion_concurrency_cap()
     test_thread_safe_atomic_settings()
+    test_enrichment_settings_require_addon()
+    test_removing_addon_clears_enrichment_flags()
+    test_enrichment_flags_reach_the_worker_unmodified()
+    test_enrichment_model_error_bypasses_fallback()
+    test_reconcile_clears_gated_settings_when_addon_unusable()
+    test_reconcile_leaves_usable_addon_settings_alone()
     test_batch_conversion_options_isolation()
     test_conversions_rejected_when_update_applying()
     print("\nALL API TESTS PASSED!")

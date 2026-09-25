@@ -27,6 +27,23 @@ IDLE_TIMEOUT_SECONDS = 600.0  # 10 minutes idle timeout
 CONVERSION_TIMEOUT_SECONDS = 180.0  # 3 minutes maximum per conversion
 
 
+class EnrichmentModelUnavailableError(RuntimeError):
+    """Enrichment was requested but the pack cannot load the recognition model.
+
+    Deliberately its own type, and deliberately not eligible for the
+    fallback_to_markitdown preference. That preference exists for conversions
+    Docling cannot handle -- a malformed PDF, an unsupported Office variant --
+    where quietly producing a result from another engine is what the user asked
+    for. This is not one of those: the settings say enrich and the pack cannot,
+    which is an inconsistency the user has to resolve and would never see if it
+    were answered with a silently un-enriched document.
+    """
+
+    def __init__(self, message: str, capability: dict | None = None) -> None:
+        super().__init__(message)
+        self.capability = capability or {}
+
+
 class DoclingWorkerClient:
     """Client that communicates with the isolated Docling worker subprocess."""
 
@@ -278,6 +295,54 @@ class DoclingWorkerClient:
 
     # ─── Conversion IPC ──────────────────────────────────────────────────────
 
+    def capabilities(self, timeout: float = 60.0) -> dict:
+        """Ask the worker what it can actually do.
+
+        Used by AddonManager after an install to confirm the freshly extracted
+        weights load under the pack's own interpreter and Docling version, rather
+        than trusting that a directory of the right name is enough. Cheap enough
+        to be worth doing once per install: the worker reads the model config, it
+        does not instantiate the stage.
+        """
+        with self._mutex:
+            self._last_active = time.time()
+            self._reset_idle_timer()
+
+            proc = self._ensure_worker_running()
+            if not proc.stdin:
+                raise RuntimeError("Worker stdin is unavailable")
+
+            proc.stdin.write(json.dumps({"action": "capabilities"}) + "\n")
+            proc.stdin.flush()
+
+            start_time = time.time()
+            resp_line = ""
+            while time.time() - start_time < timeout:
+                if proc.poll() is not None:
+                    raise RuntimeError(
+                        f"Worker exited with code {proc.returncode} during capability probe"
+                    )
+                remaining = max(0.05, timeout - (time.time() - start_time))
+                try:
+                    resp_line = self._stdout_queue.get(timeout=min(0.2, remaining))
+                    if resp_line:
+                        break
+                except queue.Empty:
+                    continue
+
+            if not resp_line:
+                self._shutdown_locked()
+                raise TimeoutError(
+                    f"Docling capability probe timed out after {int(timeout)} seconds."
+                )
+
+            resp = json.loads(resp_line.strip())
+            if resp.get("status") != "ok":
+                raise RuntimeError(
+                    f"Capability probe failed: {resp.get('error', 'unknown error')}"
+                )
+            return resp
+
     def convert_file(
         self,
         source_path: str,
@@ -341,6 +406,10 @@ class DoclingWorkerClient:
                 resp_data = json.loads(resp_line.strip())
                 if resp_data.get("status") != "ok":
                     error_msg = resp_data.get("error", "Unknown worker error")
+                    if resp_data.get("error_code") == "enrichment_model_unavailable":
+                        raise EnrichmentModelUnavailableError(
+                            error_msg, resp_data.get("capability")
+                        )
                     raise RuntimeError(f"Docling conversion failed: {error_msg}")
 
                 # Read generated Markdown from the private temporary output file

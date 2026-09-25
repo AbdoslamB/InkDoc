@@ -172,7 +172,10 @@ def convert_with_docling(item: QueueItem, options: ConversionOptions) -> str:
     if mgr.is_pack_installed("docling") or (
         hasattr(mgr.is_engine_installed, "return_value") and mgr.is_engine_installed("docling")
     ):
-        from app.core.engines.docling_worker_client import DoclingWorkerClient
+        from app.core.engines.docling_worker_client import (
+            DoclingWorkerClient,
+            EnrichmentModelUnavailableError,
+        )
 
         try:
             client = DoclingWorkerClient.get_instance()
@@ -183,6 +186,14 @@ def convert_with_docling(item: QueueItem, options: ConversionOptions) -> str:
                 code_enrichment=getattr(options, "docling_code_enrichment", False),
                 formula_enrichment=getattr(options, "docling_formula_enrichment", False),
             )
+        except EnrichmentModelUnavailableError:
+            # Not eligible for fallback. The settings ask for enrichment and the
+            # pack cannot provide it, which is a configuration inconsistency with
+            # a concrete remedy the user has to carry out. Answering it with a
+            # quietly un-enriched document from another engine would leave the
+            # setting switched on, the model still missing, and the user unaware
+            # that what they asked for never happened.
+            raise
         except Exception as exc:
             # Check if user explicitly enabled fallback to MarkItDown
             settings = mgr.get_settings()
@@ -214,6 +225,12 @@ def convert_with_docling(item: QueueItem, options: ConversionOptions) -> str:
             "Docling engine is not installed. Please install it in Settings before use."
         ) from exc
 
+    # Source mode has no pack, so neither the add-on nor the worker's capability
+    # precheck applies. A plain `pip install docling` leaves artifacts_path unset,
+    # which is the one configuration where Docling resolves models from the
+    # Hugging Face cache itself -- so enrichment works here without the add-on, and
+    # gating it would break the development workflow for no gain. A genuine
+    # failure still raises out of get_document_converter with Docling's own error.
     converter = get_document_converter(
         ocr=getattr(options, "docling_ocr", True),
         table_structure=getattr(options, "docling_table_structure", True),

@@ -55,12 +55,49 @@ commit made on a detached HEAD that a later checkout orphaned.
 """
 from __future__ import annotations
 
-# ─── The only line you normally change ───────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+#  RELEASE CONFIGURATION
+#  Normally you change VERSION and nothing else.
+# ═════════════════════════════════════════════════════════════════════════════
+
 VERSION = "1.0.4"
-# A tag containing a hyphen (e.g. "1.0.4-rc1") is a pre-release: release.yml
-# publishes those automatically and they are never marked Latest, so the signing
-# pause below does not apply to them.
-# ─────────────────────────────────────────────────────────────────────────────
+# A version containing a hyphen ("1.0.5-rc1") is a pre-release: release.yml
+# publishes it automatically, it is never marked Latest, and it needs no signed
+# update manifest -- so the signing and publish prompts are skipped for it.
+
+# ─── Engine packs ────────────────────────────────────────────────────────────
+# There is exactly one downloadable pack. markitdown and markit are compiled
+# into the application and have no pack of their own; build-packs.yml builds
+# docling for three platforms, not three different packs.
+#
+# Building it takes about an hour across three runners and publishes ~3.3 GB of
+# permanently immutable release assets, so it is off by default. Leave it False
+# to ship an application release against the pack app/core/manifest.json already
+# points at. Turn it on when app/core/engines/worker.py has changed -- that is
+# the single repository file build_pack.py copies into a pack, so nothing else
+# can alter what a pack contains.
+BUILD_DOCLING_PACK = False
+
+# Only read when BUILD_DOCLING_PACK is True. Must name a tag that does not yet
+# exist: pack assets cannot be replaced, only superseded. Leave as None to let
+# the script pick the next free number.
+DOCLING_PACK_TAG: str | None = None
+
+# ─── Policy ──────────────────────────────────────────────────────────────────
+# Release tags work from any branch -- release.yml triggers on the tag pattern
+# alone and Actions checks out the tag's commit. Requiring main is a convention,
+# so it is one you can switch off.
+ALLOW_NON_MAIN_BRANCH = True
+
+# ruff, compileall and pytest before anything is pushed. CI does not run on a
+# branch without a pull request, so on one this is the only gate there is.
+RUN_LOCAL_TESTS = True
+
+# False asks before making the release Latest. True answers every confirmation
+# yes -- the signing passphrase prompt still appears either way.
+AUTO_PUBLISH = False
+
+# ═════════════════════════════════════════════════════════════════════════════
 
 import argparse
 import json
@@ -417,27 +454,53 @@ def phase_pack(args, state: dict) -> None:
     banner("PHASE 3/6  ENGINE PACK (conditional)")
 
     prev = last_pack_tag()
-    if args.force_pack:
-        changed = True
-        step("--force-pack given")
-    elif prev is None:
+    if prev is None:
         changed = True
         step("No previous pack tag found")
     else:
-        # The only repository file build_pack.py copies into a pack.
+        # The only repository file build_pack.py copies into a pack, so nothing
+        # else can change what a pack contains.
         diff = run(["git", "diff", "--quiet", prev, "HEAD", "--", WORKER_PATH], check=False)
         changed = diff.returncode != 0
         step(f"{WORKER_PATH} {'changed' if changed else 'unchanged'} since {prev}")
 
-    if not changed:
-        ok("Engine pack is up to date -- skipping a ~1 hour rebuild")
+    if not args.build_pack:
+        if changed:
+            # Shipping the app without a pack carrying this worker means the new
+            # worker reaches nobody while the manifest still points at the old
+            # pack. Silent, and exactly how docling-pack-v4 went wrong.
+            warn(f"{WORKER_PATH} has changed since {prev}, but BUILD_DOCLING_PACK is False.")
+            warn("The shipped pack will not contain those changes.")
+            if not confirm("Release anyway, reusing the existing pack?",
+                           assume_yes=args.yes):
+                raise Abort(
+                    "Set BUILD_DOCLING_PACK = True to build a pack with this worker."
+                )
+        else:
+            ok("BUILD_DOCLING_PACK is False and the worker is unchanged -- "
+               "reusing the existing pack")
+        current = json.loads(MANIFEST_PATH.read_text(encoding="utf-8")).get("pack_version")
+        ok(f"App will ship against pack_version {current}")
         mark(state, "pack", pack_skipped=True)
         return
 
-    tag = next_pack_tag()
+    tag = args.pack_tag or next_pack_tag()
     if tag in BURNED_PACK_TAGS:
-        raise Abort(f"{tag} is published and immutable. Bump past it.")
-    ok(f"Next pack tag: {tag}")
+        raise Abort(
+            f"{tag} is published and immutable -- pack assets cannot be replaced.\n"
+            f"  Set DOCLING_PACK_TAG to a free tag, or leave it None to auto-pick."
+        )
+    if git("tag", "--list", tag) or out(["git", "ls-remote", "--tags", "origin", tag]):
+        raise Abort(f"Tag {tag} already exists. Choose another DOCLING_PACK_TAG.")
+    if not re.fullmatch(r"docling-pack-v\d+", tag):
+        raise Abort(
+            f"Pack tag '{tag}' does not match docling-pack-vN. The workflow derives\n"
+            f"  pack_version from that number, so a different shape yields 1.0.0 and\n"
+            f"  nothing downstream can tell packs apart."
+        )
+    ok(f"Pack tag: {tag}")
+    if not changed:
+        warn(f"{WORKER_PATH} is unchanged since {prev}; building anyway as configured.")
 
     if args.dry_run:
         action(f"[dry-run] would tag {tag}, watch {PACK_WORKFLOW}, commit its manifest")
@@ -746,16 +809,35 @@ PHASE_FUNCS = {
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    # Every option defaults from the configuration block at the top of the file.
+    # The flags exist to override a single run without editing it.
     p.add_argument("--dry-run", action="store_true", help="Plan only; change nothing")
     p.add_argument("--resume", action="store_true", help="Skip phases already recorded as done")
     p.add_argument("--only", choices=PHASES, help="Run a single phase")
-    p.add_argument("--force-pack", action="store_true", help="Rebuild the engine pack unconditionally")
+    p.add_argument("--build-pack", dest="build_pack", action="store_true", default=None,
+                   help="Build the engine pack (overrides BUILD_DOCLING_PACK)")
+    p.add_argument("--no-build-pack", dest="build_pack", action="store_false",
+                   help="Reuse the existing engine pack (overrides BUILD_DOCLING_PACK)")
+    p.add_argument("--pack-tag", default=None, help="Override DOCLING_PACK_TAG")
     p.add_argument("--skip-tests", action="store_true", help="Skip the local test suite in preflight")
     p.add_argument("--allow-dirty", action="store_true", help="Proceed with uncommitted changes")
     p.add_argument("--allow-branch", action="store_true",
                    help="Release from the current branch instead of requiring main")
-    p.add_argument("--yes", action="store_true", help="Do not prompt before the first push")
+    p.add_argument("--yes", action="store_true",
+                   help="Answer every confirmation yes, including publication")
     args = p.parse_args()
+
+    # Configuration supplies the defaults; a flag given on the command line wins.
+    if args.build_pack is None:
+        args.build_pack = BUILD_DOCLING_PACK
+    if args.pack_tag is None:
+        args.pack_tag = DOCLING_PACK_TAG
+    if ALLOW_NON_MAIN_BRANCH:
+        args.allow_branch = True
+    if not RUN_LOCAL_TESTS:
+        args.skip_tests = True
+    if AUTO_PUBLISH:
+        args.yes = True
 
     global DRY_RUN
     DRY_RUN = args.dry_run
@@ -769,7 +851,10 @@ def main() -> int:
     # Decisions stick across a resume. Having to remember which flags the first
     # invocation used is exactly the kind of thing that goes wrong halfway
     # through an hour-long release.
-    for flag in ("allow_branch", "allow_dirty", "force_pack", "skip_tests"):
+    # Only flags with no configuration equivalent need carrying: the rest are
+    # re-derived from the block at the top of the file on every run, so
+    # persisting them would let a stale value outrank the current config.
+    for flag in ("allow_dirty",):
         if getattr(args, flag):
             state[flag] = True
         elif state.get(flag):

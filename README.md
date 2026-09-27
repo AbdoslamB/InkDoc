@@ -6,20 +6,18 @@
 
 # InkDoc
 
-### High-Fidelity Document Workbench & Multi-Engine Conversion System
+### Turn any document into clean, AI-ready Markdown — locally on your machine
 
 A unified desktop workbench and local REST API that bridges **Microsoft MarkItDown**, **IBM Docling**, and **Shift Labs Markit** into one zero-friction Markdown pipeline — with collision-safe auto-saving.
 
 <br />
 
-<!-- Tip: replace the static CI badge with the live one once you know your workflow file name:
-     https://github.com/AbdoslamB/inkdoc/actions/workflows/<workflow-file>.yml/badge.svg -->
 <p align="center">
   <a href="https://github.com/AbdoslamB/inkdoc/releases"><img src="https://img.shields.io/github/v/release/AbdoslamB/inkdoc?style=flat-square&color=10b981&labelColor=0d1117&label=release" alt="Latest release" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-22d3ee?style=flat-square&labelColor=0d1117" alt="License: MIT" /></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10%2B-3776ab?style=flat-square&labelColor=0d1117&logo=python&logoColor=white" alt="Python 3.10+" /></a>
   <a href="#download"><img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-475569?style=flat-square&labelColor=0d1117" alt="Platform support" /></a>
-  <a href="https://github.com/AbdoslamB/inkdoc/actions"><img src="https://img.shields.io/badge/CI-passing-10b981?style=flat-square&labelColor=0d1117&logo=githubactions&logoColor=white" alt="CI status" /></a>
+  <a href="https://github.com/AbdoslamB/InkDoc/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://img.shields.io/github/actions/workflow/status/AbdoslamB/InkDoc/ci.yml?branch=main&style=flat-square&labelColor=0d1117&logo=githubactions&logoColor=white&label=CI" alt="CI status" /></a>
   <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/badge/linter-Ruff-2b2f36?style=flat-square&labelColor=0d1117&logo=ruff&logoColor=white" alt="Linted with Ruff" /></a>
 </p>
 
@@ -76,7 +74,8 @@ Ready-to-run desktop packages with every dependency and runtime bundled — **no
 
 > [!NOTE]
 > **macOS First Run (Unsigned Application):** InkDoc macOS builds are currently unsigned. On first launch, macOS Gatekeeper may show a warning ("cannot be opened because the developer cannot be verified"). To open the application:
-> - **Finder:** In Finder, **right-click (or Control-click)** `inkdoc.app`, select **Open**, and click **Open** in the confirmation dialog.
+> - **macOS 15 Sequoia and later:** Try to open `inkdoc.app` once, then go to **System Settings → Privacy & Security**, scroll to the message about InkDoc, and click **Open Anyway**. Right-click → Open no longer bypasses the warning on these versions.
+> - **macOS 14 and earlier:** In Finder, **right-click (or Control-click)** `inkdoc.app`, select **Open**, and click **Open** in the confirmation dialog.
 > - **Terminal:** Remove the quarantine attribute recursively:
 >   ```bash
 >   xattr -dr com.apple.quarantine inkdoc.app

@@ -2,6 +2,24 @@
 
 Thank you for your interest in contributing to InkDoc! We welcome code contributions, bug reports, documentation enhancements, and feature suggestions.
 
+## Your first contribution in 10 minutes
+
+1. **Pick something small.** Issues labeled [`good first issue`](https://github.com/AbdoslamB/InkDoc/labels/good%20first%20issue) are scoped for newcomers; comment on one to claim it. Questions are welcome on the issue itself.
+2. **Set up and run it:**
+   ```bash
+   git clone https://github.com/<your-username>/InkDoc.git   # your fork
+   cd InkDoc
+   python -m venv .venv
+   # Windows: .venv\Scripts\Activate.ps1   macOS/Linux: source .venv/bin/activate
+   python -m pip install -r requirements.txt
+   python -m pip install ruff==0.16.8 pytest==9.1.1 httpx==0.28.1 httpx2==2.13.0
+   python main.py            # the desktop app; add --headless for the API only
+   ```
+3. **Check it the way CI does:** `ruff check .` then `python -m pytest tests/`.
+4. **Open a pull request.** The template asks what you changed and how you tested it. A focused PR with one change is reviewed fastest.
+
+The rest of this guide is the detail behind those steps.
+
 ---
 
 ## 1. Getting Started
@@ -124,11 +142,15 @@ python -m compileall -q main.py app tests examples scripts
 # 2. Run the manifest release guard
 python scripts/generate_engine_manifest.py --verify-manifest
 
-# 3. Run the test suites
-python tests/test_server.py
-python tests/test_optional_engine.py
+# 3. Run the whole test suite, exactly as CI does
+python -m pytest tests/
 
-# 4. Verify code style with ruff
+# 4. UI logic tests (need Node.js; CI runs them on Linux)
+node tests/docs_release_selector.test.js
+node tests/enrichment_addon_ui.test.js
+node tests/preview_word_count.test.js
+
+# 5. Verify code style with ruff
 ruff check .
 ```
 
@@ -176,32 +198,7 @@ You will receive an initial response within a few days. Once a fix is available,
 
 ## 8. Code of Conduct
 
-### Our Pledge
-We as members, contributors, and leaders pledge to make participation in our community a harassment-free experience for everyone, regardless of age, body size, visible or invisible disability, ethnicity, sex characteristics, gender identity and expression, level of experience, education, socio-economic status, nationality, personal appearance, race, religion, or sexual identity and orientation.
-
-We pledge to act and interact in ways that contribute to an open, welcoming, diverse, inclusive, and healthy community.
-
-### Our Standards
-Examples of behavior that contributes to a positive environment:
-* Demonstrating empathy and kindness toward other people
-* Being respectful of differing opinions, viewpoints, and experiences
-* Giving and gracefully accepting constructive feedback
-* Accepting responsibility and apologizing to those affected by mistakes, and learning from the experience
-* Focusing on what is best not just for us as individuals, but for the overall community
-
-Examples of unacceptable behavior:
-* The use of sexualized language or imagery, and sexual attention or advances of any kind
-* Trolling, insulting or derogatory comments, and personal or political attacks
-* Public or private harassment
-* Publishing others' private information, such as a physical or email address, without their explicit permission
-* Other conduct which could reasonably be considered inappropriate in a professional setting
-
-### Enforcement Responsibilities & Scope
-Project maintainers are responsible for clarifying and enforcing our standards of acceptable behavior and will take appropriate and fair corrective action in response to any behavior that they deem inappropriate, threatening, offensive, or harmful.
-
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported by contacting the maintainer directly through GitHub. All complaints will be reviewed and investigated promptly and fairly.
-
-This Code of Conduct is adapted from the [Contributor Covenant](https://www.contributor-covenant.org), version 2.1.
+Everyone taking part in InkDoc is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ---
 
@@ -247,4 +244,4 @@ git pull origin main
 git tag v1.0.2
 git push origin v1.0.2
 ```
-Tags without hyphens are automatically published as the official stable release with `--latest=true`.
+A stable tag (no hyphen) stops at a **draft**: the update manifest is signed offline and attached first, and only then is the release published as Latest. `python scripts/release.py` drives the whole sequence; see `docs/RELEASE_RUNBOOK.md`.

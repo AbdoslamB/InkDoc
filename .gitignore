@@ -1,0 +1,36 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+build/
+dist/
+
+# Local manual-test builds (scripts/build_local_exe.ps1)
+dist-local/
+build-local/
+dist-onefile/
+*.spec
+.vscode/
+.idea/
+
+# Release signing keys — MUST never be committed.
+# scripts/generate_signing_key.py refuses to write inside this repository, but
+# these patterns are a second line of defence against a stray `git add -A`.
+*.pem
+*.key
+*.p8
+*.pfx
+inkdoc_signing_key*
+
+# Local Claude Code context — not for the public repo
+CLAUDE.md
+.claude/
+.atl/
+.work/
+
+# Smoke test and scratch artifacts
+scratch/
+smoke-logs/

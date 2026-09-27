@@ -1,0 +1,40 @@
+# Pinned Docling stack for the engine pack and the enrichment add-on.
+#
+# Passed with `-c` to every pip install in scripts/build_pack.py and in
+# .github/workflows/build-addon.yml, so both artifacts are built against the same
+# Docling. Before this file, both installed `docling` unpinned at different
+# times. The add-on's model directory name and weights revision are chosen by
+# the Docling version that downloads them, and the pack's Docling decides which
+# directory name it looks for -- so an add-on built against one version and a
+# pack shipping another could produce an install that downloads 640 MB and then
+# cannot be loaded.
+#
+# These are the exact versions the engine pack has been built and verified with,
+# identical on windows-x86_64, linux-x86_64 and macos-arm64 (readable from the
+# per-file hashes in app/core/manifest.json).
+#
+# To upgrade: change the versions here, rebuild the pack, then rebuild the
+# add-on. scripts/build_addon.py refuses to build against a Docling version the
+# pack in app/core/manifest.json does not ship, so the order is enforced.
+#
+# A constraints file only limits versions; it never adds packages. Entries for
+# packages a given install does not need are ignored. torch and torchvision are
+# pinned without the +cpu local label: PEP 440 ignores local labels when the pin
+# has none, so the same line selects 2.14.0+cpu from the CPU index on Windows and
+# Linux and 2.14.0 on macOS.
+
+docling==2.130.0
+docling-slim==2.130.0
+docling-core==2.98.0
+docling-ibm-models==4.0.3
+docling-parse==7.21.0
+
+# Load the recognition and layout models; a change here can alter what a given
+# set of weights needs in order to load.
+transformers==5.17.0
+huggingface-hub==1.32.0
+safetensors==0.8.0
+
+# Dominates pack size, which build_pack.py caps at 1.9 GiB.
+torch==2.14.0
+torchvision==0.29.0

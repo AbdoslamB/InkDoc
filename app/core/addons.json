@@ -1,0 +1,47 @@
+{
+  "catalogue_version": "1.0.0",
+  "_comment": [
+    "Optional downloadable add-ons. Kept separate from manifest.json because CI",
+    "regenerates that file from pack fragments on every pack release and would",
+    "discard anything else in it, and because add-ons ship on their own cadence.",
+    "",
+    "The add-on is platform-neutral: it is model weights, not executables, so one",
+    "artifact serves Windows, macOS and Linux. It installs into the Docling pack's",
+    "own models directory because Docling resolves every model against a single",
+    "artifacts_path that the pack worker pins there.",
+    "",
+    "url, sha256, size_bytes, uncompressed_size_bytes and sha256_files are written",
+    "by .github/workflows/build-addon.yml, which derives the URL from the release",
+    "tag and commits the result back. Do not edit them by hand: this file used to",
+    "be filled in from a printed blob, which is how it came to hold a placeholder",
+    "URL that AddonManager.get_status reported as installable.",
+    "",
+    "Both url and sha256 empty is the 'unreleased' state, and is valid: the add-on",
+    "reports available=false, install is refused, and the enrichment toggles stay",
+    "disabled. Any other incomplete combination is a defect and fails",
+    "scripts/verify_addon_catalogue.py in CI.",
+    "",
+    "min_pack_version is the first pack whose worker implements the 'capabilities'",
+    "RPC the installer confirms a new install with, and refuses enrichment outright",
+    "when the model is absent instead of quietly converting without it. Every pack",
+    "built from this repository does, so it is 1.0.0. worker.py is hashed into the",
+    "pack manifest and the launcher rejects a modified copy, so raise it (via",
+    "MIN_PACK_VERSION in scripts/build_addon.py) when the add-on comes to depend on",
+    "worker behaviour an already-published pack lacks."
+  ],
+  "addons": {
+    "code_enrichment": {
+      "title": "Code & Formula Recognition",
+      "description": "Transcribes code blocks and mathematical formulas from page images using Docling's recognition model, and labels the programming language of each code block.",
+      "model_dir": "docling-project--CodeFormulaV2",
+      "url": "",
+      "sha256": "",
+      "archive_format": "tar.gz",
+      "size_bytes": 0,
+      "uncompressed_size_bytes": 0,
+      "min_pack_version": "1.0.0",
+      "min_app_version": "",
+      "sha256_files": {}
+    }
+  }
+}

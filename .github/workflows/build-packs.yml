@@ -1,0 +1,283 @@
+name: Build Engine Packs
+
+on:
+  push:
+    tags:
+      - "docling-pack-*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Dedicated release tag to publish packs to (e.g. docling-pack-v1)"
+        required: true
+        default: "docling-pack-v1"
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+env:
+  DEFAULT_RELEASE_TAG: "docling-pack-v1"
+
+jobs:
+  build-pack:
+    name: Build Pack (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows-x86_64
+          - os: ubuntu-22.04
+            platform: linux-x86_64
+          - os: macos-14
+            platform: macos-arm64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Determine release tag
+        id: tag
+        shell: bash
+        run: |
+          TARGET_TAG="${{ github.event.inputs.release_tag || github.ref_name }}"
+          if [ -z "$TARGET_TAG" ] || [ "$TARGET_TAG" = "main" ]; then
+            TARGET_TAG="${{ env.DEFAULT_RELEASE_TAG }}"
+          fi
+          # Published pack assets are immutable. Reuse of a published tag is refused
+          # by asking the release itself -- build-pack's Immutability Guard before
+          # anything is built, and finalize-pack-release's pre-upload check --
+          # rather than by a hand-kept list of tags, only as current as its last edit.
+          echo "target_tag=$TARGET_TAG" >> "$GITHUB_OUTPUT"
+          echo "Target Release Tag: $TARGET_TAG"
+          # Derive the pack version from the tag so the two cannot drift.
+          # build_pack.py defaults to 1.0.0 and the workflow never passed
+          # anything, so v1, v2 and v3 all reported the same pack_version and
+          # nothing downstream could tell an old pack from a new one. Any check
+          # of the form "is the installed pack new enough?" needs this to be real.
+          PACK_SUFFIX="${TARGET_TAG##*-v}"
+          case "$PACK_SUFFIX" in
+            ''|*[!0-9]*) PACK_VERSION="1.0.0" ;;
+            *) PACK_VERSION="${PACK_SUFFIX}.0.0" ;;
+          esac
+          echo "pack_version=$PACK_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Pack Version: $PACK_VERSION"
+
+      - name: Immutability Guard (Requirement 2)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_TAG: ${{ steps.tag.outputs.target_tag }}
+        run: |
+          echo "[*] Checking if release '${TARGET_TAG}' already contains assets for platform '${{ matrix.platform }}'..."
+          # If the release exists, check whether this platform's pack asset already exists
+          if gh release view "${TARGET_TAG}" --json assets > release_assets.json 2>/dev/null; then
+            ASSET_EXISTS=$(python -c '
+          import json, sys
+          data = json.load(open("release_assets.json"))
+          names = [a["name"] for a in data.get("assets", [])]
+          plat = "${{ matrix.platform }}"
+          exists = any(n.startswith(f"docling-{plat}.") for n in names)
+          print("1" if exists else "0")
+          ')
+            if [ "$ASSET_EXISTS" = "1" ]; then
+              echo "::error::Asset for platform '${{ matrix.platform }}' already exists on release tag '${TARGET_TAG}'. Pack assets are immutable! Rebuilds must use the next unused docling-pack-vN tag."
+              exit 1
+            fi
+            echo "[OK] Immutability check passed: asset does not yet exist on release '${TARGET_TAG}'."
+          else
+            echo "[OK] Release '${TARGET_TAG}' does not exist yet. Proceeding with initial build."
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1 libglib2.0-0
+
+      - name: Build, harden, and verify engine pack
+        shell: bash
+        run: |
+          python scripts/build_pack.py \
+            --output-dir dist/packs \
+            --release-tag "${{ steps.tag.outputs.target_tag }}" \
+            --pack-version "${{ steps.tag.outputs.pack_version }}"
+
+      - name: Upload Pack & Fragment Artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: docling-pack-${{ matrix.platform }}
+          path: dist/packs/*
+          if-no-files-found: error
+
+  finalize-pack-release:
+    name: Finalize Release & Full Extraction Verification
+    needs: [build-pack]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Determine release tag
+        id: tag
+        shell: bash
+        run: |
+          TARGET_TAG="${{ github.event.inputs.release_tag || github.ref_name }}"
+          if [ -z "$TARGET_TAG" ] || [ "$TARGET_TAG" = "main" ]; then
+            TARGET_TAG="${{ env.DEFAULT_RELEASE_TAG }}"
+          fi
+          # Published pack assets are immutable. Reuse of a published tag is refused
+          # by asking the release itself -- build-pack's Immutability Guard before
+          # anything is built, and finalize-pack-release's pre-upload check --
+          # rather than by a hand-kept list of tags, only as current as its last edit.
+          echo "target_tag=$TARGET_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+
+      - name: Download all platform pack artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist/downloaded_artifacts
+
+      - name: Organize pack archives and fragments
+        shell: bash
+        run: |
+          mkdir -p dist/all_packs dist/fragments
+          find dist/downloaded_artifacts -type f \( -name "*.zip" -o -name "*.tar.gz" \) -exec cp {} dist/all_packs/ \;
+          find dist/downloaded_artifacts -type f -name "*.fragment.json" -exec cp {} dist/fragments/ \;
+          echo "[*] Discovered archives:"
+          ls -lh dist/all_packs/
+          echo "[*] Discovered fragments:"
+          ls -lh dist/fragments/
+
+      - name: Merge platform fragments into unified manifest (Requirement 10)
+        run: |
+          python scripts/merge_manifest_fragments.py \
+            dist/fragments \
+            --output dist/manifest.json \
+            --expected-platforms windows-x86_64 linux-x86_64 macos-arm64
+
+      - name: Verify packs with EngineManager extraction and launch integrity (Requirement 1)
+        run: |
+          python scripts/verify_engine_pack_install.py \
+            --manifest dist/manifest.json \
+            --archives-dir dist/all_packs
+
+      - name: Pre-upload immutable-asset check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_TAG: ${{ steps.tag.outputs.target_tag }}
+        run: |
+          expected_assets=(
+            docling-windows-x86_64.zip
+            docling-linux-x86_64.tar.gz
+            docling-macos-arm64.tar.gz
+            manifest.json
+          )
+          if gh release view "${TARGET_TAG}" --json assets --jq '.assets[].name' > existing_assets.txt 2>/dev/null; then
+            conflicts=0
+            for asset in "${expected_assets[@]}"; do
+              if grep -Fqx "$asset" existing_assets.txt; then
+                echo "::error::Refusing to overwrite existing release asset '$asset' on '${TARGET_TAG}'."
+                conflicts=1
+              fi
+            done
+            if [ "$conflicts" -ne 0 ]; then
+              exit 1
+            fi
+          fi
+
+      - name: Attach Packs & Manifest to GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: ${{ steps.tag.outputs.target_tag }}
+          overwrite_files: false
+          make_latest: false
+          files: |
+            dist/all_packs/*
+            dist/manifest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Attest Pack Provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: |
+            dist/all_packs/*
+            dist/manifest.json
+
+  verify-published-release:
+    name: Verify Published Release Assets
+    needs: [finalize-pack-release]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      attestations: read
+      id-token: write
+    steps:
+      - name: Determine release tag
+        id: tag
+        shell: bash
+        run: |
+          TARGET_TAG="${{ github.event.inputs.release_tag || github.ref_name }}"
+          if [ -z "$TARGET_TAG" ] || [ "$TARGET_TAG" = "main" ]; then
+            TARGET_TAG="${{ env.DEFAULT_RELEASE_TAG }}"
+          fi
+          echo "target_tag=$TARGET_TAG" >> "$GITHUB_OUTPUT"
+
+      # This job intentionally has no checkout: it verifies what the public release
+      # actually serves. gh therefore cannot infer the repository from a git remote,
+      # so GH_REPO must be set explicitly or every gh call dies with
+      # "failed to run git: fatal: not a git repository". Same defect release.yml
+      # hit in #16; build-packs.yml never got the same treatment.
+      - name: Download public assets and verify size and SHA-256
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TARGET_TAG: ${{ steps.tag.outputs.target_tag }}
+        run: |
+          set -euo pipefail
+          expected_assets=(
+            docling-windows-x86_64.zip
+            docling-linux-x86_64.tar.gz
+            docling-macos-arm64.tar.gz
+            manifest.json
+          )
+          mkdir -p published-assets
+          gh release view "$TARGET_TAG" --json assets > release_assets.json
+          for asset in "${expected_assets[@]}"; do
+            expected_size=$(python -c 'import json, sys; assets = json.load(open("release_assets.json"))["assets"]; name = sys.argv[1]; matches = [a for a in assets if a["name"] == name]; assert len(matches) == 1, f"Expected exactly one release asset named {name}, found {len(matches)}"; print(matches[0]["size"])' "$asset")
+            expected_digest=$(python -c 'import json, sys; assets = json.load(open("release_assets.json"))["assets"]; name = sys.argv[1]; matches = [a for a in assets if a["name"] == name]; assert len(matches) == 1, f"Expected exactly one release asset named {name}, found {len(matches)}"; print(matches[0]["digest"])' "$asset")
+            public_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TARGET_TAG}/${asset}"
+            curl --fail --location --retry 3 --retry-all-errors --output "published-assets/${asset}" "$public_url"
+            actual_size=$(wc -c < "published-assets/${asset}")
+            actual_digest="sha256:$(sha256sum "published-assets/${asset}" | awk '{print $1}')"
+            test "$actual_size" = "$expected_size"
+            test "$actual_digest" = "$expected_digest"
+            echo "[PASS] ${asset}: size=${actual_size}, sha256=${actual_digest#sha256:}"
+          done
+
+      - name: Verify GitHub build attestations
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          for asset in published-assets/*; do
+            gh attestation verify "$asset" --repo "${GITHUB_REPOSITORY}"
+            echo "[PASS] Attestation verified: $(basename "$asset")"
+          done

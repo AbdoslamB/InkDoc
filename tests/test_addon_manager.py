@@ -66,9 +66,53 @@ def test_shipped_catalogue_is_well_formed():
 
 
 def test_unreleased_addon_is_not_installable():
-    """While url/sha256 are blank the toggles must stay disabled."""
-    mgr = AddonManager(catalogue_path=CATALOGUE)
-    st = mgr.get_status("code_enrichment")
+    """While url/sha256 are blank the toggles must stay disabled.
+
+    Hermetic on both inputs. The catalogue is built from the shipped one rather
+    than read from it, because the release commits the published entry into
+    app/core/addons.json. The engine directory is a temporary pack with no model,
+    because get_status() otherwise reads the real one -- and on a machine where
+    the add-on is installed, the model is genuinely usable. Either leak made the
+    result depend on when and where the test ran.
+    """
+    tmp = Path(tempfile.mkdtemp())
+    raw = json.loads(CATALOGUE.read_text(encoding="utf-8"))
+    raw["addons"]["code_enrichment"].update(
+        url="", sha256="", size_bytes=0, uncompressed_size_bytes=0, sha256_files={}
+    )
+    unreleased = tmp / "addons.json"
+    unreleased.write_text(json.dumps(raw), encoding="utf-8")
+
+    # A machine with the pack installed but not the add-on: the case the toggles
+    # guard, since the pack alone is not enough for enrichment.
+    pack = tmp / "pack"
+    (pack / "models").mkdir(parents=True)
+    (pack / "pack_meta.json").write_text(json.dumps({"pack_version": "1.0.0"}), encoding="utf-8")
+
+    class _FakeEngineManager:
+        @staticmethod
+        def get_instance():
+            return _FakeEngineManager()
+
+        def is_pack_installed(self, _name="docling"):
+            return True
+
+        def get_engine_dir(self, _name="docling"):
+            return pack
+
+    import app.core.engine_manager as em
+
+    original = em.EngineManager
+    em.EngineManager = _FakeEngineManager  # type: ignore[misc]
+    try:
+        mgr = AddonManager(catalogue_path=unreleased)
+        st = mgr.get_status("code_enrichment")
+    finally:
+        em.EngineManager = original
+
+    assert st["catalogue_state"] == "unreleased"
+    assert st["pack_installed"] is True
+    assert st["installed"] is False
     assert st["available"] is False
     assert st["installable"] is False
     assert st["usable"] is False

@@ -284,3 +284,21 @@ def test_malformed_commit_is_fatal(tmp_path):
     write_metadata(tmp_path, {"config.json": "not-a-commit"})
     with pytest.raises(SystemExit, match="Unexpected commit id"):
         ba.source_revision(tmp_path)
+
+
+@pytest.mark.parametrize("workflow", ["build-addon.yml", "build-packs.yml"])
+def test_non_app_releases_never_become_latest(workflow):
+    """Only an app release may be Latest.
+
+    The in-app updater fetches /releases/latest/download/inkdoc-update-manifest.json,
+    and GitHub marks the newest release Latest unless told otherwise. docling-addon-v1
+    was published without make_latest: false and took Latest from under the app, so
+    every client's update check would have failed until an app release took it back.
+    """
+    text = (REPO_ROOT / ".github" / "workflows" / workflow).read_text(encoding="utf-8")
+    steps = [s for s in re.split(r"\n\s*- name:", text) if "softprops/action-gh-release" in s]
+    assert steps, f"{workflow} no longer publishes with softprops/action-gh-release"
+    for step in steps:
+        assert re.search(r"^\s*make_latest:\s*false\s*$", step, re.MULTILINE), (
+            f"{workflow}: a release step can mark its release Latest:\n{step.strip()[:200]}"
+        )

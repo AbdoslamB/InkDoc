@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Publishing an enrichment add-on release no longer marks it as the Latest
+  release. The in-app updater reads `/releases/latest/download/`, so an add-on
+  holding Latest would have cut off every installed copy's update check until the
+  next app release.
+
 ## [1.0.0] - 2026-09-26
 
 Initial release.

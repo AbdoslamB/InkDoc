@@ -107,6 +107,10 @@ jobs:
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ steps.tag.outputs.target_tag }}
+          # The in-app updater resolves /releases/latest/download/, so only an app
+          # release may ever be Latest. Left unset, GitHub marks the newest release
+          # Latest, and publishing an add-on cut off every client's update check.
+          make_latest: false
           files: |
             dist/addons/inkdoc-addon-code_enrichment.tar.gz
             dist/addons/addons.json

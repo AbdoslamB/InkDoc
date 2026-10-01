@@ -1,4 +1,4 @@
-markitdown[all]>=0.1.7
+markitdown[all]>=0.1.8
 # Imported directly by app/core/pdf_probe.py (missing-text check and Auto routing).
 # Already installed through markitdown's PDF extra; listed so it is not lost if
 # that extra ever changes.

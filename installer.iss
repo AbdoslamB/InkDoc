@@ -71,6 +71,95 @@ begin
   Result := WizardSilent() and (ExpandConstant('{param:RESTARTAPP|0}') = '1');
 end;
 
+(* ─── Downloaded engines on uninstall ──────────────────────────────────────
+  A parenthesis-star comment on purpose: a brace comment would end at the
+  first closing brace in its own text, such as the one in {app} below.
+  The Docling pack (~1 GB) and GLM-OCR (~1.45 GB) are downloaded by the app into
+  the engines folder, not installed by this setup, so Inno would leave them
+  behind. Ask, and default to keeping them: a reinstall finds them ready.
+
+  The engines folder is resolved the way EngineManager.get_engines_base_dir()
+  does it, NOT from {app}: the app may be installed anywhere, the engines are
+  always under LOCALAPPDATA (or INKDOC_ENGINES_DIR, or the short root
+  %SYSTEMDRIVE%\InkDoc\engines used when LOCALAPPDATA is very long).
+
+  Silent uninstalls (/VERYSILENT) keep the engines. The in-app updater runs the
+  installer, never the uninstaller, so updates cannot reach this step. *)
+
+function DirSize(const Dir: String): Int64;
+var
+  FindRec: TFindRec;
+begin
+  Result := 0;
+  if FindFirst(AddBackslash(Dir) + '*', FindRec) then
+  begin
+    try
+      repeat
+        if (FindRec.Name <> '.') and (FindRec.Name <> '..') then
+        begin
+          if (FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0 then
+            Result := Result + DirSize(AddBackslash(Dir) + FindRec.Name)
+          else
+            Result := Result + (Int64(FindRec.SizeHigh) shl 32) + FindRec.SizeLow;
+        end;
+      until not FindNext(FindRec);
+    finally
+      FindClose(FindRec);
+    end;
+  end;
+end;
+
+function FormatSize(const Bytes: Int64): String;
+var
+  MB: Int64;
+begin
+  MB := Bytes div (1024 * 1024);
+  if MB >= 1024 then
+    Result := IntToStr(MB div 1024) + '.' + IntToStr(((MB mod 1024) * 10) div 1024) + ' GB'
+  else
+    Result := IntToStr(MB) + ' MB';
+end;
+
+procedure AddIfPresent(var Dirs: TArrayOfString; const Dir: String);
+var
+  I: Integer;
+begin
+  if (Dir = '') or not DirExists(Dir) then
+    exit;
+  for I := 0 to GetArrayLength(Dirs) - 1 do
+    if CompareText(Dirs[I], Dir) = 0 then
+      exit;
+  SetArrayLength(Dirs, GetArrayLength(Dirs) + 1);
+  Dirs[GetArrayLength(Dirs) - 1] := Dir;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  Dirs: TArrayOfString;
+  I: Integer;
+  Total: Int64;
+begin
+  if CurUninstallStep <> usUninstall then
+    exit;
+  AddIfPresent(Dirs, GetEnv('INKDOC_ENGINES_DIR'));
+  AddIfPresent(Dirs, ExpandConstant('{localappdata}\InkDoc\engines'));
+  AddIfPresent(Dirs, ExpandConstant('{sd}\InkDoc\engines'));
+  if GetArrayLength(Dirs) = 0 then
+    exit;
+  if UninstallSilent() then
+    exit;
+  Total := 0;
+  for I := 0 to GetArrayLength(Dirs) - 1 do
+    Total := Total + DirSize(Dirs[I]);
+  if MsgBox('Also remove downloaded engines and models (Docling, GLM-OCR)? They use ' + FormatSize(Total) + '.' + #13#10#13#10 +
+            'Choose No to keep them; reinstalling InkDoc will find them ready.',
+            mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
+  begin
+    for I := 0 to GetArrayLength(Dirs) - 1 do
+      DelTree(Dirs[I], True, True, True);
+  end;
+end;
+
 [Run]
 ; Interactive install: offer the usual "Launch InkDoc" checkbox on the final page.
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall

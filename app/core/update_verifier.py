@@ -119,6 +119,70 @@ def get_official_public_keys() -> list[Any]:
     return keys
 
 
+def verify_signed_envelope(
+    envelope_raw: bytes,
+    trusted_public_keys: list[Any] | None = None,
+    *,
+    what: str = "update manifest",
+) -> bytes:
+    """Check an envelope's Ed25519 signature and return the decoded payload bytes.
+
+    The signature step only, shared by every signed document InkDoc accepts: the
+    app-update manifest (verify_envelope_bytes, which adds its own version and
+    URL rules) and the GLM-OCR model catalogue (app/core/glm_ocr_catalogue.py,
+    whose download URLs are on Hugging Face and could never pass the update
+    manifest's release-path rule).
+
+    1. The signature is verified over the exact received base64 payload bytes,
+       BEFORE anything is decoded or parsed.
+    2. In frozen releases only the embedded public keys are accepted, whatever
+       the caller passes (Requirement H).
+    """
+    invalid_sig_cls, _ = _get_crypto_primitives()
+
+    try:
+        envelope = json.loads(envelope_raw.decode("utf-8"))
+    except Exception as err:
+        raise UpdateVerificationError("Invalid JSON envelope format.") from err
+
+    if not isinstance(envelope, dict):
+        raise UpdateVerificationError("Signed envelope must be a JSON object.")
+
+    payload_b64 = envelope.get("payload")
+    sig_b64 = envelope.get("signature")
+
+    if not isinstance(payload_b64, str) or not isinstance(sig_b64, str):
+        raise UpdateVerificationError("Envelope missing required 'payload' or 'signature' strings.")
+
+    try:
+        sig_bytes = base64.b64decode(sig_b64)
+    except Exception as err:
+        raise UpdateVerificationError("Malformed base64 signature in envelope.") from err
+
+    payload_exact_bytes = payload_b64.encode("utf-8")
+
+    is_frozen = getattr(sys, "frozen", False)
+    keys_to_try = get_official_public_keys() if is_frozen or trusted_public_keys is None else trusted_public_keys
+
+    for pk in keys_to_try:
+        try:
+            pk.verify(sig_bytes, payload_exact_bytes)
+            break
+        except invalid_sig_cls:
+            continue
+        except Exception:
+            continue
+    else:
+        raise UpdateVerificationError(
+            f"Cryptographic signature verification failed. The {what} is invalid or untrusted."
+        )
+
+    try:
+        return base64.b64decode(payload_b64)
+    except Exception as err:
+        raise UpdateVerificationError(f"Failed to decode the {what} payload.") from err
+
+
 def verify_envelope_bytes(
     envelope_raw: bytes,
     installed_version: str | None = None,
@@ -132,60 +196,17 @@ def verify_envelope_bytes(
     3. Rejects any version <= installed_version.
     4. Validates asset URLs sit under the official repository release path (Requirement C).
     """
-    invalid_sig_cls, _ = _get_crypto_primitives()
-
+    manifest_json_bytes = verify_signed_envelope(envelope_raw, trusted_public_keys)
     try:
-        envelope = json.loads(envelope_raw.decode("utf-8"))
-    except Exception as err:
-        raise UpdateVerificationError("Invalid JSON envelope format.") from err
-
-    if not isinstance(envelope, dict):
-        raise UpdateVerificationError("Update envelope must be a JSON object.")
-
-    payload_b64 = envelope.get("payload")
-    sig_b64 = envelope.get("signature")
-
-    if not isinstance(payload_b64, str) or not isinstance(sig_b64, str):
-        raise UpdateVerificationError("Envelope missing required 'payload' or 'signature' strings.")
-
-    try:
-        sig_bytes = base64.b64decode(sig_b64)
-    except Exception as err:
-        raise UpdateVerificationError("Malformed base64 signature in envelope.") from err
-
-    # Exact bytes to verify: the raw UTF-8 bytes of the payload string
-    payload_exact_bytes = payload_b64.encode("utf-8")
-
-    # In frozen builds, override any passed keys to strictly use embedded keys (Requirement H)
-    is_frozen = getattr(sys, "frozen", False)
-    if is_frozen or trusted_public_keys is None:
-        keys_to_try = get_official_public_keys()
-    else:
-        keys_to_try = trusted_public_keys
-
-    valid_signature = False
-    for pk in keys_to_try:
-        try:
-            pk.verify(sig_bytes, payload_exact_bytes)
-            valid_signature = True
-            break
-        except invalid_sig_cls:
-            continue
-        except Exception:
-            continue
-
-    if not valid_signature:
-        raise UpdateVerificationError(
-            "Cryptographic signature verification failed. The update manifest is invalid or untrusted."
-        )
-
-    # Decode and parse payload ONLY after signature verification succeeds
-    try:
-        manifest_json_bytes = base64.b64decode(payload_b64)
         manifest = json.loads(manifest_json_bytes.decode("utf-8"))
     except Exception as err:
         raise UpdateVerificationError("Failed to decode or parse manifest payload.") from err
 
+    return _validate_update_manifest(manifest, installed_version)
+
+
+def _validate_update_manifest(manifest: Any, installed_version: str | None) -> dict[str, Any]:
+    """The app-update rules applied after the signature: version, timestamp, asset URLs."""
     if not isinstance(manifest, dict):
         raise UpdateVerificationError("Manifest payload must be a JSON object.")
 

@@ -271,8 +271,9 @@ def allow_loopback(monkeypatch):
     real = du.validate_download_url
     allowed = du.ALLOWED_DOWNLOAD_HOSTS | {"127.0.0.1"}
 
-    def permissive(url, allowed_hosts=None):
-        return real(url, allowed if allowed_hosts is None else allowed_hosts | {"127.0.0.1"})
+    def permissive(url, allowed_hosts=None, allowed_suffixes=()):
+        hosts = allowed if allowed_hosts is None else allowed_hosts | {"127.0.0.1"}
+        return real(url, hosts, allowed_suffixes)
 
     monkeypatch.setattr(du, "validate_download_url", permissive)
     monkeypatch.setattr(am, "validate_download_url", permissive)

@@ -235,6 +235,7 @@ def fetch_url_safely(
             )
             tmp_path = Path(tmp_file.name)
 
+        completed = False
         try:
             for chunk in resp.stream(65536):
                 total_downloaded += len(chunk)
@@ -246,6 +247,7 @@ def fetch_url_safely(
                     tmp_file.write(chunk)
                 else:
                     chunks.append(chunk)
+            completed = True
         except (
             urllib3.exceptions.ReadTimeoutError,
             TimeoutError,
@@ -259,6 +261,13 @@ def fetch_url_safely(
             if tmp_file:
                 tmp_file.flush()
                 tmp_file.close()
+                # A download that failed part way (size cap, timeout, reset) never
+                # reaches a caller that could delete the file, so do it here.
+                if not completed and tmp_path is not None:
+                    try:
+                        tmp_path.unlink()
+                    except OSError:
+                        pass
 
         content_bytes = b"".join(chunks) if not to_temp_file else None
 

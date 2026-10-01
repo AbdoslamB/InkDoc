@@ -35,6 +35,15 @@ ALLOWED_DOWNLOAD_HOSTS = frozenset({
     "release-assets.githubusercontent.com",
 })
 
+# Model downloads only (GLM-OCR weights from Hugging Face). App updates and the
+# Docling pack keep passing ALLOWED_DOWNLOAD_HOSTS with no suffixes, so these
+# hosts can never serve an executable update. huggingface.co answers a
+# /resolve/ URL with a redirect to a regional CDN host under hf.co
+# (us.aws.cdn.hf.co, cas-bridge.xethub.hf.co...), whose names change, so the CDN
+# is allowed by suffix rather than by listing each host.
+MODEL_DOWNLOAD_HOSTS = ALLOWED_DOWNLOAD_HOSTS | frozenset({"huggingface.co"})
+MODEL_DOWNLOAD_HOST_SUFFIXES: tuple[str, ...] = (".hf.co",)
+
 # Windows reserved device names that cannot be created as files
 _WINDOWS_RESERVED_NAMES = re.compile(
     r"^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?$",
@@ -55,8 +64,43 @@ class DownloadError(Exception):
     """Raised when an HTTP transfer or staging operation fails."""
 
 
-def validate_download_url(url: str, allowed_hosts: frozenset[str] = ALLOWED_DOWNLOAD_HOSTS) -> None:
-    """Validate that URL uses HTTPS and resolves to an allowlisted CDN host."""
+class RateLimitedError(DownloadError):
+    """The server answered 429/503 and the caller asked not to wait it out.
+
+    Raised only with fail_fast_on_rate_limit=True, for callers that have another
+    source to try (GLM-OCR's upstream-then-mirror download): retrying a rate
+    limited host would only delay the fallback and add to the load.
+    """
+
+
+def host_matches_suffix(host: str, suffixes: tuple[str, ...]) -> bool:
+    """True when `host` is a subdomain of one of `suffixes`, on a dot boundary.
+
+    ".hf.co" matches "us.aws.cdn.hf.co" but neither "evilhf.co" (no dot before
+    the suffix) nor "hf.co.evil.com" (the suffix is not at the end). The bare
+    domain "hf.co" is not matched either: only what the suffix list names.
+    """
+    host = host.lower().rstrip(".")
+    for suffix in suffixes:
+        suffix = suffix.lower()
+        if not suffix.startswith("."):
+            suffix = "." + suffix
+        if len(host) > len(suffix) and host.endswith(suffix):
+            return True
+    return False
+
+
+def validate_download_url(
+    url: str,
+    allowed_hosts: frozenset[str] = ALLOWED_DOWNLOAD_HOSTS,
+    allowed_suffixes: tuple[str, ...] = (),
+) -> None:
+    """Validate that URL uses HTTPS and resolves to an allowlisted CDN host.
+
+    `allowed_suffixes` additionally admits subdomains of the given domains (see
+    host_matches_suffix). Empty by default: app updates and engine packs pass
+    only the exact host list.
+    """
     parsed = urllib.parse.urlparse(url)
     scheme = parsed.scheme.lower()
     host = (parsed.hostname or "").lower()
@@ -68,18 +112,24 @@ def validate_download_url(url: str, allowed_hosts: frozenset[str] = ALLOWED_DOWN
         else:
             raise SecurityError(f"Insecure protocol '{parsed.scheme}'. Only HTTPS downloads are permitted.")
 
-    if host not in allowed_hosts:
+    if host not in allowed_hosts and not host_matches_suffix(host, allowed_suffixes):
+        listed = sorted(allowed_hosts) + [f"*{s}" for s in allowed_suffixes]
         raise SecurityError(
-            f"Host '{host}' is not in the trusted CDN allowlist: {sorted(allowed_hosts)}"
+            f"Host '{host}' is not in the trusted CDN allowlist: {listed}"
         )
 
 
 class StrictRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Custom redirect handler validating EVERY hop against the strict allowlist."""
 
-    def __init__(self, allowed_hosts: frozenset[str] = ALLOWED_DOWNLOAD_HOSTS) -> None:
+    def __init__(
+        self,
+        allowed_hosts: frozenset[str] = ALLOWED_DOWNLOAD_HOSTS,
+        allowed_suffixes: tuple[str, ...] = (),
+    ) -> None:
         super().__init__()
         self.allowed_hosts = allowed_hosts
+        self.allowed_suffixes = allowed_suffixes
 
     def redirect_request(
         self,
@@ -90,7 +140,7 @@ class StrictRedirectHandler(urllib.request.HTTPRedirectHandler):
         headers: Any,
         newurl: str,
     ) -> urllib.request.Request | None:
-        validate_download_url(newurl, self.allowed_hosts)
+        validate_download_url(newurl, self.allowed_hosts, self.allowed_suffixes)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -146,10 +196,17 @@ def stream_download(
     max_retries: int = 3,
     backoff_factor: float = 1.0,
     stale_part_age_seconds: float = 86400.0,
+    allowed_suffixes: tuple[str, ...] = (),
+    fail_fast_on_rate_limit: bool = False,
 ) -> str:
     """Stream download a file with range-resume, If-Range, retry policies, and integrity checks.
 
     Returns the computed SHA-256 hex digest of the completed file.
+
+    `allowed_suffixes` admits subdomains on top of `allowed_hosts`, for the
+    initial URL and every redirect hop. With `fail_fast_on_rate_limit`, a 429 or
+    503 raises RateLimitedError at once instead of waiting and retrying: the
+    caller has another source to fall back to.
     """
     destination_path.parent.mkdir(parents=True, exist_ok=True)
     part_path = destination_path.with_suffix(destination_path.suffix + ".part")
@@ -205,7 +262,7 @@ def stream_download(
             raise DownloadError("Download cancelled by user.")
 
         # Re-validate URL on every attempt/retry
-        validate_download_url(url, allowed_hosts)
+        validate_download_url(url, allowed_hosts, allowed_suffixes)
 
         req_headers = {
             "User-Agent": user_agent,
@@ -219,11 +276,15 @@ def stream_download(
                 req_headers["If-Range"] = cached_last_modified
 
         req = urllib.request.Request(url, headers=req_headers)
-        opener = urllib.request.build_opener(StrictRedirectHandler(allowed_hosts))
+        opener = urllib.request.build_opener(StrictRedirectHandler(allowed_hosts, allowed_suffixes))
 
         try:
             resp = opener.open(req, timeout=30.0)
         except urllib.error.HTTPError as err:
+            if fail_fast_on_rate_limit and err.code in (429, 503):
+                raise RateLimitedError(
+                    f"HTTP {err.code} from '{urllib.parse.urlparse(url).hostname}': rate limited or unavailable."
+                ) from err
             # HTTP 429 Too Many Requests: inspect Retry-After
             if err.code == 429:
                 if attempt >= max_retries:
@@ -361,6 +422,175 @@ def stream_download(
     meta_path.unlink(missing_ok=True)
 
     return hasher.hexdigest().lower()
+
+
+def _safe_relative_name(name: str) -> str:
+    """Normalise an archive or catalogue path and refuse anything that could escape."""
+    norm = name.replace("\\", "/").strip("/")
+    p = Path(norm)
+    if not norm or p.is_absolute() or p.drive or ".." in p.parts:
+        raise SecurityError(f"Illegal path in archive: '{name}'")
+    for part in p.parts:
+        if _WINDOWS_RESERVED_NAMES.match(part) or ":" in part:
+            raise SecurityError(f"Illegal reserved filename in archive: '{name}'")
+    return norm
+
+
+def extract_selected_files(
+    archive_path: Path,
+    staging_dir: Path,
+    wanted: list[str] | tuple[str, ...] | set[str] | dict[str, str],
+    *,
+    strip_top_dir: bool = True,
+    max_file_bytes: int = 512 * 1024 * 1024,
+    max_link_depth: int = 8,
+) -> dict[str, str]:
+    """Extract only the `wanted` files from a .zip/.tar.gz, as regular files.
+
+    Built for runtime archives (llama.cpp) where only a known set of files may
+    ever be executed: nothing outside `wanted` is written to disk, so nothing
+    unlisted can be run. Returns {name: sha256} of what was written; the caller
+    compares it with the catalogue.
+
+    Differences from extract_archive_safely, all deliberate:
+    - Symlinks and hard links inside the archive are *followed* (within the
+      archive, never to the filesystem) and the target's bytes are written under
+      the wanted name. Linux and macOS builds ship SONAME chains
+      (libllama.so.0 -> libllama.so.0.5.0); the loader needs the link name, and
+      writing a real copy means no link ever reaches the disk.
+    - A single top-level folder (llama-b11307/) is stripped when strip_top_dir
+      is set, so one catalogue serves the flat Windows zip and the nested tars.
+    - A missing wanted file is an error (SecurityError), never a silent skip.
+    """
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    names = [_safe_relative_name(n) for n in wanted]
+    archive_str = str(archive_path).lower()
+
+    def strip_prefix(member_names: list[str]) -> str:
+        if not strip_top_dir:
+            return ""
+        parts = [n.replace("\\", "/").strip("/").split("/") for n in member_names if n.strip("/")]
+        firsts = {p[0] for p in parts}
+        if len(firsts) == 1 and any(len(p) > 1 for p in parts):
+            return next(iter(firsts)) + "/"
+        return ""
+
+    results: dict[str, str] = {}
+
+    def write(dest_name: str, reader: Callable[[], IO[bytes]], size: int, is_exec: bool) -> None:
+        if size > max_file_bytes:
+            raise SecurityError(f"Archive entry '{dest_name}' exceeds the {max_file_bytes} byte limit.")
+        dest = staging_dir / dest_name
+        if not is_safe_path(staging_dir, dest):
+            raise SecurityError(f"Archive entry escapes its staging directory: '{dest_name}'")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        hasher = hashlib.sha256()
+        written = 0
+        with reader() as src, open(dest, "wb") as dst:
+            while chunk := src.read(1024 * 1024):
+                written += len(chunk)
+                if written > max_file_bytes:
+                    raise SecurityError(f"Archive entry '{dest_name}' exceeds the {max_file_bytes} byte limit.")
+                hasher.update(chunk)
+                dst.write(chunk)
+        if os.name == "posix":
+            try:
+                dest.chmod(0o755 if is_exec else 0o644)
+            except OSError:
+                pass
+        results[dest_name] = hasher.hexdigest().lower()
+
+    if archive_str.endswith(".zip"):
+        with zipfile.ZipFile(archive_path, "r") as zf:
+            infos = zf.infolist()
+            prefix = strip_prefix([i.filename for i in infos])
+            index = {}
+            for info in infos:
+                norm = info.filename.replace("\\", "/").strip("/")
+                if prefix and norm.startswith(prefix):
+                    norm = norm[len(prefix):]
+                index[norm] = info
+            for name in names:
+                current, depth = name, 0
+                while True:
+                    info = index.get(current)
+                    if info is None or info.is_dir():
+                        raise SecurityError(f"Archive is missing required file: '{name}'")
+                    mode = info.external_attr >> 16
+                    if stat.S_ISLNK(mode):
+                        depth += 1
+                        if depth > max_link_depth:
+                            raise SecurityError(f"Too many links resolving '{name}'")
+                        target = zf.read(info).decode("utf-8", "replace")
+                        current = _resolve_link(current, target)
+                        continue
+                    if stat.S_ISCHR(mode) or stat.S_ISBLK(mode) or stat.S_ISFIFO(mode):
+                        raise SecurityError(f"Archive entry '{name}' is a special file")
+                    write(name, lambda info=info: zf.open(info), info.file_size, bool(mode & 0o111))
+                    break
+    elif archive_str.endswith((".tar.gz", ".tgz")):
+        with tarfile.open(archive_path, "r:*") as tf:
+            members = tf.getmembers()
+            prefix = strip_prefix([m.name for m in members])
+            index = {}
+            for member in members:
+                norm = member.name.replace("\\", "/").strip("/")
+                if prefix and norm.startswith(prefix):
+                    norm = norm[len(prefix):]
+                index[norm] = member
+            for name in names:
+                current, depth = name, 0
+                while True:
+                    member = index.get(current)
+                    if member is None:
+                        raise SecurityError(f"Archive is missing required file: '{name}'")
+                    if member.issym() or member.islnk():
+                        depth += 1
+                        if depth > max_link_depth:
+                            raise SecurityError(f"Too many links resolving '{name}'")
+                        if member.islnk():
+                            # Hard link targets are archive paths from the root.
+                            target = member.linkname.replace("\\", "/").strip("/")
+                            if prefix and target.startswith(prefix):
+                                target = target[len(prefix):]
+                            current = _safe_relative_name(target)
+                        else:
+                            current = _resolve_link(current, member.linkname)
+                        continue
+                    if not member.isfile():
+                        raise SecurityError(f"Archive entry '{name}' is not a regular file")
+
+                    def reader(member=member) -> IO[bytes]:
+                        fh = tf.extractfile(member)
+                        if fh is None:
+                            raise SecurityError(f"Archive entry '{member.name}' is unreadable")
+                        return fh
+
+                    write(name, reader, member.size, bool(member.mode & 0o111))
+                    break
+    else:
+        raise SecurityError(f"Unsupported archive format for extraction: '{archive_path.name}'")
+    return results
+
+
+def _resolve_link(link_name: str, target: str) -> str:
+    """Resolve a relative symlink inside an archive; refuse anything leaving it."""
+    target = target.replace("\\", "/")
+    if target.startswith("/") or (len(target) > 1 and target[1] == ":"):
+        raise SecurityError(f"Archive link '{link_name}' points outside the archive")
+    base = link_name.rsplit("/", 1)[0] if "/" in link_name else ""
+    joined = f"{base}/{target}" if base else target
+    parts: list[str] = []
+    for part in joined.split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if not parts:
+                raise SecurityError(f"Archive link '{link_name}' points outside the archive")
+            parts.pop()
+            continue
+        parts.append(part)
+    return _safe_relative_name("/".join(parts))
 
 
 def extract_archive_safely(

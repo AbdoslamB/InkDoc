@@ -1,4 +1,11 @@
 markitdown[all]>=0.1.7
+# Imported directly by app/core/pdf_probe.py (missing-text check and Auto routing).
+# Already installed through markitdown's PDF extra; listed so it is not lost if
+# that extra ever changes.
+pypdfium2>=4.30.0
+# Imported directly by GLM-OCR (page images: EXIF rotation, scaling). Already
+# installed through markitdown/pdfplumber; listed for the same reason.
+Pillow>=10.1
 markdown>=3.6
 fastapi>=0.110.0
 uvicorn[standard]>=0.28.0

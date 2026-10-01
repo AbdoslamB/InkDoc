@@ -1,0 +1,329 @@
+name: GLM-OCR Track ("latest tested")
+
+# Keeps GLM-OCR on the newest *tested* upstream pins, without an app release.
+#
+#   detect -> catalogue -> smoke (Windows, macOS, Linux; real downloads, the exact
+#   production command line, fixture recall) -> mirror (draft release glm-ocr-vN,
+#   same bytes as upstream, provenance attested) -> PR updating the bundled
+#   catalogue -> issue telling the maintainer to sign offline.
+#
+# Nothing here signs anything: the private key never touches CI. The maintainer
+# runs scripts/sign_glm_ocr_catalogue.py (docs/RELEASE_RUNBOOK.md, "GLM-OCR
+# catalogue"). If any step fails, nothing is drafted and the current pins stay.
+#
+# The weekly schedule only runs when the repository variable
+# GLM_OCR_TRACKER_ENABLED is "true", so adding this file changes nothing until
+# the maintainer opts in. workflow_dispatch always works (milestone 1 creates
+# glm-ocr-v1 this way, with the pins already in the bundled catalogue).
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"          # Mondays 04:17 UTC
+  workflow_dispatch:
+    inputs:
+      llama_build:
+        description: "llama.cpp build to pin (e.g. b11307); empty = newest complete build"
+        required: false
+        default: ""
+      model_revision:
+        description: "ggml-org/GLM-OCR-GGUF revision; empty = repository head"
+        required: false
+        default: ""
+      mirror_current:
+        description: "Mirror the CURRENT bundled pins (milestone 1: create glm-ocr-v1)"
+        type: boolean
+        default: false
+      force:
+        description: "Run even when upstream did not change"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: glm-ocr-track
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    name: Detect upstream changes
+    if: github.event_name == 'workflow_dispatch' || vars.GLM_OCR_TRACKER_ENABLED == 'true'
+    runs-on: ubuntu-22.04
+    outputs:
+      changed: ${{ steps.pins.outputs.changed }}
+      mirror_tag: ${{ steps.pins.outputs.mirror_tag }}
+      mirror_current: ${{ steps.pins.outputs.mirror_current }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.4.0
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Compare bundled pins with upstream
+        id: pins
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MIRROR_CURRENT: ${{ github.event.inputs.mirror_current }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${MIRROR_CURRENT:-false}" = "true" ]; then
+            python - <<'PY'
+          import json, os
+          c = json.load(open("app/core/glm_ocr_catalogue.json"))
+          pins = {"changed": True, "model_revision": c["model"]["source_revision"],
+                  "llama_build": c["runtime"]["version"],
+                  "current_model_revision": c["model"]["source_revision"],
+                  "current_llama_build": c["runtime"]["version"],
+                  "catalogue_version": c["catalogue_version"],
+                  "mirror_tag": f"glm-ocr-v{c['catalogue_version']}", "mirror_current": True}
+          json.dump(pins, open("pins.json", "w"), indent=2)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write(f"changed=true\nmirror_tag={pins['mirror_tag']}\nmirror_current=true\n")
+          PY
+          else
+            FORCE=""
+            if [ "${{ github.event.inputs.force }}" = "true" ]; then FORCE="--force"; fi
+            python scripts/glm_ocr_ci.py detect --out pins.json \
+              --llama-build "${{ github.event.inputs.llama_build }}" \
+              --model-revision "${{ github.event.inputs.model_revision }}" $FORCE
+          fi
+          cat pins.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: glm-ocr-pins
+          path: pins.json
+
+  catalogue:
+    name: Build catalogue for the new pins
+    needs: detect
+    if: needs.detect.outputs.changed == 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.4.0
+        with:
+          python-version: "3.11"
+      - run: python -m pip install -r requirements.txt
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: glm-ocr-pins
+      - name: Generate catalogue (hashes from upstream; runtime file lists from the archives)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          if python -c "import json,sys; sys.exit(0 if json.load(open('pins.json')).get('mirror_current') else 1)"; then
+            # Mirroring the pins the app already ships: use the committed catalogue
+            # byte for byte, so the mirror can only ever carry exactly those hashes.
+            cp app/core/glm_ocr_catalogue.json dist/glm_ocr_catalogue.json
+            python -c "import json; d=json.load(open('dist/glm_ocr_catalogue.json')); d.pop('_comment', None); json.dump(d, open('dist/glm-ocr-catalogue.payload.json', 'w'), indent=2)"
+            python scripts/verify_glm_ocr_catalogue.py dist/glm_ocr_catalogue.json --require-published
+            exit 0
+          fi
+          read -r MODEL BUILD VERSION TAG < <(python -c "import json;p=json.load(open('pins.json'));print(p['model_revision'],p['llama_build'],p['catalogue_version'],p['mirror_tag'])")
+          python scripts/build_glm_ocr_catalogue.py --model-revision "$MODEL" --llama-build "$BUILD" \
+            --catalogue-version "$VERSION" --mirror-tag "$TAG" --out dist/glm_ocr_catalogue.json \
+            --cache-dir dist/cache
+          python scripts/build_glm_ocr_catalogue.py --model-revision "$MODEL" --llama-build "$BUILD" \
+            --catalogue-version "$VERSION" --mirror-tag "$TAG" --out dist/glm-ocr-catalogue.payload.json \
+            --cache-dir dist/cache --payload
+          python scripts/verify_glm_ocr_catalogue.py dist/glm_ocr_catalogue.json --require-published
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: glm-ocr-catalogue
+          path: |
+            dist/glm_ocr_catalogue.json
+            dist/glm-ocr-catalogue.payload.json
+
+  smoke:
+    name: Test (${{ matrix.os }})
+    needs: [detect, catalogue]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-22.04]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.4.0
+        with:
+          python-version: "3.11"
+      - run: python -m pip install -r requirements.txt
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: glm-ocr-catalogue
+      # GitHub's macOS runners have no usable Metal GPU, so macOS is tested on the
+      # CPU through the same fallback the app uses when Metal cannot start.
+      # A non-ASCII engines folder catches path-encoding bugs in a new build.
+      - name: Install, self-test and OCR the fixtures
+        shell: bash
+        env:
+          INKDOC_GLM_OCR_FORCE_GPU_FAILURE: "1"
+          PYTHONUTF8: "1"
+        run: |
+          set -euo pipefail
+          ENGINES="${RUNNER_TEMP}/ünïcødé-عربي/engines"
+          mkdir -p "$ENGINES/glm-ocr"
+          python scripts/glm_ocr_ci.py smoke --catalogue glm_ocr_catalogue.json \
+            --engines-dir "$ENGINES" --report "report-${{ runner.os }}.json"
+      - name: Vulkan build starts (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update && sudo apt-get install -y libvulkan1 mesa-vulkan-drivers
+          python - <<'PY'
+          import json, subprocess, tempfile, sys
+          from pathlib import Path
+          sys.path.insert(0, ".")
+          from app.core.download_utils import extract_selected_files, stream_download, MODEL_DOWNLOAD_HOSTS
+          c = json.load(open("glm_ocr_catalogue.json"))
+          v = c["runtime"]["variants"]["linux-x64-vulkan"]
+          tmp = Path(tempfile.mkdtemp())
+          url = v["sources"][0]["url"]
+          assert stream_download(url, tmp / "rt.tar.gz", expected_size=v["size"], allowed_hosts=MODEL_DOWNLOAD_HOSTS) == v["sha256"]
+          extract_selected_files(tmp / "rt.tar.gz", tmp / "rt", list(v["sha256_files"]))
+          (tmp / "rt" / v["entry"]).chmod(0o755)
+          out = subprocess.run([str(tmp / "rt" / v["entry"]), "--version"], capture_output=True, text=True,
+                               env={"LD_LIBRARY_PATH": str(tmp / "rt"), "PATH": "/usr/bin:/bin"}, timeout=60)
+          print(out.stdout, out.stderr)
+          assert out.returncode == 0, "the Vulkan build did not start"
+          PY
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: glm-ocr-report-${{ runner.os }}
+          path: report-${{ runner.os }}.json
+          if-no-files-found: ignore
+
+  mirror:
+    name: Mirror to draft release
+    needs: [detect, catalogue, smoke]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.4.0
+        with:
+          python-version: "3.11"
+      - run: python -m pip install -r requirements.txt
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: glm-ocr-catalogue
+      # Mirror assets are immutable: clients pin their SHA-256. A new pin set goes
+      # to a new tag, never over an existing asset.
+      - name: Immutability guard
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.detect.outputs.mirror_tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --json assets > existing.json 2>/dev/null; then
+            if python -c 'import json,sys; sys.exit(0 if json.load(open("existing.json"))["assets"] else 1)'; then
+              echo "::error::${TAG} already has assets. Mirror releases are immutable; bump catalogue_version."
+              exit 1
+            fi
+          fi
+      - name: Download the exact upstream files and verify every hash
+        run: python scripts/glm_ocr_ci.py mirror-files --catalogue glm_ocr_catalogue.json --out dist/mirror
+      - name: Stage the unsigned payload
+        run: cp glm-ocr-catalogue.payload.json dist/mirror/
+      - name: Create draft mirror release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: ${{ needs.detect.outputs.mirror_tag }}
+          name: GLM-OCR mirror ${{ needs.detect.outputs.mirror_tag }}
+          draft: true
+          prerelease: true
+          # Only an app release may ever be Latest: the in-app updater resolves
+          # /releases/latest/download/.
+          make_latest: false
+          body: |
+            Mirror of the exact upstream GLM-OCR model and llama.cpp runtime files, byte for byte.
+            InkDoc downloads from upstream first and uses this release only as a fallback.
+            Not an app release.
+          files: dist/mirror/*
+          fail_on_unmatched_files: true
+      - name: Attest mirror provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: dist/mirror/*
+
+  # Not for mirror_current (milestone 1, run at release time): those pins are
+  # already bundled, so there is no PR to open and nothing to sign.
+  propose:
+    name: PR + maintainer issue
+    needs: [detect, catalogue, smoke, mirror]
+    if: always() && needs.detect.outputs.changed == 'true' && needs.detect.outputs.mirror_current != 'true'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: glm-ocr-*
+          merge-multiple: true
+          path: artifacts
+      - name: Write the report
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/reports
+          mv artifacts/report-*.json artifacts/reports/ 2>/dev/null || true
+          python scripts/glm_ocr_ci.py report --pins artifacts/pins.json --reports artifacts/reports --out report.md
+      # Needs "Allow GitHub Actions to create and approve pull requests" (Settings ->
+      # Actions -> General). When that is off, the branch is still pushed and the
+      # issue below says so; open the PR from the branch by hand.
+      - name: Open a PR updating the bundled catalogue
+        if: needs.mirror.result == 'success'
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.detect.outputs.mirror_tag }}
+        run: |
+          set -euo pipefail
+          if cmp -s artifacts/glm_ocr_catalogue.json app/core/glm_ocr_catalogue.json; then
+            echo "Bundled catalogue already matches; no PR needed."
+            exit 0
+          fi
+          BRANCH="glm-ocr/${TAG}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          cp artifacts/glm_ocr_catalogue.json app/core/glm_ocr_catalogue.json
+          git add app/core/glm_ocr_catalogue.json
+          git commit -m "chore(glm-ocr): bundle the ${TAG} catalogue"
+          git push origin "$BRANCH"
+          gh pr create --title "GLM-OCR: bundle the ${TAG} catalogue" --body-file report.md --head "$BRANCH"
+      - name: Open or update the maintainer issue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.detect.outputs.mirror_tag }}
+          OK: ${{ needs.mirror.result == 'success' }}
+        run: |
+          set -euo pipefail
+          if [ "$OK" = "true" ]; then
+            TITLE="GLM-OCR update ready to sign: ${TAG}"
+          else
+            TITLE="GLM-OCR update ${TAG} failed testing"
+            { echo; echo "**This run failed; nothing was drafted. The current pins stay in use.**";
+              echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"; } >> report.md
+          fi
+          EXISTING=$(gh issue list --state open --search "GLM-OCR update ${TAG} in:title" --json number --jq '.[0].number' || true)
+          if [ -n "$EXISTING" ]; then
+            gh issue edit "$EXISTING" --title "$TITLE" --body-file report.md
+          else
+            gh issue create --title "$TITLE" --body-file report.md
+          fi

@@ -72,6 +72,13 @@
               </label>
               <p class="settings-caption">If Docling encounters an error, automatically re-run using MarkItDown. The preview will explicitly indicate when fallback occurred.</p>
 
+              <label class="toggle-switch" style="margin-top: 10px;" title="Warn when a PDF conversion is missing part of the PDF's text">
+                <input type="checkbox" id="qualityCheckToggle" checked>
+                <span class="toggle-slider"></span>
+                <span class="toggle-label">Check PDFs for missing text</span>
+              </label>
+              <p class="settings-caption">Compares the result with the PDF's embedded text and warns if part of it was lost. Read-only; never changes the saved file.</p>
+
               <label class="toggle-switch" style="margin-top: 10px;" title="Check for application updates daily on launch">
                 <input type="checkbox" id="dailyUpdateToggle">
                 <span class="toggle-slider"></span>
@@ -227,6 +234,107 @@
                     <p class="settings-caption" id="doclingEnrichmentCaption">
                       Requires the optional recognition model. Both options share the same model, so turning on either one loads it for <em>every</em> Docling conversion, not only documents that contain code or formulas.
                     </p>
+                  </div>
+                </div>
+              </details>
+
+              <!-- GLM-OCR (Optional downloadable OCR model). Hidden until the
+                   bundled catalogue is published; shown as "Coming soon" while
+                   it is unreleased. -->
+              <details class="engine-card optional-engine-card" id="engineCardGlmOcr" style="display: none;">
+                <summary class="engine-card-summary">
+                  <span class="engine-card-icon glm-ocr-icon">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M3 7V5a2 2 0 0 1 2-2h2"></path><path d="M17 3h2a2 2 0 0 1 2 2v2"></path><path d="M21 17v2a2 2 0 0 1-2 2h-2"></path><path d="M7 21H5a2 2 0 0 1-2-2v-2"></path><line x1="7" y1="9" x2="17" y2="9"></line><line x1="7" y1="12" x2="17" y2="12"></line><line x1="7" y1="15" x2="13" y2="15"></line>
+                    </svg>
+                  </span>
+                  <span class="engine-card-name">GLM-OCR</span>
+                  <span class="engine-badge" id="glmStatusBadge">Checking…</span>
+                  <svg class="engine-card-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
+                </summary>
+                <div class="engine-card-content">
+                  <p class="engine-card-desc">Best-in-class OCR for scans, photos of documents, math and complex tables. Runs locally. <span id="glmSizeDesc">~1.45 GB download.</span></p>
+                  <p class="settings-caption glm-privacy">Downloads come from Hugging Face or GitHub. Your documents are processed on this computer and never uploaded.</p>
+                  <p class="settings-caption" id="glmRequirement">Needs about 3 GB of free memory while converting. Slower than other engines on a CPU: expect several seconds to a minute per page.</p>
+
+                  <div class="engine-meta-grid">
+                    <div class="engine-meta-item">
+                      <span class="engine-meta-label">Model:</span>
+                      <span class="engine-meta-value" id="glmModelVersion">—</span>
+                    </div>
+                    <div class="engine-meta-item">
+                      <span class="engine-meta-label">Runtime:</span>
+                      <span class="engine-meta-value" id="glmRuntimeVersion">—</span>
+                    </div>
+                    <div class="engine-meta-item">
+                      <span class="engine-meta-label">Download:</span>
+                      <span class="engine-meta-value" id="glmSizeInfo">—</span>
+                    </div>
+                    <div class="engine-meta-item">
+                      <span class="engine-meta-label">License:</span>
+                      <span class="engine-meta-value" id="glmLicenseInfo">MIT</span>
+                    </div>
+                    <div class="engine-meta-item">
+                      <span class="engine-meta-label">Acceleration:</span>
+                      <span class="engine-meta-value" id="glmAccelInfo">CPU</span>
+                    </div>
+                    <div class="engine-meta-item">
+                      <span class="engine-meta-label">Speed:</span>
+                      <span class="engine-meta-value" id="glmSpeedInfo">—</span>
+                    </div>
+                    <div class="engine-meta-item full-width">
+                      <span class="engine-meta-label">Source:</span>
+                      <span class="engine-meta-value" id="glmSourceInfo">Hugging Face, InkDoc mirror as fallback (SHA-256 verified)</span>
+                    </div>
+                    <div class="engine-meta-item full-width" id="glmPathRow" style="display: none;">
+                      <span class="engine-meta-label">Location:</span>
+                      <span class="engine-meta-value settings-path-text" id="glmPathInfo">—</span>
+                    </div>
+                  </div>
+
+                  <p class="engine-enrichment-addon-reason" id="glmReason" hidden></p>
+
+                  <div class="engine-progress-wrapper" id="glmProgressContainer" style="display: none;">
+                    <div class="engine-progress-bar">
+                      <div class="engine-progress-fill" id="glmProgressFill" style="width: 0%;"></div>
+                    </div>
+                    <div class="engine-progress-text" id="glmProgressText" role="status" aria-live="polite">Preparing…</div>
+                  </div>
+
+                  <div class="engine-actions">
+                    <button type="button" class="btn btn-sm btn-primary" id="btnGlmInstall">Download GLM-OCR</button>
+                    <button type="button" class="btn btn-sm btn-primary" id="btnGlmUpdate" style="display: none;">Update available</button>
+                    <button type="button" class="btn btn-sm btn-secondary" id="btnGlmVerify" style="display: none;">Verify</button>
+                    <button type="button" class="btn btn-sm btn-danger" id="btnGlmRemove" style="display: none;">Remove</button>
+                    <button type="button" class="btn btn-sm btn-ghost" id="btnGlmCancel" style="display: none;">Cancel</button>
+                  </div>
+
+                  <div class="engine-enrichment" id="glmOptions" style="display: none;">
+                    <label class="toggle-switch" title="Use the graphics card to read pages faster">
+                      <input type="checkbox" id="glmGpuToggle">
+                      <span class="toggle-slider"></span>
+                      <span class="toggle-label" id="glmGpuLabel">Use GPU acceleration</span>
+                    </label>
+                    <p class="settings-caption" id="glmGpuCaption">Downloads a GPU runtime (Vulkan, ~33 MB) on first use and tests it. Works with NVIDIA, AMD and Intel graphics; no CUDA needed.</p>
+
+                    <details class="glm-advanced" id="glmAdvanced">
+                      <summary>Advanced</summary>
+                      <label class="glm-field">
+                        <span>Download source</span>
+                        <select id="glmSourceSelect">
+                          <option value="auto">Automatic (official source first)</option>
+                          <option value="mirror_only">InkDoc mirror only</option>
+                        </select>
+                      </label>
+                      <label class="glm-field">
+                        <span>Precision</span>
+                        <select id="glmVariantSelect"></select>
+                      </label>
+                      <button type="button" class="btn btn-sm btn-secondary" id="btnGlmSelftest">Self-test again</button>
+                      <p class="settings-caption" id="glmCatalogueInfo"></p>
+                    </details>
                   </div>
                 </div>
               </details>
@@ -410,7 +518,26 @@
 
               <!-- Unified Engine Pill Selector — single source of truth -->
               <div class="engine-pill-group" id="enginePillGroup" role="radiogroup" aria-label="Processing Engine">
-                <button type="button" class="engine-pill active" data-engine="markitdown" id="pillMarkitdown"
+                <button type="button" class="engine-pill active" data-engine="auto" id="pillAuto"
+                  role="radio" aria-checked="true" tabindex="0"
+                  title="Auto: picks the best engine per file. MarkItDown for digital documents; GLM-OCR or Docling for scans and images (when installed; GLM-OCR only when it would finish within 5 minutes); Markit for YAML and XML.">
+                  <span class="pill-engine-icon auto-icon">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M15 4V2"></path>
+                      <path d="M15 16v-2"></path>
+                      <path d="M8 9h2"></path>
+                      <path d="M20 9h2"></path>
+                      <path d="M17.8 11.8 19 13"></path>
+                      <path d="M15 9h.01"></path>
+                      <path d="M17.8 6.2 19 5"></path>
+                      <path d="m3 21 9-9"></path>
+                      <path d="M12.2 6.2 11 5"></path>
+                    </svg>
+                  </span>
+                  Auto
+                </button>
+                <button type="button" class="engine-pill" data-engine="markitdown" id="pillMarkitdown"
+                  role="radio" aria-checked="false" tabindex="-1"
                   title="MarkItDown — Fast local programmatic converter. Supports Office, PDF, audio, images &amp; text.">
                   <span class="pill-engine-icon markitdown-icon">
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -420,6 +547,7 @@
                   MarkItDown
                 </button>
                 <button type="button" class="engine-pill" data-engine="docling" id="pillDocling"
+                  role="radio" aria-checked="false" tabindex="-1"
                   title="Docling — IBM AI layout &amp; table recognition. Deep document analysis.">
                   <span class="pill-engine-icon docling-icon">
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -430,7 +558,18 @@
                   </span>
                   Docling
                 </button>
+                <button type="button" class="engine-pill is-hidden" data-engine="glm_ocr" id="pillGlmOcr"
+                  role="radio" aria-checked="false" tabindex="-1"
+                  title="GLM-OCR — downloadable OCR model for scans, photos of documents, math and complex tables. Runs locally.">
+                  <span class="pill-engine-icon glm-ocr-icon">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M3 7V5a2 2 0 0 1 2-2h2"></path><path d="M17 3h2a2 2 0 0 1 2 2v2"></path><path d="M21 17v2a2 2 0 0 1-2 2h-2"></path><path d="M7 21H5a2 2 0 0 1-2-2v-2"></path><line x1="7" y1="9" x2="17" y2="9"></line><line x1="7" y1="12" x2="17" y2="12"></line><line x1="7" y1="15" x2="13" y2="15"></line>
+                    </svg>
+                  </span>
+                  GLM-OCR
+                </button>
                 <button type="button" class="engine-pill" data-engine="markit" id="pillMarkit"
+                  role="radio" aria-checked="false" tabindex="-1"
                   title="Markit — Broad format converter. EPUB, YAML, Jupyter Notebooks, XML &amp; more.">
                   <span class="pill-engine-icon markit-icon">
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -442,6 +581,7 @@
                   Markit
                 </button>
               </div>
+              <p class="engine-speed-hint" id="engineSpeedHint" hidden></p>
 
               <div class="dropzone-buttons">
                 <button class="btn btn-primary" id="btnBrowseFiles">
@@ -522,6 +662,7 @@
               <span class="meta-stats" id="previewStats"></span>
               <span class="meta-engine-tag" id="previewEngineTag" style="display: none;"></span>
               <span class="badge-fallback" id="previewFallbackBadge" style="display: none;"></span>
+              <span class="badge-quality" id="previewQualityBadge" style="display: none;"></span>
             </div>
 
             <div class="preview-actions">
@@ -552,12 +693,16 @@
 
           <!-- Preview Content Body -->
           <div class="preview-body">
-            <!-- Conversion Notice Banner (shown for failed / unsupported / empty results) -->
-            <div class="conversion-notice" id="conversionNoticeBar" role="alert">
-              <span class="conversion-notice-icon" id="conversionNoticeIcon"></span>
+            <!-- Conversion Notice Banner (failed / unsupported / empty results, missing-text
+                 warnings and Auto tips). A polite live region; app.js switches it to
+                 assertive for failures only. -->
+            <div class="conversion-notice" id="conversionNoticeBar" role="status" aria-live="polite">
+              <span class="conversion-notice-icon" id="conversionNoticeIcon" aria-hidden="true"></span>
               <div class="conversion-notice-body">
                 <span class="conversion-notice-title" id="conversionNoticeTitle"></span>
                 <span class="conversion-notice-detail" id="conversionNoticeDetail"></span>
+                <div class="conversion-notice-actions" id="conversionNoticeActions" hidden></div>
+                <ul class="conversion-notice-details" id="conversionNoticeDetails" hidden></ul>
               </div>
             </div>
 
@@ -587,7 +732,7 @@
     </main>
 
     <!-- Global Notification Banner -->
-    <div id="toastNotification" class="toast-notification"></div>
+    <div id="toastNotification" class="toast-notification" role="status" aria-live="polite"></div>
 
     <!-- Custom confirmation dialog (replaces window.confirm) -->
     <div class="app-dialog-overlay" id="appDialogOverlay" hidden>
@@ -601,6 +746,7 @@
         </div>
         <h2 class="app-dialog-title" id="appDialogTitle"></h2>
         <p class="app-dialog-message" id="appDialogMessage"></p>
+        <ul class="app-dialog-details" id="appDialogDetails" hidden></ul>
         <div class="app-dialog-actions">
           <button type="button" class="btn btn-secondary" id="appDialogCancel">Cancel</button>
           <button type="button" class="btn btn-danger" id="appDialogConfirm">Confirm</button>

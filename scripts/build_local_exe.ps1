@@ -269,6 +269,10 @@ if ($RunOnly) {
         $assetsSrc = Join-Path $RepoRoot "assets"
         $manifestSrc = Join-Path $RepoRoot "app\core\manifest.json"
         $addonsSrc = Join-Path $RepoRoot "app\core\addons.json"
+        $glmCatalogueSrc = Join-Path $RepoRoot "app\core\glm_ocr_catalogue.json"
+        $glmSelftestSrc = Join-Path $RepoRoot "app\core\assets\glm_ocr_selftest.png"
+        $glmLicenseSrc = Join-Path $RepoRoot "app\core\assets\licenses\LICENSE-GLM-OCR.txt"
+        $llamaLicenseSrc = Join-Path $RepoRoot "app\core\assets\licenses\LICENSE-llama.cpp.txt"
         $iconSrc = Join-Path $RepoRoot "assets\logo.ico"
 
         # Kept deliberately in step with the PyInstaller invocation in
@@ -296,7 +300,11 @@ if ($RunOnly) {
             "--add-data", "${uiSrc};app/ui",
             "--add-data", "${assetsSrc};assets",
             "--add-data", "${manifestSrc};app/core",
-            "--add-data", "${addonsSrc};app/core"
+            "--add-data", "${addonsSrc};app/core",
+            "--add-data", "${glmCatalogueSrc};app/core",
+            "--add-data", "${glmSelftestSrc};app/core/assets",
+            "--add-data", "${glmLicenseSrc};app/core/assets/licenses",
+            "--add-data", "${llamaLicenseSrc};app/core/assets/licenses"
         )
         if ($OneFile) { $pyiArgs += "--onefile" } else { $pyiArgs += "--onedir" }
         if ($Clean) { $pyiArgs += "--clean" }

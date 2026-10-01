@@ -198,9 +198,13 @@ def convert_with_docling(item: QueueItem, options: ConversionOptions) -> str:
             # that what they asked for never happened.
             raise
         except Exception as exc:
-            # Check if user explicitly enabled fallback to MarkItDown
+            # Check if user explicitly enabled fallback to MarkItDown. Auto turns
+            # allow_engine_fallback off: it falls back itself, after leaving the
+            # Docling lane, rather than running MarkItDown on this thread.
             settings = mgr.get_settings()
-            if settings.get("fallback_to_markitdown", False):
+            if settings.get("fallback_to_markitdown", False) and getattr(
+                options, "allow_engine_fallback", True
+            ):
                 logger.warning(
                     "Docling failed for '%s', falling back to MarkItDown per user preference: %s",
                     item.display_name,
@@ -250,7 +254,9 @@ def convert_with_docling(item: QueueItem, options: ConversionOptions) -> str:
             return markdown_text
     except Exception as exc:
         settings = mgr.get_settings()
-        if settings.get("fallback_to_markitdown", False):
+        if settings.get("fallback_to_markitdown", False) and getattr(
+            options, "allow_engine_fallback", True
+        ):
             logger.warning(
                 "In-process Docling failed for '%s', falling back to MarkItDown per user preference: %s",
                 item.display_name,

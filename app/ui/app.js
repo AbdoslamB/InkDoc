@@ -2,11 +2,228 @@
  * InkDoc Web Bench — Client-side JavaScript
  */
 document.addEventListener("DOMContentLoaded", () => {
+  // ─── Pure helpers (no DOM; sliced out and tested by tests/auto_engine_ui.test.js) ──
+  const ENGINES = ["auto", "markitdown", "docling", "markit", "glm_ocr"];
+  const HIDE_AUTO_HINT_KEY = "inkdoc-hide-auto-hint";
+
+  // Storage can throw (private windows, browsers set to block site data), and
+  // a failed read must never stop the app from starting.
+  function readStorage(key) {
+    try {
+      return window.localStorage.getItem(key);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function writeStorage(key, value) {
+    try {
+      window.localStorage.setItem(key, value);
+    } catch (_) {
+      // Not remembered this time; nothing else depends on it.
+    }
+  }
+
+  // New users start on Auto. Anyone with a saved choice keeps it.
+  function initialEngine(read) {
+    const saved = read("inkdoc-engine") || read("markitdown-engine");
+    return ENGINES.includes(saved) ? saved : "auto";
+  }
+
+  function getEngineDisplayName(engine) {
+    if (engine === "auto")    return "Auto";
+    if (engine === "docling") return "Docling";
+    if (engine === "markit")  return "Markit";
+    if (engine === "glm_ocr") return "GLM-OCR";
+    return "MarkItDown";
+  }
+
+  // The short label and long message for a quality report, or null when there
+  // is nothing to warn about. Labels always carry text, never just an icon.
+  function formatQualityWarning(quality) {
+    if (!quality || !quality.warning) return null;
+    const message = quality.message || "Part of the source text may be missing.";
+    const scans = (quality.scan_pages || []).length;
+    let short = "Text may be missing";
+    let title = "Some source text may be missing";
+    let toast = "but part of the source text may be missing";
+    if (scans) {
+      short = scans === quality.page_count ? "Scanned PDF" : "Scanned pages unread";
+      title = scans === quality.page_count ? "No text layer to read" : "Scanned pages weren't read";
+      toast = `but ${scans} scanned page${scans === 1 ? " wasn't" : "s weren't"} read`;
+    } else if (quality.garbled) {
+      short = "Unreadable text";
+      title = "Some text came out unreadable";
+      toast = "but part of it came out as unreadable characters";
+    } else if (quality.missing_pct != null) {
+      short = `~${quality.missing_pct}% text missing`;
+      toast = `but ~${quality.missing_pct}% of the source text may be missing`;
+    }
+    return { short, long: message, title, toast };
+  }
+
+  // The one-click fix a quality report suggests, as { label, engine } or
+  // { label, install: true }; null when there is nothing to offer.
+  function qualityAction(quality) {
+    const s = quality && quality.suggestion;
+    if (s === "docling" || s === "markitdown" || s === "markit" || s === "glm_ocr") {
+      return { label: `Re-convert with ${getEngineDisplayName(s)}`, engine: s };
+    }
+    if (s === "install_docling") return { label: "Install Docling", install: true };
+    if (s === "install_glm_ocr") return { label: "Download GLM-OCR", install: true };
+    return null;
+  }
+
+  // What the queue row's engine tag says. Auto items always show where they went.
+  function describeQueueEngine(item, selected) {
+    if (item.engineRequested === "auto" && item.engineUsed) {
+      return {
+        cls: "auto",
+        text: `Auto · ${getEngineDisplayName(item.engineUsed)}`,
+        title: (item.auto && item.auto.reason) || "Chosen by Auto",
+      };
+    }
+    if (item.engine && item.engine !== selected) {
+      return { cls: item.engine, text: getEngineDisplayName(item.engine), title: "" };
+    }
+    return null;
+  }
+
+  // The preview's "Engine: …" tag, with the escalation spelled out.
+  function describePreviewEngine(item) {
+    const used = getEngineDisplayName(item.engineUsed || item.engine);
+    if (item.engineRequested !== "auto") return { text: `Engine: ${used}`, title: "" };
+    const auto = item.auto || {};
+    let text = `Engine: Auto → ${used}`;
+    const esc = auto.escalation;
+    if (auto.escalated && esc && esc.kept === esc.to) {
+      const from = getEngineDisplayName(esc.from);
+      if (esc.from_scan_pages) {
+        text += ` (${from} couldn't read ${esc.from_scan_pages} scanned page${esc.from_scan_pages === 1 ? "" : "s"})`;
+      } else if (esc.from_missing_pct != null) {
+        text += ` (${from} missed ~${esc.from_missing_pct}%)`;
+      }
+    }
+    return { text, title: auto.reason || "" };
+  }
+
+  // The install hint appears as a toast at most once per session, and never
+  // again after "Don't show again". It always stays in the item's own notice.
+  function shouldShowHintToast(hint, session, read) {
+    if (!hint || session.hintShown) return false;
+    if (read(HIDE_AUTO_HINT_KEY) === "1") return false;
+    return true;
+  }
+
+  // Concrete engines only: the Switch Engine button never cycles to Auto, and
+  // reaches GLM-OCR only when it is installed and passed its self-test.
+  function getNextEngine(current, glmUsable = false) {
+    if (current === "markitdown") return "docling";
+    if (current === "docling")    return "markit";
+    if (current === "markit" && glmUsable) return "glm_ocr";
+    return "markitdown";
+  }
+
+  // "45 s", "6 min", "1 h 10 min" (matches auto_engine.format_duration).
+  function formatDuration(seconds) {
+    const s = Math.max(0, Math.round(Number(seconds) || 0));
+    if (s < 90) return `${s} s`;
+    const minutes = Math.round(s / 60);
+    if (minutes < 60) return `${minutes} min`;
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    return m ? `${h} h ${m} min` : `${h} h`;
+  }
+
+  // "412 MB", "1.43 GB".
+  function formatSize(bytes) {
+    const b = Number(bytes) || 0;
+    if (b >= 1e9) return `${(b / 1e9).toFixed(2)} GB`;
+    if (b >= 1e6) return `${Math.round(b / 1e6)} MB`;
+    if (b >= 1e3) return `${Math.round(b / 1e3)} KB`;
+    return `${b} B`;
+  }
+
+  // What a converting queue row says: "Page 7 / 30 · ~8 min left" while an
+  // engine reports pages (GLM-OCR), otherwise the phase message.
+  function formatJobProgress(p) {
+    if (!p) return "";
+    if (p.pages > 1 && typeof p.page === "number" && p.phase === "converting") {
+      let text = `Page ${Math.min(p.page + 1, p.pages)} / ${p.pages}`;
+      if (p.page > 0 && typeof p.seconds_remaining_est === "number") {
+        text += ` · ~${formatDuration(p.seconds_remaining_est)} left`;
+      }
+      return text;
+    }
+    return p.message || "";
+  }
+
+  function glmAccelLabel(accel) {
+    if (accel === "vulkan") return "GPU: Vulkan";
+    if (accel === "metal") return "GPU: Metal";
+    return "CPU";
+  }
+
+  // The GLM-OCR card's progress line: "From Hugging Face · 412 MB of 1.43 GB",
+  // or after a fallback "From InkDoc mirror (Hugging Face unreachable) · …".
+  function formatGlmProgress(prog) {
+    if (!prog) return "";
+    if (prog.status === "downloading" && prog.source_label) {
+      const from = `From ${prog.source_label}${prog.fallback_reason ? ` (${prog.fallback_reason})` : ""}`;
+      return prog.total_bytes
+        ? `${from} · ${formatSize(prog.bytes_downloaded)} of ${formatSize(prog.total_bytes)}`
+        : from;
+    }
+    return prog.message || prog.status || "";
+  }
+
+  // The warning shown before GLM-OCR downloads anything. Nothing starts until
+  // the user confirms it.
+  function glmDownloadWarning(status, variantId) {
+    const variants = (status && status.variants) || [];
+    const variant = variants.find((v) => v.id === variantId) || variants.find((v) => v.id === (status && status.variant));
+    const runtime = Math.max(0, ((status && status.download_size_bytes) || 0) - ((variants.find((v) => v.id === (status && status.variant)) || {}).size_bytes || 0));
+    const total = (variant ? variant.size_bytes : 0) + runtime || (status && status.download_size_bytes) || 0;
+    const size = formatSize(total);
+    return {
+      title: "Download GLM-OCR?",
+      message: `GLM-OCR is a large AI model. About ${size} will be downloaded and stored on this computer before it can be used.`,
+      details: [
+        `Download size: ${size}. On a slow connection this can take a long time.`,
+        "Processing is much slower than the other engines: on a typical laptop CPU expect roughly 10 to 60 seconds per page, so a 30-page scan can take 10 to 30 minutes. A GPU makes it much faster.",
+        "Needs about 3 GB of free memory while converting.",
+        "Only the model is downloaded (from Hugging Face, or InkDoc's GitHub mirror as a fallback). Your documents are processed on this computer and never uploaded.",
+      ],
+      confirmText: `Download ${size}`,
+    };
+  }
+
+  // The question asked before a long GLM-OCR job.
+  function glmLongJobPrompt(seconds, accel, count) {
+    const what = count > 1 ? `these ${count} files` : "this file";
+    const tip = accel === "cpu" ? " Tip: turn on GPU acceleration in Settings to make it faster." : "";
+    return {
+      title: "This will take a while",
+      message: `Converting ${what} with GLM-OCR will take about ${formatDuration(seconds)} on this computer (${glmAccelLabel(accel)}). Convert now?${tip}`,
+    };
+  }
+
+  function newJobId() {
+    const rand = (window.crypto && window.crypto.randomUUID)
+      ? window.crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+    return `ui-${rand}`;
+  }
+  // ─── End of pure helpers ──
+
   // ─── State ───────────────────────────────────────────────────────────────
   let queue = [];
   let activeItemId = null;
   let autoSaveToDownloads = false;
-  let selectedEngine = localStorage.getItem("inkdoc-engine") || localStorage.getItem("markitdown-engine") || "markitdown";
+  let selectedEngine = initialEngine(readStorage);
+  const hintSession = { hintShown: false };
+  // Last /engines/glm_ocr/status payload; null until the first refresh.
+  let glmStatus = null;
 
   // Base path resolution for /InkDoc, /MarkItDown, or root mounting
   const pathLower = window.location.pathname.toLowerCase();
@@ -40,10 +257,13 @@ document.addEventListener("DOMContentLoaded", () => {
   const connectionErrorMsg   = document.getElementById("connectionErrorMsg");
 
   // Single unified engine pill selector
+  const pillAuto          = document.getElementById("pillAuto");
   const pillMarkitdown    = document.getElementById("pillMarkitdown");
   const pillDocling       = document.getElementById("pillDocling");
   const pillMarkit        = document.getElementById("pillMarkit");
-  const allEnginePills    = [pillMarkitdown, pillDocling, pillMarkit];
+  const pillGlmOcr        = document.getElementById("pillGlmOcr");
+  const allEnginePills    = [pillAuto, pillMarkitdown, pillDocling, pillMarkit, pillGlmOcr];
+  const engineSpeedHint   = document.getElementById("engineSpeedHint");
 
   const workbenchSection  = document.getElementById("workbenchSection");
   const queueList         = document.getElementById("queueList");
@@ -80,15 +300,15 @@ document.addEventListener("DOMContentLoaded", () => {
   const conversionNoticeDetail = document.getElementById("conversionNoticeDetail");
 
   // ─── Engine Helpers ──────────────────────────────────────────────────────
-  function getEngineDisplayName(engine) {
-    if (engine === "docling") return "Docling";
-    if (engine === "markit")  return "Markit";
-    return "MarkItDown";
-  }
-
   function getEngineIconSvg(engine) {
+    if (engine === "auto") {
+      return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4V2"></path><path d="M15 16v-2"></path><path d="M8 9h2"></path><path d="M20 9h2"></path><path d="M17.8 11.8 19 13"></path><path d="M15 9h.01"></path><path d="M17.8 6.2 19 5"></path><path d="m3 21 9-9"></path><path d="M12.2 6.2 11 5"></path></svg>`;
+    }
     if (engine === "docling") {
       return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10"></path><path d="M12 6a6 6 0 0 1 6 6"></path><circle cx="12" cy="12" r="2"></circle></svg>`;
+    }
+    if (engine === "glm_ocr") {
+      return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2"></path><path d="M17 3h2a2 2 0 0 1 2 2v2"></path><path d="M21 17v2a2 2 0 0 1-2 2h-2"></path><path d="M7 21H5a2 2 0 0 1-2-2v-2"></path><line x1="7" y1="9" x2="17" y2="9"></line><line x1="7" y1="12" x2="17" y2="12"></line><line x1="7" y1="15" x2="13" y2="15"></line></svg>`;
     }
     if (engine === "markit") {
       return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>`;
@@ -107,12 +327,6 @@ document.addEventListener("DOMContentLoaded", () => {
       compactEngineChip.setAttribute("aria-label", `Processing engine: ${getEngineDisplayName(selectedEngine)}. Click to expand drop panel.`);
       compactEngineChip.dataset.engine = selectedEngine;
     }
-  }
-
-  function getNextEngine(current) {
-    if (current === "markitdown") return "docling";
-    if (current === "docling")    return "markit";
-    return "markitdown";
   }
 
   // ─── Error Classification ────────────────────────────────────────────────
@@ -140,13 +354,62 @@ document.addEventListener("DOMContentLoaded", () => {
     failed:      `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>`,
     unsupported: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line></svg>`,
     empty:       `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line></svg>`,
+    warning:     `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>`,
+    info:        `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>`,
   };
 
-  function showConversionNotice(type, title, detail) {
+  const conversionNoticeActions = document.getElementById("conversionNoticeActions");
+  const conversionNoticeDetails = document.getElementById("conversionNoticeDetails");
+
+  // opts.actions: [{ label, onClick, primary }]; opts.details: [string] shown
+  // behind a "Details" toggle. Everything is set with textContent: messages can
+  // carry file names and server text.
+  function showConversionNotice(type, title, detail, opts = {}) {
     conversionNoticeBar.className = `conversion-notice notice-${type} visible`;
+    // Failures interrupt; warnings and tips wait for a pause.
+    conversionNoticeBar.setAttribute("aria-live", type === "failed" ? "assertive" : "polite");
     conversionNoticeIcon.innerHTML = ICONS[type] || ICONS.failed;
     conversionNoticeTitle.textContent = title;
     conversionNoticeDetail.textContent = detail;
+
+    if (conversionNoticeActions) {
+      conversionNoticeActions.replaceChildren();
+      const actions = opts.actions || [];
+      const details = opts.details || [];
+      actions.forEach((action) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = `btn btn-sm ${action.primary === false ? "btn-ghost" : "btn-secondary"} notice-action`;
+        btn.textContent = action.label;
+        btn.addEventListener("click", action.onClick);
+        conversionNoticeActions.appendChild(btn);
+      });
+      if (details.length && conversionNoticeDetails) {
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "btn btn-sm btn-ghost notice-details-toggle";
+        toggle.textContent = "Details";
+        toggle.setAttribute("aria-expanded", "false");
+        toggle.setAttribute("aria-controls", "conversionNoticeDetails");
+        toggle.addEventListener("click", () => {
+          const open = conversionNoticeDetails.hidden;
+          conversionNoticeDetails.hidden = !open;
+          toggle.setAttribute("aria-expanded", String(open));
+          toggle.textContent = open ? "Hide details" : "Details";
+        });
+        conversionNoticeActions.appendChild(toggle);
+      }
+      conversionNoticeActions.hidden = conversionNoticeActions.childElementCount === 0;
+    }
+    if (conversionNoticeDetails) {
+      conversionNoticeDetails.replaceChildren();
+      (opts.details || []).forEach((line) => {
+        const li = document.createElement("li");
+        li.textContent = line;
+        conversionNoticeDetails.appendChild(li);
+      });
+      conversionNoticeDetails.hidden = true;
+    }
   }
 
   function hideConversionNotice() {
@@ -154,6 +417,14 @@ document.addEventListener("DOMContentLoaded", () => {
     conversionNoticeTitle.textContent = "";
     conversionNoticeDetail.textContent = "";
     conversionNoticeIcon.innerHTML = "";
+    if (conversionNoticeActions) {
+      conversionNoticeActions.replaceChildren();
+      conversionNoticeActions.hidden = true;
+    }
+    if (conversionNoticeDetails) {
+      conversionNoticeDetails.replaceChildren();
+      conversionNoticeDetails.hidden = true;
+    }
   }
 
   // ─── Engine Management & Session Security ────────────────────────────────
@@ -188,6 +459,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const previewEngineTag        = document.getElementById("previewEngineTag");
   const previewFallbackBadge    = document.getElementById("previewFallbackBadge");
+  const previewQualityBadge     = document.getElementById("previewQualityBadge");
+  const qualityCheckToggle      = document.getElementById("qualityCheckToggle");
 
   // ─── Updates Elements ───────────────────────────────────────────────────
   const appCurrentVersionBadge  = document.getElementById("appCurrentVersionBadge");
@@ -232,33 +505,99 @@ document.addEventListener("DOMContentLoaded", () => {
   let doclingState = "unknown";
   let pollInterval = null;
 
-  // Update the single pill group to reflect selectedEngine
+  // Update the single pill group to reflect selectedEngine. The group is a
+  // radiogroup: exactly one pill is aria-checked, and only that pill is in the
+  // tab order (arrow keys move within the group).
   function updateEngineUI() {
     allEnginePills.forEach((btn) => {
-      if (btn) btn.classList.toggle("active", btn.dataset.engine === selectedEngine);
+      if (!btn) return;
+      const checked = btn.dataset.engine === selectedEngine;
+      btn.classList.toggle("active", checked);
+      btn.setAttribute("aria-checked", checked ? "true" : "false");
+      btn.tabIndex = checked ? 0 : -1;
     });
     updateCompactBarEngine();
+    updateSpeedHint();
   }
 
   function setEngine(engine) {
     selectedEngine = engine;
-    localStorage.setItem("inkdoc-engine", engine);
+    writeStorage("inkdoc-engine", engine);
     updateEngineUI();
+  }
+
+  // "~12 s per page on this computer (CPU)" under the pills while GLM-OCR is selected.
+  function updateSpeedHint() {
+    if (!engineSpeedHint) return;
+    const spp = glmStatus && glmStatus.usable ? glmStatus.seconds_per_page : null;
+    if (selectedEngine === "glm_ocr" && spp) {
+      engineSpeedHint.textContent = `GLM-OCR: ~${formatDuration(spp)} per page on this computer (${glmAccelLabel(glmStatus.accel_in_use)})`;
+      engineSpeedHint.hidden = false;
+    } else {
+      engineSpeedHint.hidden = true;
+      engineSpeedHint.textContent = "";
+    }
+  }
+
+  // Opens the Settings popover from anywhere in the page. When called from a
+  // click, that click must not reach the document-level "click outside closes
+  // Settings" handler, which would shut the popover again straight away.
+  function openSettings(e) {
+    if (e && typeof e.stopPropagation === "function") e.stopPropagation();
+    settingsPopover.classList.add("open");
+    loadSettings();
+    refreshAddonStatus();
+    refreshGlm(true);
   }
 
   // Bind unified pill clicks
   allEnginePills.forEach((btn) => {
     if (btn) {
-      btn.addEventListener("click", () => {
+      btn.addEventListener("click", (e) => {
         if (btn.dataset.engine === "docling" && btn.classList.contains("is-installable")) {
-          settingsPopover.classList.add("open");
+          openSettings(e);
           showToast("Docling is not installed yet. Click 'Install Docling' in Settings to enable it.", "info");
+          return;
+        }
+        if (btn.dataset.engine === "glm_ocr" && btn.classList.contains("is-installable")) {
+          openSettings(e);
+          const card = document.getElementById("engineCardGlmOcr");
+          if (card) card.open = true;
+          showToast(
+            glmStatus && glmStatus.installed
+              ? "GLM-OCR didn't pass its self-test. Run it again in Settings."
+              : "GLM-OCR isn't downloaded yet. Download it in Settings.",
+            "info"
+          );
           return;
         }
         setEngine(btn.dataset.engine);
       });
     }
   });
+
+  // Arrow keys move the selection within the group, as for any radio group.
+  // Hidden pills and Docling while it is not installed are skipped: selecting
+  // those has to stay a deliberate click.
+  const enginePillGroup = document.getElementById("enginePillGroup");
+  if (enginePillGroup) {
+    enginePillGroup.addEventListener("keydown", (e) => {
+      const keys = ["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"];
+      if (!keys.includes(e.key)) return;
+      const choices = allEnginePills.filter(
+        (btn) => btn && !btn.classList.contains("is-hidden") && !btn.classList.contains("is-installable")
+      );
+      if (choices.length === 0) return;
+      e.preventDefault();
+      let idx = choices.findIndex((btn) => btn.dataset.engine === selectedEngine);
+      if (e.key === "Home") idx = 0;
+      else if (e.key === "End") idx = choices.length - 1;
+      else if (e.key === "ArrowRight" || e.key === "ArrowDown") idx = (idx + 1) % choices.length;
+      else idx = (idx - 1 + choices.length) % choices.length;
+      setEngine(choices[idx].dataset.engine);
+      choices[idx].focus();
+    });
+  }
 
   // Initialize
   updateEngineUI();
@@ -394,7 +733,38 @@ document.addEventListener("DOMContentLoaded", () => {
     btnDropzoneCardCollapse.addEventListener("click", () => collapseDropzone(true));
   }
 
+  // Counts for the "Converted 12 of 12 files · 2 with warnings" toast. Kept
+  // apart from batchState, which spans every drop of a session for the
+  // auto-collapse logic: a summary covers one drop (or drops made while it ran).
+  let batchSummary = null;
+
+  function registerBatchSummary(count) {
+    if (!batchSummary || batchSummary.completed >= batchSummary.total) {
+      batchSummary = { total: 0, completed: 0, ok: 0, failed: 0, warnings: 0 };
+    }
+    batchSummary.total += count;
+  }
+
+  function recordBatchSummary(item, isSuccess) {
+    // Re-conversions finish here too but were never registered; ignore them.
+    if (!batchSummary || batchSummary.completed >= batchSummary.total) return;
+    batchSummary.completed++;
+    if (isSuccess) batchSummary.ok++;
+    else if (item.status !== "cancelled") batchSummary.failed++;
+    if (isSuccess && item.quality && item.quality.warning) batchSummary.warnings++;
+
+    // One summary when a multi-file batch finishes, after the last item's own toast.
+    if (batchSummary.total > 1 && batchSummary.completed >= batchSummary.total) {
+      const s = batchSummary;
+      let text = `Converted ${s.ok} of ${s.total} files`;
+      if (s.warnings) text += ` · ${s.warnings} with warnings`;
+      if (s.failed) text += ` · ${s.failed} failed`;
+      showToast(text, s.failed || s.warnings ? "info" : "success");
+    }
+  }
+
   function registerBatchItems(count) {
+    registerBatchSummary(count);
     if (!batchState || !batchState.active) {
       batchState = {
         active: true,
@@ -415,6 +785,8 @@ document.addEventListener("DOMContentLoaded", () => {
     batchState.completed++;
 
     const isSuccess = (item.status === "saved" || item.status === "empty");
+    recordBatchSummary(item, isSuccess);
+
     if (isSuccess) {
       batchState.successes++;
       updateResultsState();
@@ -451,6 +823,7 @@ document.addEventListener("DOMContentLoaded", () => {
       loadSettings();
       fetchUpdateStatus();
       refreshAddonStatus();
+      refreshGlm(true);
     }
   });
 
@@ -540,6 +913,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const docling = engines.docling;
       const markitdown = engines.markitdown;
       const markit = engines.markit;
+      if (engines.glm_ocr) renderGlm(engines.glm_ocr);
 
       const versionMarkitdown = document.getElementById("versionMarkitdown");
       const versionMarkit = document.getElementById("versionMarkit");
@@ -676,6 +1050,468 @@ document.addEventListener("DOMContentLoaded", () => {
       // paths, so this belongs in finally rather than at the end of the body.
       refreshAddonStatus();
     }
+  }
+
+  // ─── GLM-OCR engine card ──────────────────────────────────────────────────
+  // States come from /engines/glm_ocr/status: unreleased ("Coming soon"),
+  // unsupported, defective, installable, installing, installed (usable or
+  // self-test failed). Status reads the server's completion marker only.
+  const engineCardGlmOcr     = document.getElementById("engineCardGlmOcr");
+  const glmStatusBadge       = document.getElementById("glmStatusBadge");
+  const glmSizeDesc          = document.getElementById("glmSizeDesc");
+  const glmModelVersion      = document.getElementById("glmModelVersion");
+  const glmRuntimeVersion    = document.getElementById("glmRuntimeVersion");
+  const glmSizeInfo          = document.getElementById("glmSizeInfo");
+  const glmLicenseInfo       = document.getElementById("glmLicenseInfo");
+  const glmAccelInfo         = document.getElementById("glmAccelInfo");
+  const glmSpeedInfo         = document.getElementById("glmSpeedInfo");
+  const glmPathRow           = document.getElementById("glmPathRow");
+  const glmPathInfo          = document.getElementById("glmPathInfo");
+  const glmReason            = document.getElementById("glmReason");
+  const glmProgressContainer = document.getElementById("glmProgressContainer");
+  const glmProgressFill      = document.getElementById("glmProgressFill");
+  const glmProgressText      = document.getElementById("glmProgressText");
+  const btnGlmInstall        = document.getElementById("btnGlmInstall");
+  const btnGlmUpdate         = document.getElementById("btnGlmUpdate");
+  const btnGlmVerify         = document.getElementById("btnGlmVerify");
+  const btnGlmRemove         = document.getElementById("btnGlmRemove");
+  const btnGlmCancel         = document.getElementById("btnGlmCancel");
+  const glmOptions           = document.getElementById("glmOptions");
+  const glmGpuToggle         = document.getElementById("glmGpuToggle");
+  const glmGpuLabel          = document.getElementById("glmGpuLabel");
+  const glmGpuCaption        = document.getElementById("glmGpuCaption");
+  const glmSourceSelect      = document.getElementById("glmSourceSelect");
+  const glmVariantSelect     = document.getElementById("glmVariantSelect");
+  const btnGlmSelftest       = document.getElementById("btnGlmSelftest");
+  const glmCatalogueInfo     = document.getElementById("glmCatalogueInfo");
+  const GLM_BUSY = ["downloading", "extracting", "verifying", "selftest", "installing"];
+  let glmPollTimer = null;
+  let glmRemoteChecked = false;
+
+  function glmIsUsable() {
+    return Boolean(glmStatus && glmStatus.usable);
+  }
+
+  function showGlmButtons({ install = false, update = false, verify = false, remove = false, cancel = false }) {
+    if (btnGlmInstall) btnGlmInstall.style.display = install ? "inline-flex" : "none";
+    if (btnGlmUpdate)  btnGlmUpdate.style.display  = update ? "inline-flex" : "none";
+    if (btnGlmVerify)  btnGlmVerify.style.display  = verify ? "inline-flex" : "none";
+    if (btnGlmRemove)  btnGlmRemove.style.display  = remove ? "inline-flex" : "none";
+    if (btnGlmCancel)  btnGlmCancel.style.display  = cancel ? "inline-flex" : "none";
+  }
+
+  function setGlmBadge(text, cls) {
+    if (!glmStatusBadge) return;
+    glmStatusBadge.textContent = text;
+    glmStatusBadge.className = `engine-badge ${cls}`;
+  }
+
+  function setGlmReason(text) {
+    if (!glmReason) return;
+    glmReason.textContent = text || "";
+    glmReason.hidden = !text;
+  }
+
+  function renderGlmProgress(prog) {
+    if (!glmProgressContainer) return;
+    const busy = prog && GLM_BUSY.includes(prog.status);
+    glmProgressContainer.style.display = busy ? "block" : "none";
+    if (!busy) return;
+    if (glmProgressFill) glmProgressFill.style.width = `${Math.round(prog.percent || 0)}%`;
+    if (glmProgressText) glmProgressText.textContent = formatGlmProgress(prog);
+  }
+
+  function renderGlm(st) {
+    if (!st) return;
+    glmStatus = st;
+    const state = st.status;
+    if (engineCardGlmOcr) engineCardGlmOcr.style.display = "block";
+
+    const size = formatSize(st.download_size_bytes);
+    if (glmSizeDesc) glmSizeDesc.textContent = st.download_size_bytes ? `~${size} download.` : "";
+    if (glmSizeInfo) glmSizeInfo.textContent = st.download_size_bytes ? `~${size}` : "—";
+    if (glmModelVersion) glmModelVersion.textContent = (st.version && st.version.model) || "—";
+    if (glmRuntimeVersion) glmRuntimeVersion.textContent = st.version && st.version.runtime ? `llama.cpp ${st.version.runtime}` : "—";
+    if (glmLicenseInfo) glmLicenseInfo.textContent = st.license ? `${st.license} (model and runtime)` : "MIT";
+    if (glmAccelInfo) glmAccelInfo.textContent = glmAccelLabel(st.accel_in_use);
+    if (glmSpeedInfo) glmSpeedInfo.textContent = st.seconds_per_page ? `~${formatDuration(st.seconds_per_page)} per page` : "Measured after download";
+    if (glmPathRow) glmPathRow.style.display = st.install_path ? "flex" : "none";
+    if (glmPathInfo) glmPathInfo.textContent = st.install_path || "—";
+
+    // Pill: hidden unless GLM-OCR can be offered here; gated until usable.
+    const offer = ["installable", "installing", "installed"].includes(state);
+    if (pillGlmOcr) {
+      pillGlmOcr.classList.toggle("is-hidden", !offer);
+      pillGlmOcr.classList.toggle("is-installable", offer && !st.usable);
+      pillGlmOcr.title = st.usable
+        ? `GLM-OCR — OCR for scans, photos, math and tables. ~${formatDuration(st.seconds_per_page || 0)} per page here (${glmAccelLabel(st.accel_in_use)}).`
+        : (st.installed
+            ? "GLM-OCR didn't pass its self-test. Click to open Settings."
+            : "GLM-OCR isn't downloaded. Click to open Settings and download it.");
+    }
+    if (selectedEngine === "glm_ocr" && !st.usable) setEngine("markitdown");
+
+    if (glmOptions) glmOptions.style.display = st.installed ? "block" : "none";
+    if (btnGlmInstall) { btnGlmInstall.disabled = false; btnGlmInstall.textContent = "Download GLM-OCR"; }
+
+    if (state === "unreleased") {
+      setGlmBadge("Coming soon", "engine-badge-not-installed");
+      setGlmReason(st.reason);
+      showGlmButtons({});
+    } else if (state === "unsupported" || state === "defective") {
+      setGlmBadge("Not Available", "engine-badge-unsupported");
+      setGlmReason(st.reason);
+      showGlmButtons({ install: true });
+      if (btnGlmInstall) { btnGlmInstall.disabled = true; btnGlmInstall.textContent = "Not Available"; }
+    } else if (state === "installing") {
+      setGlmBadge(st.progress && st.progress.status === "selftest" ? "Testing…" : "Downloading…", "engine-badge-busy");
+      setGlmReason("");
+      showGlmButtons({ cancel: true });
+      startGlmPolling();
+    } else if (state === "installed") {
+      setGlmBadge(st.usable ? "Installed" : "Self-test failed", st.usable ? "engine-badge-installed" : "engine-badge-unsupported");
+      setGlmReason(st.reason);
+      showGlmButtons({ update: Boolean(st.update_available), verify: true, remove: true });
+      if (btnGlmUpdate && st.update) {
+        btnGlmUpdate.textContent = `Update available (${formatSize(st.update.size_bytes)})`;
+      }
+    } else {
+      setGlmBadge("Not Installed", "engine-badge-not-installed");
+      setGlmReason("");
+      showGlmButtons({ install: true });
+    }
+    renderGlmProgress(st.progress);
+
+    // GPU toggle.
+    const gpu = st.gpu || {};
+    if (glmGpuToggle) {
+      glmGpuToggle.checked = Boolean(gpu.selected);
+      glmGpuToggle.disabled = Boolean(gpu.locked) || !gpu.available || state === "installing";
+    }
+    if (glmGpuLabel) glmGpuLabel.textContent = gpu.locked ? "GPU acceleration (Metal)" : "Use GPU acceleration";
+    if (glmGpuCaption) {
+      const times = st.selftest && st.selftest.cpu && st.selftest.gpu && st.selftest.gpu.passed
+        ? ` Measured: ${formatDuration(st.selftest.gpu.seconds_per_page)} per page on GPU vs ${formatDuration(st.selftest.cpu.seconds_per_page)} on CPU.`
+        : "";
+      glmGpuCaption.textContent = gpu.locked
+        ? (gpu.reason || "On a Mac GLM-OCR uses Metal automatically, with a CPU fallback.") + times
+        : gpu.reason
+          ? gpu.reason + times
+          : gpu.installed
+            ? `GPU runtime (Vulkan) installed and tested.${times}`
+            : `Downloads a GPU runtime (Vulkan, ~${formatSize(gpu.size_bytes || 33e6)}) on first use and tests it. Works with NVIDIA, AMD and Intel graphics; no CUDA needed.${times}`;
+    }
+
+    // Advanced.
+    if (glmSourceSelect) glmSourceSelect.value = st.download_source || "auto";
+    if (glmVariantSelect) {
+      const current = glmVariantSelect.value;
+      glmVariantSelect.replaceChildren();
+      (st.variants || []).forEach((v) => {
+        const opt = document.createElement("option");
+        opt.value = v.id;
+        opt.textContent = `${v.label} (${formatSize(v.size_bytes)})`;
+        glmVariantSelect.appendChild(opt);
+      });
+      glmVariantSelect.value = st.installed ? st.variant : (current || st.variant);
+    }
+    if (btnGlmSelftest) btnGlmSelftest.disabled = state === "installing";
+    if (glmCatalogueInfo) {
+      const remote = st.remote_catalogue || {};
+      glmCatalogueInfo.textContent = `Catalogue v${st.catalogue_version} (${st.catalogue_origin === "remote" ? "signed online update" : "built in"}).${remote.reason ? " " + remote.reason : ""}`;
+    }
+    updateSpeedHint();
+  }
+
+  async function refreshGlm(checkRemote = false) {
+    const remote = checkRemote && !glmRemoteChecked;
+    try {
+      const resp = await fetch(`${apiBase}/engines/glm_ocr/status?check_remote=${remote ? "true" : "false"}`);
+      if (!resp.ok) return null;
+      const st = await resp.json();
+      if (remote) glmRemoteChecked = true;
+      renderGlm(st);
+      return st;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function stopGlmPolling() {
+    if (glmPollTimer) {
+      clearInterval(glmPollTimer);
+      glmPollTimer = null;
+    }
+  }
+
+  async function pollGlmProgress() {
+    try {
+      const resp = await fetch(`${apiBase}/engines/glm_ocr/progress`);
+      if (!resp.ok) return;
+      const prog = await resp.json();
+      if (GLM_BUSY.includes(prog.status)) {
+        renderGlmProgress(prog);
+        setGlmBadge(prog.status === "selftest" ? "Testing…" : (prog.status === "downloading" ? "Downloading…" : "Installing…"), "engine-badge-busy");
+        showGlmButtons({ cancel: true });
+        return;
+      }
+      stopGlmPolling();
+      if (prog.status === "complete") {
+        const done = prog.operation === "selftest" ? "GLM-OCR self-test finished." :
+          prog.operation === "gpu" ? "GPU runtime installed and tested." :
+          prog.operation === "update" ? "GLM-OCR updated." : "GLM-OCR is downloaded and ready.";
+        showToast(done, "success");
+      } else if (prog.status === "error") {
+        const actions = prog.can_try_mirror && (glmStatus && glmStatus.download_source) !== "mirror_only"
+          ? [{ label: "Try the InkDoc mirror", onClick: () => retryGlmFromMirror() }]
+          : [];
+        showToast(`GLM-OCR: ${prog.error_message || "the operation failed."}`, "error", { actions, duration: 12000 });
+      } else if (prog.status === "cancelled") {
+        showToast("GLM-OCR download cancelled.", "info");
+      }
+      await refreshGlm(false);
+    } catch (_) {}
+  }
+
+  function startGlmPolling() {
+    if (glmPollTimer) return;
+    glmPollTimer = setInterval(pollGlmProgress, 700);
+    pollGlmProgress();
+  }
+
+  async function postGlm(path, body) {
+    const resp = await fetchWithToken(`${apiBase}/engines/glm_ocr/${path}`, {
+      method: "POST",
+      headers: body ? { "Content-Type": "application/json" } : {},
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error((typeof data.detail === "string" && data.detail) || resp.statusText);
+    return data;
+  }
+
+  async function startGlmInstall(variant) {
+    try {
+      await postGlm("install", { gpu: false, variant: variant || null });
+      showToast("Downloading GLM-OCR…", "info");
+      startGlmPolling();
+    } catch (err) {
+      showToast(`Could not start the download: ${err.message}`, "error");
+    }
+  }
+
+  async function retryGlmFromMirror() {
+    try {
+      await fetchWithToken(`${apiBase}/settings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ glm_ocr_download_source: "mirror_only" }),
+      });
+    } catch (_) {}
+    if (glmStatus && glmStatus.installed && glmStatus.update_available) {
+      postGlm("update").then(startGlmPolling).catch((err) => showToast(err.message, "error"));
+    } else {
+      startGlmInstall(glmVariantSelect ? glmVariantSelect.value : null);
+    }
+  }
+
+  if (btnGlmInstall) {
+    btnGlmInstall.addEventListener("click", async () => {
+      const st = glmStatus || (await refreshGlm(true));
+      if (!st) return;
+      const variant = glmVariantSelect ? glmVariantSelect.value : st.variant;
+      const warning = glmDownloadWarning(st, variant);
+      const ok = await confirmDialog({
+        title: warning.title,
+        message: warning.message,
+        details: warning.details,
+        confirmText: warning.confirmText,
+        cancelText: "Not now",
+        danger: false,
+        focusCancel: true,
+      });
+      if (!ok) return;
+      startGlmInstall(variant);
+    });
+  }
+
+  if (btnGlmUpdate) {
+    btnGlmUpdate.addEventListener("click", async () => {
+      const upd = (glmStatus && glmStatus.update) || {};
+      const ok = await confirmDialog({
+        title: "Update GLM-OCR?",
+        message: `Downloads ${formatSize(upd.size_bytes)} (only the parts that changed) and tests them. The current version keeps working until the new one passes its self-test.`,
+        confirmText: "Update",
+        danger: false,
+      });
+      if (!ok) return;
+      try {
+        await postGlm("update");
+        startGlmPolling();
+      } catch (err) {
+        showToast(err.message, "error");
+      }
+    });
+  }
+
+  if (btnGlmCancel) {
+    btnGlmCancel.addEventListener("click", async () => {
+      try { await postGlm("cancel"); } catch (_) {}
+    });
+  }
+
+  if (btnGlmVerify) {
+    btnGlmVerify.addEventListener("click", async () => {
+      const orig = btnGlmVerify.textContent;
+      btnGlmVerify.textContent = "Verifying…";
+      btnGlmVerify.disabled = true;
+      try {
+        const res = await postGlm("verify");
+        if (res.valid) showToast("GLM-OCR files verified: every hash matches.", "success");
+        else showToast(`GLM-OCR verification failed: ${(res.mismatches || [res.reason]).join("; ")}`, "error", { duration: 12000 });
+      } catch (err) {
+        showToast(err.message, "error");
+      } finally {
+        btnGlmVerify.textContent = orig;
+        btnGlmVerify.disabled = false;
+      }
+    });
+  }
+
+  if (btnGlmRemove) {
+    btnGlmRemove.addEventListener("click", async () => {
+      const ok = await confirmDialog({
+        title: "Remove GLM-OCR?",
+        message: "The downloaded model and runtime will be deleted. You can download them again later from Settings.",
+        confirmText: "Remove",
+      });
+      if (!ok) return;
+      try {
+        await postGlm("remove");
+        showToast("GLM-OCR removed.", "info");
+        if (selectedEngine === "glm_ocr") setEngine("markitdown");
+      } catch (err) {
+        showToast(`Could not remove GLM-OCR: ${err.message}`, "error");
+      }
+      refreshGlm(false);
+    });
+  }
+
+  if (glmGpuToggle) {
+    glmGpuToggle.addEventListener("change", async () => {
+      const enabled = glmGpuToggle.checked;
+      glmGpuToggle.disabled = true;
+      try {
+        const res = await postGlm("gpu", { enabled });
+        if (res.status === "started") {
+          showToast("Downloading and testing the GPU runtime…", "info");
+          startGlmPolling();
+        } else {
+          showToast(enabled ? "GLM-OCR will use the GPU." : "GLM-OCR will use the CPU.", "success");
+          refreshGlm(false);
+        }
+      } catch (err) {
+        glmGpuToggle.checked = !enabled;
+        showToast(err.message, "error", { duration: 10000 });
+        refreshGlm(false);
+      }
+    });
+  }
+
+  if (glmSourceSelect) {
+    glmSourceSelect.addEventListener("change", async () => {
+      try {
+        await fetchWithToken(`${apiBase}/settings`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ glm_ocr_download_source: glmSourceSelect.value }),
+        });
+        if (glmStatus) glmStatus.download_source = glmSourceSelect.value;
+      } catch (_) {
+        showToast("Could not save the download source.", "error");
+      }
+    });
+  }
+
+  if (glmVariantSelect) {
+    glmVariantSelect.addEventListener("change", async () => {
+      if (!glmStatus || !glmStatus.installed || glmVariantSelect.value === glmStatus.variant) return;
+      const variant = (glmStatus.variants || []).find((v) => v.id === glmVariantSelect.value);
+      const ok = await confirmDialog({
+        title: `Switch to ${variant ? variant.label : glmVariantSelect.value}?`,
+        message: `This downloads the ${variant ? variant.label : ""} model (${formatSize(variant ? variant.size_bytes : 0)}) and tests it. The current model keeps working until then.`,
+        confirmText: "Download",
+        danger: false,
+        focusCancel: true,
+      });
+      if (!ok) {
+        glmVariantSelect.value = glmStatus.variant;
+        return;
+      }
+      startGlmInstall(glmVariantSelect.value);
+    });
+  }
+
+  if (btnGlmSelftest) {
+    btnGlmSelftest.addEventListener("click", async () => {
+      try {
+        await postGlm("selftest");
+        startGlmPolling();
+      } catch (err) {
+        showToast(err.message, "error");
+      }
+    });
+  }
+
+  // ─── GLM-OCR long-job confirmation ───────────────────────────────────────
+  // Before a GLM-OCR job that would take longer than long_job_seconds, ask.
+  // A folder drop asks once for the whole batch.
+  const GLM_MULTIPAGE = [".pdf", ".tif", ".tiff"];
+
+  async function estimateGlmFile(file) {
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const resp = await fetch(`${apiBase}/convert/estimate?engine=glm_ocr`, { method: "POST", body: form });
+      if (!resp.ok) return null;
+      return await resp.json();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async function confirmGlmJob(files) {
+    if (!glmStatus || !glmStatus.usable) return true; // the server answers 409 with the reason
+    const spp = glmStatus.seconds_per_page || 30;
+    const limit = glmStatus.long_job_seconds || 300;
+    let total = glmStatus.load_seconds || 0;
+    for (const file of files) {
+      const name = (file.name || "").toLowerCase();
+      if (GLM_MULTIPAGE.some((ext) => name.endsWith(ext))) {
+        const est = await estimateGlmFile(file);
+        total += est && est.pages ? est.pages * spp : spp;
+      } else {
+        total += spp;
+      }
+      if (total > limit * 50) break; // already far past the limit
+    }
+    if (total <= limit) return true;
+    const prompt = glmLongJobPrompt(total, glmStatus.accel_in_use, files.length);
+    return confirmDialog({
+      title: prompt.title,
+      message: prompt.message,
+      confirmText: "Convert",
+      cancelText: "Cancel",
+      danger: false,
+    });
+  }
+
+  function markNotConverted(item) {
+    item.status = "cancelled";
+    item.error = "Not converted.";
+    item.errorType = "cancelled";
+    renderQueue();
+    handleBatchItemCompleted(item);
   }
 
   // ─── Recognition-Model Add-On ────────────────────────────────────────────
@@ -954,6 +1790,9 @@ document.addEventListener("DOMContentLoaded", () => {
         if (dailyUpdateToggle) {
           dailyUpdateToggle.checked = Boolean(s.check_for_updates_daily);
         }
+        if (qualityCheckToggle) {
+          qualityCheckToggle.checked = s.quality_check_enabled !== false;
+        }
         // Guarded by .disabled so this cannot race refreshAddonStatus() into
         // showing a checked toggle the add-on state says is unusable. Whichever
         // of the two lands last, the result is the same.
@@ -1020,6 +1859,33 @@ document.addEventListener("DOMContentLoaded", () => {
             checked
               ? "Automatic fallback to MarkItDown enabled."
               : "Automatic fallback disabled (strict engine execution).",
+            "info"
+          );
+        } else {
+          showToast("Failed to update settings.", "error");
+          e.target.checked = !checked;
+        }
+      } catch {
+        showToast("Error updating settings.", "error");
+        e.target.checked = !checked;
+      }
+    });
+  }
+
+  if (qualityCheckToggle) {
+    qualityCheckToggle.addEventListener("change", async (e) => {
+      const checked = e.target.checked;
+      try {
+        const resp = await fetchWithToken(`${apiBase}/settings`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ quality_check_enabled: checked }),
+        });
+        if (resp.ok) {
+          showToast(
+            checked
+              ? "PDFs will be checked for missing text."
+              : "Missing-text check turned off.",
             "info"
           );
         } else {
@@ -1600,14 +2466,14 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ─── Theme Toggle ────────────────────────────────────────────────────────
-  const savedTheme = localStorage.getItem("inkdoc-theme") || localStorage.getItem("markitdown-theme") || "dark";
+  const savedTheme = readStorage("inkdoc-theme") || readStorage("markitdown-theme") || "dark";
   document.documentElement.setAttribute("data-theme", savedTheme);
 
   themeToggle.addEventListener("click", () => {
     const current = document.documentElement.getAttribute("data-theme");
     const next = current === "dark" ? "light" : "dark";
     document.documentElement.setAttribute("data-theme", next);
-    localStorage.setItem("inkdoc-theme", next);
+    writeStorage("inkdoc-theme", next);
     // The maximise button is drawn natively, so it can't pick up the new
     // palette from CSS on its own.
     if (window.__inkdocSyncTitlebar) window.__inkdocSyncTitlebar();
@@ -1850,7 +2716,7 @@ document.addEventListener("DOMContentLoaded", () => {
     registerBatchItems(files.length);
     showWorkbench();
 
-    files.forEach((file) => {
+    const pending = files.map((file) => {
       const item = {
         id:       "item-" + Math.random().toString(36).substr(2, 9),
         name:     file.name,
@@ -1862,23 +2728,216 @@ document.addEventListener("DOMContentLoaded", () => {
         savedTo:  "",
       };
       queue.unshift(item);
-      renderQueue();
-      convertFileItem(item, file);
+      return { item, file };
     });
+    renderQueue();
+    const start = () => pending.forEach(({ item, file }) => convertFileItem(item, file));
+    if (selectedEngine === "glm_ocr") {
+      confirmGlmJob(files).then((ok) => {
+        if (ok) start();
+        else pending.forEach(({ item }) => markNotConverted(item));
+      });
+    } else {
+      start();
+    }
   }
 
-  async function convertFileItem(item, file) {
-    item.status = "converting";
+  // ─── Live progress & cancel ─────────────────────────────────────────────
+  // Each conversion carries a job_id; while it runs, the row shows the phase the
+  // server reports ("Checking…", "Retrying with Docling…") and offers Cancel.
+  const PROGRESS_POLL_MS = 1000;
+
+  function stopProgressPoll(item) {
+    if (item.progressTimer) {
+      clearInterval(item.progressTimer);
+      item.progressTimer = null;
+    }
+  }
+
+  function startProgressPoll(item) {
+    stopProgressPoll(item);
+    const jobId = item.jobId;
+    if (!jobId) return;
+    item.progressTimer = setInterval(async () => {
+      if (item.jobId !== jobId || item.status !== "converting") {
+        stopProgressPoll(item);
+        return;
+      }
+      try {
+        const resp = await fetch(`${apiBase}/convert/progress/${encodeURIComponent(jobId)}`);
+        if (!resp.ok) return;
+        const p = await resp.json();
+        if (item.jobId !== jobId || item.status !== "converting" || item.cancelRequested) return;
+        const text = formatJobProgress(p);
+        if (text && text !== item.progressMessage) {
+          item.progressMessage = text;
+          renderQueue();
+        }
+      } catch (_) {}
+    }, PROGRESS_POLL_MS);
+  }
+
+  async function cancelItem(item) {
+    if (!item.jobId || item.status !== "converting" || item.cancelRequested) return;
+    item.cancelRequested = true;
+    item.progressMessage = "Cancelling…";
     renderQueue();
+    try {
+      await fetch(`${apiBase}/convert/cancel/${encodeURIComponent(item.jobId)}`, { method: "POST" });
+    } catch (_) {}
+  }
+
+  // Resets an item for a new run and returns that run's job id. Responses that
+  // arrive for an older run (a re-convert started meanwhile) are ignored.
+  function beginConversion(item, engine) {
+    item.engine          = engine;
+    item.status          = "converting";
+    item.jobId           = newJobId();
+    item.progressMessage = "";
+    item.cancelRequested = false;
+    item.error           = "";
+    item.errorType       = "";
+    item.auto            = null;
+    item.quality         = null;
+    item.warnings        = [];
+    renderQueue();
+    startProgressPoll(item);
+    return item.jobId;
+  }
+
+  async function readErrorDetail(resp, fallback) {
+    const errData = await resp.json().catch(() => ({ detail: resp.statusText }));
+    return (typeof errData.detail === "string" && errData.detail) || fallback;
+  }
+
+  function applyConversionError(item, httpStatus, msg, engineToUse, isUrl) {
+    if (httpStatus === 409 && msg === "conversion_cancelled") {
+      item.status    = "cancelled";
+      item.error     = "Conversion cancelled. Nothing was saved.";
+      item.errorType = "cancelled";
+      selectItem(item.id);
+      showToast(`Cancelled: ${item.name}`, "info");
+      return;
+    }
+
+    const isGlm = engineToUse === "glm_ocr" || msg.includes("GLM-OCR");
+    if (msg.includes("engine_not_installed") || msg.includes("engine_not_ready")) {
+      item.status = "failed";
+      item.error = !isGlm
+        ? "Docling is not installed. Open Settings to install the engine pack."
+        : msg.includes("engine_not_ready")
+          ? "GLM-OCR didn't pass its self-test. Open Settings to run it again."
+          : "GLM-OCR isn't downloaded. Open Settings to download it.";
+      item.errorType = "failed";
+      selectItem(item.id);
+      showToast(isGlm ? item.error : "Docling is not installed. Install in Settings.", "error");
+      openSettings();
+      return;
+    }
+
+    if (httpStatus === 400 && msg.includes("engine_unsupported")) {
+      item.status = "unsupported";
+      item.error = isGlm
+        ? "GLM-OCR is not available on this platform."
+        : "Docling is not supported on this platform architecture.";
+      item.errorType = "unsupported";
+      selectItem(item.id);
+      showToast(isGlm ? item.error : "Docling is not supported on this platform.", "error");
+      return;
+    }
+
+    // Any other 409 is not about Docling (an update being applied, for one), so
+    // it is shown as the server worded it.
+    const errType = httpStatus === 409 ? "failed" : classifyError(msg);
+    item.status    = errType; // "unsupported" or "failed"
+    item.error     = msg;
+    item.errorType = errType;
+    selectItem(item.id);
+    if (errType === "unsupported") {
+      showToast(`${getEngineDisplayName(engineToUse)} does not support this ${isUrl ? "URL type" : "format"}`, "error");
+    } else {
+      showToast(isUrl || httpStatus === 409 ? `Failed: ${msg}` : `Failed: ${item.name}`, "error");
+    }
+  }
+
+  function maybeShowHintToast(hint) {
+    if (!shouldShowHintToast(hint, hintSession, readStorage)) return false;
+    hintSession.hintShown = true;
+    showToast(hint, "info", {
+      duration: 9000,
+      actions: [
+        { label: hint.includes("Docling") ? "Install Docling" : "Open Settings", onClick: (e) => openSettings(e) },
+        { label: "Don't show again", onClick: () => writeStorage(HIDE_AUTO_HINT_KEY, "1") },
+      ],
+    });
+    return true;
+  }
+
+  function applyConversionResult(item, data, engineToUse) {
+    item.engineRequested  = data.engine_requested || engineToUse;
+    item.engineUsed       = data.engine_used || data.engine || engineToUse;
+    item.fallbackOccurred = Boolean(data.fallback);
+    item.fallbackReason   = data.fallback_reason || "";
+    item.auto             = data.auto || null;
+    item.quality          = data.quality || null;
+    item.warnings         = Array.isArray(data.warnings) ? data.warnings : [];
+    item.engine           = item.engineUsed;
+    setItemMarkdown(item, data.markdown);
+    item.savedTo          = data.saved_to_downloads || "";
+
+    const warning = formatQualityWarning(item.quality);
+    const via = item.engineRequested === "auto"
+      ? `Auto → ${getEngineDisplayName(item.engineUsed)}`
+      : getEngineDisplayName(item.engineUsed);
+    const label = item.sourceUrl ? "URL" : `"${item.name}"`;
+
+    if (!data.markdown || data.markdown.trim() === "") {
+      item.status    = "empty";
+      item.errorType = "empty";
+      selectItem(item.id);
+      showToast(
+        warning ? `No text extracted from ${label}: ${warning.long}` : `No text extracted from ${label} — try a different engine`,
+        "info"
+      );
+    } else {
+      item.status = "saved";
+      selectItem(item.id);
+      if (item.fallbackOccurred) {
+        showToast(`Converted ${label} via MarkItDown (Docling fallback)`, "success");
+      } else if (warning) {
+        showToast(`Converted ${label}, ${warning.toast}`, "info");
+      } else if (item.warnings.length) {
+        showToast(`Converted ${label} via ${via} (${item.warnings.length} note${item.warnings.length === 1 ? "" : "s"})`, "info");
+      } else if (!(item.auto && maybeShowHintToast(item.auto.hint))) {
+        showToast(`Converted ${label} via ${via}`, "success");
+      }
+    }
+  }
+
+  function applyNetworkError(item, err, engineToUse, isUrl) {
+    const errType = classifyError(err.message);
+    item.status    = errType;
+    item.error     = err.message;
+    item.errorType = errType;
+    selectItem(item.id);
+    showToast(
+      errType === "unsupported"
+        ? `${getEngineDisplayName(engineToUse)} does not support this ${isUrl ? "URL type" : "format"}`
+        : `Failed: ${isUrl ? err.message : item.name}`,
+      "error"
+    );
+  }
+
+  async function convertFileItem(item, file, engine = item.engine || selectedEngine) {
+    const jobId = beginConversion(item, engine);
 
     const formData = new FormData();
     formData.append("file", file);
-
-    const engineToUse = item.engine || selectedEngine;
     const params = new URLSearchParams({
       save_to_downloads: autoSaveToDownloads.toString(),
       response_format:   "json",
-      engine:            engineToUse,
+      engine:            engine,
+      job_id:            jobId,
     });
 
     try {
@@ -1886,106 +2945,46 @@ document.addEventListener("DOMContentLoaded", () => {
         method: "POST",
         body:   formData,
       });
-
+      if (item.jobId !== jobId) return; // superseded by a newer run
       if (!resp.ok) {
-        const errData = await resp.json().catch(() => ({ detail: resp.statusText }));
-        const msg = errData.detail || "Conversion error";
-
-        if (resp.status === 409 || msg.includes("engine_not_installed")) {
-          item.status = "failed";
-          item.error = "Docling is not installed. Open Settings to install the engine pack.";
-          item.errorType = "failed";
-          selectItem(item.id);
-          showToast("Docling is not installed. Install in Settings.", "error");
-          settingsPopover.classList.add("open");
-          return;
-        }
-
-        if (resp.status === 400 && msg.includes("engine_unsupported")) {
-          item.status = "unsupported";
-          item.error = "Docling is not supported on this platform architecture.";
-          item.errorType = "unsupported";
-          selectItem(item.id);
-          showToast("Docling is not supported on this platform.", "error");
-          return;
-        }
-
-        const errType = classifyError(msg);
-        item.status    = errType; // "unsupported" or "failed"
-        item.error     = msg;
-        item.errorType = errType;
-        selectItem(item.id);
-        showToast(
-          errType === "unsupported"
-            ? `${getEngineDisplayName(engineToUse)} does not support this format`
-            : `Failed: ${item.name}`,
-          "error"
-        );
+        applyConversionError(item, resp.status, await readErrorDetail(resp, "Conversion error"), engine, false);
         return;
       }
-
-      const data = await resp.json();
-      item.engineRequested = data.engine_requested || engineToUse;
-      item.engineUsed = data.engine_used || data.engine || engineToUse;
-      item.fallbackOccurred = Boolean(data.fallback);
-      item.fallbackReason = data.fallback_reason || "";
-      item.engine   = item.engineUsed;
-      setItemMarkdown(item, data.markdown);
-      item.savedTo  = data.saved_to_downloads || "";
-
-      // Detect empty / blank output (converted OK but no text extracted)
-      if (!data.markdown || data.markdown.trim() === "") {
-        item.status    = "empty";
-        item.errorType = "empty";
-        selectItem(item.id);
-        showToast(`No text extracted from "${item.name}" — try a different engine`, "info");
-      } else {
-        item.status = "saved";
-        selectItem(item.id);
-        const toastMsg = item.fallbackOccurred
-          ? `Converted "${item.name}" via MarkItDown (Docling fallback)`
-          : `Converted "${item.name}" via ${getEngineDisplayName(item.engine)}`;
-        showToast(toastMsg, "success");
-      }
+      applyConversionResult(item, await resp.json(), engine);
     } catch (err) {
-      const errType = classifyError(err.message);
-      item.status    = errType;
-      item.error     = err.message;
-      item.errorType = errType;
-      selectItem(item.id);
-      showToast(
-        errType === "unsupported"
-          ? `${getEngineDisplayName(engineToUse)} does not support this format`
-          : `Failed: ${item.name}`,
-        "error"
-      );
+      if (item.jobId === jobId) applyNetworkError(item, err, engine, false);
     } finally {
-      renderQueue();
-      handleBatchItemCompleted(item);
+      if (item.jobId === jobId) {
+        stopProgressPoll(item);
+        renderQueue();
+        handleBatchItemCompleted(item);
+      }
     }
   }
 
-  async function convertUrlItem(url, forcedEngine = null) {
+  function convertUrlItem(url, forcedEngine = null) {
     showWorkbench();
-
-    const engineToUse = forcedEngine || selectedEngine;
     const item = {
       id:        "item-" + Math.random().toString(36).substr(2, 9),
       name:      url,
-      engine:    engineToUse,
+      engine:    forcedEngine || selectedEngine,
       sourceUrl: url,
-      status:    "converting",
+      status:    "pending",
       markdown:  "",
       error:     "",
       savedTo:   "",
     };
     queue.unshift(item);
-    renderQueue();
+    return runUrlConversion(item, item.engine);
+  }
 
+  async function runUrlConversion(item, engine) {
+    const jobId = beginConversion(item, engine);
     const payload = {
-      url:               url,
+      url:               item.sourceUrl,
       save_to_downloads: autoSaveToDownloads,
-      engine:            engineToUse,
+      engine:            engine,
+      job_id:            jobId,
     };
 
     try {
@@ -1994,81 +2993,33 @@ document.addEventListener("DOMContentLoaded", () => {
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify(payload),
       });
-
+      if (item.jobId !== jobId) return;
       if (!resp.ok) {
-        const errData = await resp.json().catch(() => ({ detail: resp.statusText }));
-        const msg = errData.detail || "URL conversion error";
-
-        if (resp.status === 409 || msg.includes("engine_not_installed")) {
-          item.status = "failed";
-          item.error = "Docling is not installed. Open Settings to install the engine pack.";
-          item.errorType = "failed";
-          selectItem(item.id);
-          showToast("Docling is not installed. Install in Settings.", "error");
-          settingsPopover.classList.add("open");
-          return;
-        }
-
-        if (resp.status === 400 && msg.includes("engine_unsupported")) {
-          item.status = "unsupported";
-          item.error = "Docling is not supported on this platform architecture.";
-          item.errorType = "unsupported";
-          selectItem(item.id);
-          showToast("Docling is not supported on this platform.", "error");
-          return;
-        }
-
-        const errType = classifyError(msg);
-        item.status    = errType;
-        item.error     = msg;
-        item.errorType = errType;
-        selectItem(item.id);
-        showToast(
-          errType === "unsupported"
-            ? `${getEngineDisplayName(engineToUse)} does not support this URL type`
-            : `Failed: ${msg}`,
-          "error"
-        );
+        applyConversionError(item, resp.status, await readErrorDetail(resp, "URL conversion error"), engine, true);
         return;
       }
-
-      const data = await resp.json();
-      item.engineRequested = data.engine_requested || engineToUse;
-      item.engineUsed = data.engine_used || data.engine || engineToUse;
-      item.fallbackOccurred = Boolean(data.fallback);
-      item.fallbackReason = data.fallback_reason || "";
-      item.engine   = item.engineUsed;
-      setItemMarkdown(item, data.markdown);
-      item.savedTo  = data.saved_to_downloads || "";
-
-      if (!data.markdown || data.markdown.trim() === "") {
-        item.status    = "empty";
-        item.errorType = "empty";
-        selectItem(item.id);
-        showToast(`No content extracted — try a different engine`, "info");
-      } else {
-        item.status = "saved";
-        selectItem(item.id);
-        const toastMsg = item.fallbackOccurred
-          ? `URL converted via MarkItDown (Docling fallback)`
-          : `URL converted via ${getEngineDisplayName(item.engine)}`;
-        showToast(toastMsg, "success");
-      }
+      applyConversionResult(item, await resp.json(), engine);
     } catch (err) {
-      const errType = classifyError(err.message);
-      item.status    = errType;
-      item.error     = err.message;
-      item.errorType = errType;
-      selectItem(item.id);
-      showToast(
-        errType === "unsupported"
-          ? `${getEngineDisplayName(engineToUse)} does not support this URL type`
-          : `Failed: ${err.message}`,
-        "error"
-      );
+      if (item.jobId === jobId) applyNetworkError(item, err, engine, true);
     } finally {
-      renderQueue();
-      handleBatchItemCompleted(item);
+      if (item.jobId === jobId) {
+        stopProgressPoll(item);
+        renderQueue();
+        handleBatchItemCompleted(item);
+      }
+    }
+  }
+
+  // A user-initiated re-run with a specific engine. It never changes the
+  // engine pill: re-converting one file with Docling must not quietly move
+  // someone off Auto for everything they drop next.
+  async function reconvertItem(item, engine) {
+    if (!item || item.status === "converting") return;
+    if (engine === "glm_ocr" && item.fileRef && !(await confirmGlmJob([item.fileRef]))) return;
+    if (item.fileRef) {
+      convertFileItem(item, item.fileRef, engine);
+    } else if (item.sourceUrl) {
+      runUrlConversion(item, engine);
     }
   }
 
@@ -2091,7 +3042,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         if (item.status === "converting") {
           badgeClass = "status-converting";
-          badgeText  = "Converting…";
+          badgeText  = item.progressMessage || "Converting…";
         } else if (item.status === "saved") {
           badgeClass = "status-saved";
           badgeText  = item.savedTo ? "Saved" : "Done";
@@ -2104,11 +3055,28 @@ document.addEventListener("DOMContentLoaded", () => {
         } else if (item.status === "empty") {
           badgeClass = "status-empty";
           badgeText  = "Empty";
+        } else if (item.status === "cancelled") {
+          badgeClass = "status-cancelled";
+          badgeText  = "Cancelled";
         }
 
-        // Show engine badge only when it differs from the currently selected engine
-        const engineTag = item.engine !== selectedEngine
-          ? `<span class="badge-queue-engine ${item.engine}">${getEngineDisplayName(item.engine)}</span>`
+        const tag = describeQueueEngine(item, selectedEngine);
+        const engineTag = tag
+          ? `<span class="badge-queue-engine ${escapeHtml(tag.cls)}"${tag.title ? ` title="${escapeHtml(tag.title)}"` : ""}>${escapeHtml(tag.text)}</span>`
+          : "";
+
+        // Saved stays Saved: a warning never undoes the save. The chip says why
+        // in words, not just with an icon or a colour.
+        const warning = (item.status === "saved" || item.status === "empty") ? formatQualityWarning(item.quality) : null;
+        const warnChip = warning
+          ? `<span class="status-warn" title="${escapeHtml(warning.long)}" aria-label="Warning: ${escapeHtml(warning.long)}"><span aria-hidden="true">⚠</span> ${escapeHtml(warning.short)}</span>`
+          : "";
+        const subLine = engineTag || warnChip ? `<div class="item-sub">${engineTag}${warnChip}</div>` : "";
+
+        const cancelBtn = item.status === "converting" && item.jobId && !item.cancelRequested
+          ? `<button type="button" class="btn btn-icon queue-cancel" data-cancel="${item.id}" title="Cancel conversion" aria-label="Cancel converting ${escapeHtml(item.name)}">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>`
           : "";
 
         return `
@@ -2122,10 +3090,13 @@ document.addEventListener("DOMContentLoaded", () => {
             </div>
             <div class="item-info">
               <div class="item-name" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</div>
-              ${engineTag ? `<div class="item-sub">${engineTag}</div>` : ""}
+              ${subLine}
             </div>
           </div>
-          <span class="status-pill ${badgeClass}">${badgeText}</span>
+          <div class="item-status">
+            <span class="status-pill ${badgeClass}">${escapeHtml(badgeText)}</span>
+            ${cancelBtn}
+          </div>
         </div>`;
       })
       .join("");
@@ -2133,6 +3104,13 @@ document.addEventListener("DOMContentLoaded", () => {
     // Attach click handlers
     document.querySelectorAll(".queue-item").forEach((el) => {
       el.addEventListener("click", () => selectItem(el.getAttribute("data-id")));
+    });
+    document.querySelectorAll(".queue-cancel").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const item = queue.find((i) => i.id === btn.getAttribute("data-cancel"));
+        if (item) cancelItem(item);
+      });
     });
   }
 
@@ -2237,6 +3215,82 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ─── Select & Display Item ───────────────────────────────────────────────
+  const EMPTY_HINT_SVG = `<svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line></svg>`;
+
+  // Lines for the notice's Details disclosure: what was compared and why the
+  // engine was chosen, so a warning can be judged rather than taken on trust.
+  function conversionDetailLines(item) {
+    const lines = [];
+    const q = item.quality;
+    if (item.auto) {
+      if (item.auto.reason) lines.push(`Auto: ${item.auto.reason}`);
+      const esc = item.auto.escalation;
+      if (esc && esc.error) {
+        lines.push(`Retry with ${getEngineDisplayName(esc.to)} failed: ${esc.error}`);
+      } else if (esc && esc.kept !== esc.to) {
+        lines.push(`Retried with ${getEngineDisplayName(esc.to)}; kept ${getEngineDisplayName(esc.kept)}, which found more of the text.`);
+      }
+    }
+    if (item.fallbackOccurred) {
+      lines.push(`Docling failed${item.fallbackReason ? `: ${item.fallbackReason}` : ""}; converted with MarkItDown.`);
+    }
+    (item.warnings || []).forEach((line) => lines.push(line));
+    if (q) {
+      (q.details || []).forEach((line) => lines.push(line));
+      const list = (pages) => pages.slice(0, 20).join(", ") + (pages.length > 20 ? ", …" : "");
+      if (q.low_pages && q.low_pages.length) lines.push(`Pages with the most missing text: ${list(q.low_pages)}`);
+      if (q.scan_pages && q.scan_pages.length) lines.push(`Scanned pages not read: ${list(q.scan_pages)}`);
+      if (q.skipped_reason) lines.push(`Comparison skipped: ${q.skipped_reason.replace(/_/g, " ")}.`);
+    }
+    return lines;
+  }
+
+  function qualityNoticeActions(item) {
+    const action = qualityAction(item.quality);
+    if (!action) return [];
+    if (action.install) return [{ label: action.label, onClick: (e) => openSettings(e) }];
+    if (!(item.fileRef || item.sourceUrl)) return [];
+    return [{ label: action.label, onClick: () => reconvertItem(item, action.engine) }];
+  }
+
+  function updatePreviewBadges(item) {
+    if (previewEngineTag) {
+      const tag = describePreviewEngine(item);
+      previewEngineTag.textContent = tag.text;
+      previewEngineTag.title = tag.title;
+      previewEngineTag.style.display = "inline-flex";
+    }
+    if (previewFallbackBadge) {
+      if (item.fallbackOccurred) {
+        previewFallbackBadge.style.display = "inline-flex";
+        previewFallbackBadge.textContent = "⚠️ Fallback: MarkItDown";
+        previewFallbackBadge.title = item.fallbackReason
+          ? `Docling failed: ${item.fallbackReason}`
+          : "Docling failed to convert this document. Automatically fell back to MarkItDown.";
+      } else {
+        previewFallbackBadge.style.display = "none";
+      }
+    }
+    if (previewQualityBadge) {
+      const warning = formatQualityWarning(item.quality);
+      if (warning) {
+        previewQualityBadge.style.display = "inline-flex";
+        previewQualityBadge.textContent = `⚠ ${warning.short}`;
+        previewQualityBadge.title = warning.long;
+        previewQualityBadge.setAttribute("aria-label", `Warning: ${warning.long}`);
+      } else {
+        previewQualityBadge.style.display = "none";
+        previewQualityBadge.removeAttribute("aria-label");
+      }
+    }
+  }
+
+  function hidePreviewBadges() {
+    if (previewEngineTag) previewEngineTag.style.display = "none";
+    if (previewFallbackBadge) previewFallbackBadge.style.display = "none";
+    if (previewQualityBadge) previewQualityBadge.style.display = "none";
+  }
+
   function selectItem(id) {
     activeItemId = id;
     const item = queue.find((i) => i.id === id);
@@ -2248,7 +3302,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (btnSwitchEngine) {
       if (item.fileRef || item.sourceUrl) {
         btnSwitchEngine.style.display = "inline-flex";
-        const nextEng = getNextEngine(item.engine);
+        const nextEng = getNextEngine(item.engine, glmIsUsable());
         btnSwitchEngine.title = `Re-convert with ${getEngineDisplayName(nextEng)}`;
       } else {
         btnSwitchEngine.style.display = "none";
@@ -2262,8 +3316,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const ext = (item.name || "").split(".").pop().toUpperCase() || "file";
 
     if (item.status === "unsupported") {
-      if (previewEngineTag) previewEngineTag.style.display = "none";
-      if (previewFallbackBadge) previewFallbackBadge.style.display = "none";
+      hidePreviewBadges();
       showConversionNotice(
         "unsupported",
         `${ext} format is not supported by ${engineLabel}`,
@@ -2276,9 +3329,21 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
+    if (item.status === "cancelled") {
+      hidePreviewBadges();
+      const again = (item.fileRef || item.sourceUrl)
+        ? [{ label: `Convert again with ${engineLabel}`, onClick: () => reconvertItem(item, item.engine) }]
+        : [];
+      showConversionNotice("info", "Conversion cancelled", "Nothing was saved.", { actions: again });
+      renderedOutput.innerHTML = `<div class="empty-preview-hint">${EMPTY_HINT_SVG}<p>This conversion was cancelled.</p></div>`;
+      rawEditor.value = "";
+      previewStats.textContent = "";
+      renderQueue();
+      return;
+    }
+
     if (item.status === "failed" || item.status === "error") {
-      if (previewEngineTag) previewEngineTag.style.display = "none";
-      if (previewFallbackBadge) previewFallbackBadge.style.display = "none";
+      hidePreviewBadges();
       const errMsg = item.error || "An unexpected error occurred during conversion.";
       showConversionNotice(
         "failed",
@@ -2287,6 +3352,7 @@ document.addEventListener("DOMContentLoaded", () => {
       );
       const altEng = item.engine === "markitdown" ? "docling" : "markitdown";
       const altLabel = getEngineDisplayName(altEng);
+      const canRetry = Boolean(item.fileRef || item.sourceUrl);
       renderedOutput.innerHTML = `
         <div class="empty-preview-hint">
           <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -2295,15 +3361,12 @@ document.addEventListener("DOMContentLoaded", () => {
             <line x1="12" y1="16" x2="12.01" y2="16"></line>
           </svg>
           <p>${escapeHtml(errMsg)}</p>
-          ${item.fileRef ? `<button type="button" class="btn btn-sm btn-mark" id="btnNoticeRetryAlt" style="margin-top: 14px;">↺ Retry with ${altLabel} (Recommended)</button>` : ""}
+          ${canRetry ? `<button type="button" class="btn btn-sm btn-mark" id="btnNoticeRetryAlt" style="margin-top: 14px;">↺ Retry with ${altLabel} (Recommended)</button>` : ""}
         </div>`;
       const retryAltBtn = document.getElementById("btnNoticeRetryAlt");
-      if (retryAltBtn && item.fileRef) {
-        retryAltBtn.addEventListener("click", () => {
-          setEngine(altEng);
-          item.engine = altEng;
-          convertFileItem(item, item.fileRef);
-        });
+      if (retryAltBtn && canRetry) {
+        // Retries this item only; the engine pill stays where the user put it.
+        retryAltBtn.addEventListener("click", () => reconvertItem(item, altEng));
       }
       rawEditor.value = `Error: ${errMsg}`;
       previewStats.textContent = "";
@@ -2312,14 +3375,24 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     if (item.status === "empty") {
-      if (previewEngineTag) previewEngineTag.style.display = "none";
-      if (previewFallbackBadge) previewFallbackBadge.style.display = "none";
-      showConversionNotice(
-        "empty",
-        `No text extracted from this file by ${engineLabel}`,
-        `${engineLabel} processed the file successfully, but found no text to extract. This can happen with image-only files or unsupported content types. Try switching engines with the ↺ button.`
-      );
-      renderedOutput.innerHTML = `<div class="empty-preview-hint"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line></svg><p>The file was processed, but no text content was found.</p></div>`;
+      hidePreviewBadges();
+      const warning = formatQualityWarning(item.quality);
+      if (warning) {
+        // The check knows why nothing came out (a scanned PDF): say so, and
+        // offer the engine that can read it, instead of "try a different engine".
+        updatePreviewBadges(item);
+        showConversionNotice("empty", warning.title, warning.long, {
+          actions: qualityNoticeActions(item),
+          details: conversionDetailLines(item),
+        });
+      } else {
+        showConversionNotice(
+          "empty",
+          `No text extracted from this file by ${engineLabel}`,
+          `${engineLabel} processed the file successfully, but found no text to extract. This can happen with image-only files or unsupported content types. Try switching engines with the ↺ button.`
+        );
+      }
+      renderedOutput.innerHTML = `<div class="empty-preview-hint">${EMPTY_HINT_SVG}<p>The file was processed, but no text content was found.</p></div>`;
       rawEditor.value = "";
       previewStats.textContent = "";
       renderQueue();
@@ -2332,29 +3405,34 @@ document.addEventListener("DOMContentLoaded", () => {
     const words = item.wordCount || 0;
     previewStats.textContent = words > 0 ? `${words.toLocaleString()} words` : "";
 
-    // Engine used tag
-    if (previewEngineTag) {
-      const displayEngine = item.engineUsed || item.engine || selectedEngine;
-      previewEngineTag.textContent = `Engine: ${getEngineDisplayName(displayEngine)}`;
-      previewEngineTag.style.display = "inline-flex";
-    }
+    updatePreviewBadges(item);
 
-    // Fallback badge
-    if (previewFallbackBadge) {
-      if (item.fallbackOccurred) {
-        previewFallbackBadge.style.display = "inline-flex";
-        previewFallbackBadge.textContent = "⚠️ Fallback: MarkItDown";
-        previewFallbackBadge.title = item.fallbackReason
-          ? `Docling failed: ${item.fallbackReason}`
-          : "Docling failed to convert this document. Automatically fell back to MarkItDown.";
-        showConversionNotice(
-          "unsupported",
-          "Docling Fallback: Converted with MarkItDown",
-          `Docling was unable to parse this document${item.fallbackReason ? " (" + item.fallbackReason + ")" : ""}. Conversion automatically fell back to MarkItDown.`
-        );
-      } else {
-        previewFallbackBadge.style.display = "none";
-      }
+    // One notice, most important first: a missing-text warning, then a
+    // Docling fallback, then Auto's install tip, then plain information.
+    const warning = formatQualityWarning(item.quality);
+    const details = conversionDetailLines(item);
+    if (warning) {
+      showConversionNotice("warning", warning.title, warning.long, {
+        actions: qualityNoticeActions(item),
+        details,
+      });
+    } else if (item.fallbackOccurred) {
+      showConversionNotice(
+        "unsupported",
+        "Docling Fallback: Converted with MarkItDown",
+        `Docling was unable to parse this document${item.fallbackReason ? " (" + item.fallbackReason + ")" : ""}. Conversion automatically fell back to MarkItDown.`,
+        { details }
+      );
+    } else if (item.auto && item.auto.hint) {
+      showConversionNotice("info", "Tip", item.auto.hint, {
+        actions: [{ label: item.auto.hint.includes("Docling") ? "Install Docling" : "Open Settings", onClick: (e) => openSettings(e) }],
+        details,
+      });
+    } else if (item.warnings && item.warnings.length) {
+      showConversionNotice("info", "Note", item.warnings[0], { details });
+    } else if (item.quality && item.quality.image_pages && item.quality.image_pages.length) {
+      const note = (item.quality.details || []).find((line) => line.includes("full-page image"));
+      if (note) showConversionNotice("info", "Note", note, { details });
     }
 
     // Rendered HTML (Sanitized against DOM XSS)
@@ -2379,51 +3457,13 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ─── Switch Engine (Re-convert) ──────────────────────────────────────────
+  // Files and URLs go through the same request and result handling, so a URL
+  // re-convert reports its engine, fallback, Auto choice and warnings too.
   if (btnSwitchEngine) {
     btnSwitchEngine.addEventListener("click", () => {
       const item = queue.find((i) => i.id === activeItemId);
       if (!item) return;
-
-      const altEngine = getNextEngine(item.engine);
-      item.engine = altEngine;
-
-      if (item.fileRef) {
-        convertFileItem(item, item.fileRef);
-      } else if (item.sourceUrl) {
-        item.status = "converting";
-        renderQueue();
-
-        fetch(`${apiBase}/convert/url?response_format=json`, {
-          method:  "POST",
-          headers: { "Content-Type": "application/json" },
-          body:    JSON.stringify({
-            url:               item.sourceUrl,
-            save_to_downloads: autoSaveToDownloads,
-            engine:            altEngine,
-          }),
-        })
-          .then(async (resp) => {
-            if (!resp.ok) {
-              const err = await resp.json().catch(() => ({ detail: resp.statusText }));
-              throw new Error(err.detail || "URL conversion error");
-            }
-            return resp.json();
-          })
-          .then((data) => {
-            item.status   = "saved";
-            setItemMarkdown(item, data.markdown);
-            item.savedTo  = data.saved_to_downloads || "";
-            selectItem(item.id);
-            showToast(`Re-converted with ${getEngineDisplayName(altEngine)}`, "success");
-          })
-          .catch((err) => {
-            item.status = "error";
-            item.error  = err.message;
-            selectItem(item.id);
-            showToast(`Failed: ${err.message}`, "error");
-          })
-          .finally(() => renderQueue());
-      }
+      reconvertItem(item, getNextEngine(item.engine, glmIsUsable()));
     });
   }
 
@@ -2539,22 +3579,62 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ─── Toast Notifications ─────────────────────────────────────────────────
-  function showToast(message, type = "info") {
-    toastNotification.textContent = message;
-    toastNotification.className   = `toast-notification toast-${type} show`;
-    setTimeout(() => {
+  // opts.actions: [{ label, onClick }] rendered as buttons; any of them also
+  // dismisses the toast. One timer at a time, so an earlier toast's timer can
+  // no longer hide a newer one early.
+  let toastTimer = null;
+  function showToast(message, type = "info", opts = {}) {
+    toastNotification.replaceChildren();
+    const text = document.createElement("span");
+    text.className = "toast-message";
+    text.textContent = message;
+    toastNotification.appendChild(text);
+    const actions = opts.actions || [];
+    if (actions.length) {
+      const row = document.createElement("span");
+      row.className = "toast-actions";
+      actions.forEach((action) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "toast-action";
+        btn.textContent = action.label;
+        btn.addEventListener("click", (e) => {
+          toastNotification.classList.remove("show");
+          action.onClick(e);
+        });
+        row.appendChild(btn);
+      });
+      toastNotification.appendChild(row);
+    }
+    toastNotification.className = `toast-notification toast-${type} show`;
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
       toastNotification.classList.remove("show");
-    }, 3000);
+      toastTimer = null;
+    }, opts.duration || (actions.length ? 8000 : 3000));
   }
 
   // ─── Custom Confirmation Dialog (replaces window.confirm) ─────────────────
   // Resolves true on confirm, false on cancel/backdrop/Escape. Only one dialog
   // is ever open at a time in this app, so listeners are attached and torn
   // down per call rather than kept registered permanently.
-  function confirmDialog({ title, message, confirmText = "Confirm", cancelText = "Cancel", danger = true } = {}) {
+  // details: optional bullet lines under the message. focusCancel: start on
+  // Cancel even for a non-destructive action (a large download, say), so a
+  // stray Enter never starts it.
+  const appDialogDetails = document.getElementById("appDialogDetails");
+  function confirmDialog({ title, message, details = [], confirmText = "Confirm", cancelText = "Cancel", danger = true, focusCancel = danger } = {}) {
     return new Promise((resolve) => {
       appDialogTitle.textContent   = title || "Are you sure?";
       appDialogMessage.textContent = message || "";
+      if (appDialogDetails) {
+        appDialogDetails.replaceChildren();
+        details.forEach((line) => {
+          const li = document.createElement("li");
+          li.textContent = line;
+          appDialogDetails.appendChild(li);
+        });
+        appDialogDetails.hidden = details.length === 0;
+      }
       appDialogConfirm.textContent = confirmText;
       appDialogCancel.textContent  = cancelText;
       appDialogConfirm.className   = `btn ${danger ? "btn-danger" : "btn-primary"}`;
@@ -2603,7 +3683,7 @@ document.addEventListener("DOMContentLoaded", () => {
       appDialogOverlay.hidden = false;
       // Default focus sits on the non-destructive action so a stray Enter
       // key press can't trigger something irreversible like Remove Pack.
-      (danger ? appDialogCancel : appDialogConfirm).focus();
+      (focusCancel ? appDialogCancel : appDialogConfirm).focus();
     });
   }
 

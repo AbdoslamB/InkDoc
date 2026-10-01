@@ -98,21 +98,41 @@ _active_conversions_lock = threading.Lock()
 # INKDOC_MAX_CONCURRENT_CONVERSIONS).
 MAX_CONCURRENT_CONVERSIONS: int = int(os.environ.get("INKDOC_MAX_CONCURRENT_CONVERSIONS", "2"))
 MAX_CONCURRENT_DOCLING_CONVERSIONS = 1
+# One llama-server reads one page at a time, so GLM-OCR gets its own lane of 1:
+# a 30-page scan never holds a slot a quick MarkItDown job needs.
+MAX_CONCURRENT_GLM_OCR_CONVERSIONS = 1
 _conversion_semaphores: dict[str, asyncio.Semaphore] = {}
 _semaphore_lock = threading.Lock()
 
 
-def get_conversion_semaphore(engine: EngineKind) -> asyncio.Semaphore:
-    """Return the asyncio.Semaphore capping concurrent conversions for `engine`'s lane."""
-    lane = "docling" if engine == EngineKind.DOCLING else "default"
+def _lane_semaphore(lane: str, size: int) -> asyncio.Semaphore:
     sem = _conversion_semaphores.get(lane)
     if sem is None:
         with _semaphore_lock:
             sem = _conversion_semaphores.get(lane)
             if sem is None:
-                size = MAX_CONCURRENT_DOCLING_CONVERSIONS if lane == "docling" else MAX_CONCURRENT_CONVERSIONS
                 sem = _conversion_semaphores[lane] = asyncio.Semaphore(size)
     return sem
+
+
+def get_conversion_semaphore(engine: EngineKind) -> asyncio.Semaphore:
+    """Return the asyncio.Semaphore capping concurrent conversions for `engine`'s lane."""
+    if engine == EngineKind.DOCLING:
+        return _lane_semaphore("docling", MAX_CONCURRENT_DOCLING_CONVERSIONS)
+    if engine == EngineKind.GLM_OCR:
+        return _lane_semaphore("glm_ocr", MAX_CONCURRENT_GLM_OCR_CONVERSIONS)
+    return _lane_semaphore("default", MAX_CONCURRENT_CONVERSIONS)
+
+
+def get_probe_semaphore() -> asyncio.Semaphore:
+    """The lane for pdfium work (PDF probe and missing-text check), one at a time.
+
+    pdfium is not thread-safe, so app/core/pdf_probe.py also holds a thread lock.
+    Taking this semaphore in async code first means a probe waiting its turn
+    holds no thread: fifty PDFs dropped at once queue here, not in the default
+    executor, where they would starve every other conversion of threads.
+    """
+    return _lane_semaphore("probe", 1)
 
 
 @contextlib.contextmanager
@@ -180,15 +200,213 @@ def _perform_conversion(
     item: QueueItem,
     options: ConversionOptions,
     save_to_downloads: bool = False,
+    fetched: Any = None,
+    job: Any = None,
 ) -> tuple[str, str | None]:
-    """Execute document conversion in worker thread and optionally auto-save."""
+    """Execute document conversion in worker thread and optionally auto-save.
+
+    `fetched` is a URL already downloaded by the caller (it keeps the file for the
+    missing-text check). A job cancelled while the conversion ran stops here,
+    before anything is written to Downloads.
+    """
     with track_active_conversion():
-        markdown_text = convert_item(item, options)
+        if fetched is not None:
+            markdown_text = convert_item(item, options, fetched=fetched)
+        else:
+            markdown_text = convert_item(item, options)
+    if job is not None:
+        job.raise_if_cancelled()
     saved_path_str: str | None = None
     if save_to_downloads:
         saved_path = auto_save_markdown(item, markdown_text)
         saved_path_str = str(saved_path)
     return markdown_text, saved_path_str
+
+
+def _header_value(text: str) -> str:
+    """A header-safe rendering: one line, at most 200 chars, latin-1 encodable."""
+    single = re.sub(r"[\r\n]+", " ", text)[:200]
+    return single.encode("latin-1", "replace").decode("latin-1")
+
+
+def _quality_check_enabled(override: bool | None) -> bool:
+    """The per-request override, else the user's setting (default on)."""
+    if override is not None:
+        return bool(override)
+    try:
+        return bool(EngineManager.get_instance().get_settings().get("quality_check_enabled", True))
+    except Exception as exc:
+        logger.warning("Could not read the missing-text check setting: %s", exc)
+        return True
+
+
+def _start_job(job_id: str | None) -> Any:
+    """A progress/cancel handle for `job_id`, or a no-op one when none was sent."""
+    from app.core.jobs import JOBS, NULL_JOB, is_valid_job_id
+
+    if not job_id:
+        return NULL_JOB
+    if not is_valid_job_id(job_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid job_id: use 8-100 letters, digits, '-', '_', '.' or ':'.",
+        )
+    return JOBS.start(job_id)
+
+
+def _assess_in_thread(source_path: str, markdown: str, engine_used: EngineKind) -> Any:
+    """Missing-text check for an explicit engine. Never raises; None for non-PDFs."""
+    try:
+        from app.core.auto_engine import ocr_install_target, ocr_status
+        from app.core.pdf_probe import is_pdf
+        from app.core.quality_check import assess
+
+        if not is_pdf(source_path):
+            return None
+        ocr_engine, installable = ocr_status()
+        target = ocr_install_target() if installable else None
+        return assess(
+            source_path, markdown, engine_used, ocr_engine=ocr_engine, ocr_installable=installable,
+            ocr_install_engine=target or "docling",
+        )
+    except Exception as exc:
+        logger.warning("Missing-text check failed: %s", exc)
+        return None
+
+
+async def _run_quality_check(source_path: str, markdown: str, options: ConversionOptions, job: Any) -> None:
+    """Check an explicit-engine result after it was converted and saved.
+
+    Runs outside the engine lane and inside the probe lane, so it neither holds
+    a conversion slot nor a thread while it waits. Only adds information to the
+    response; the saved file is never touched.
+    """
+    if not options.quality_check:
+        return
+    engine_used = options.engine_used or (
+        EngineKind.MARKITDOWN if options.fallback_occurred else options.engine
+    )
+    if job is not None:
+        job.set_phase("checking", "Checking…")
+    async with get_probe_semaphore():
+        options.quality_report = await asyncio.to_thread(
+            _assess_in_thread, source_path, markdown, engine_used
+        )
+
+
+async def _convert_explicit(
+    item: QueueItem,
+    options: ConversionOptions,
+    save_to_downloads: bool,
+    *,
+    source_path: str,
+    fetched: Any = None,
+    job: Any,
+) -> tuple[str, str | None]:
+    """Explicit engine: convert -> auto-save -> check. The file reaches Downloads first."""
+    engine = options.engine
+    label = _ENGINE_LABELS.get(engine, engine.value)
+    options.job = job
+    job.set_phase("queued", f"Waiting for {label}…", engine=engine.value)
+    async with get_conversion_semaphore(engine):
+        job.raise_if_cancelled()
+        job.set_phase("converting", f"Converting with {label}…", engine=engine.value)
+        markdown_text, saved_path_str = await asyncio.to_thread(
+            _perform_conversion, item, options, save_to_downloads, fetched, job
+        )
+    await _run_quality_check(source_path, markdown_text, options, job)
+    return markdown_text, saved_path_str
+
+
+async def _convert_auto(
+    item: QueueItem,
+    options: ConversionOptions,
+    save_to_downloads: bool,
+    *,
+    fetched: Any = None,
+    job: Any,
+) -> tuple[str, str | None]:
+    """Auto: probe -> convert -> check -> (maybe re-convert) -> auto-save once.
+
+    The whole job counts as one active conversion, including the gaps between
+    its steps, so an update can never be applied in the middle of it.
+    """
+    from app.core.auto_engine import run_auto
+
+    options.job = job
+    with track_active_conversion():
+        markdown_text = await run_auto(
+            item,
+            options,
+            lane=get_conversion_semaphore,
+            probe_lane=get_probe_semaphore(),
+            fetched=fetched,
+            job=job,
+        )
+        job.raise_if_cancelled()
+        saved_path_str: str | None = None
+        if save_to_downloads:
+            job.set_phase("saving", "Saving…")
+            saved_path = await asyncio.to_thread(auto_save_markdown, item, markdown_text)
+            saved_path_str = str(saved_path)
+    return markdown_text, saved_path_str
+
+
+_ENGINE_LABELS = {
+    EngineKind.MARKITDOWN: "MarkItDown",
+    EngineKind.DOCLING: "Docling",
+    EngineKind.MARKIT: "Markit",
+    EngineKind.GLM_OCR: "GLM-OCR",
+    EngineKind.AUTO: "Auto",
+}
+
+
+def _conversion_payload(options: ConversionOptions, engine_kind: EngineKind) -> dict[str, Any]:
+    """Engine, fallback, Auto and quality metadata shared by every conversion response."""
+    fallback_occurred = bool(getattr(options, "fallback_occurred", False))
+    fallback_reason = getattr(options, "fallback_reason", "") or None
+    engine_used = getattr(options, "engine_used", None) or (
+        EngineKind.MARKITDOWN if fallback_occurred else engine_kind
+    )
+    if engine_used == EngineKind.AUTO:  # defensive: Auto always reports a concrete engine
+        engine_used = EngineKind.MARKITDOWN
+    decision = getattr(options, "auto_decision", None)
+    report = getattr(options, "quality_report", None)
+    return {
+        "engine_requested": engine_kind.value,
+        "engine_used": engine_used.value,
+        "fallback": fallback_occurred,
+        "fallback_reason": fallback_reason,
+        "auto": decision.to_dict(engine_used) if engine_kind == EngineKind.AUTO and decision else None,
+        "quality": report.to_dict() if report is not None else None,
+        # Notes that are not failures, e.g. a GLM-OCR page cut short because the
+        # model repeated itself, or GPU acceleration falling back to the CPU.
+        "warnings": list(getattr(options, "engine_warnings", None) or []),
+    }
+
+
+def _markdown_response(markdown_text: str, payload: dict[str, Any]) -> PlainTextResponse:
+    """The text response format: raw Markdown, metadata in X- headers."""
+    resp = PlainTextResponse(markdown_text, media_type="text/markdown; charset=utf-8")
+    resp.headers["X-Engine-Requested"] = payload["engine_requested"]
+    resp.headers["X-Engine-Used"] = payload["engine_used"]
+    resp.headers["X-Fallback-Occurred"] = str(payload["fallback"]).lower()
+    if payload["fallback_reason"]:
+        resp.headers["X-Fallback-Reason"] = _header_value(payload["fallback_reason"])
+    if payload["auto"]:
+        resp.headers["X-Auto-Reason"] = _header_value(payload["auto"]["reason"])
+    if payload.get("warnings"):
+        resp.headers["X-Engine-Warnings"] = _header_value(" | ".join(payload["warnings"]))
+    quality = payload["quality"]
+    if quality:
+        resp.headers["X-Quality-Warning"] = str(bool(quality.get("warning"))).lower()
+        if quality.get("missing_pct") is not None:
+            resp.headers["X-Quality-Missing-Pct"] = str(quality["missing_pct"])
+    return resp
+
+
+def _cancelled_exception() -> HTTPException:
+    return HTTPException(status_code=status.HTTP_409_CONFLICT, detail="conversion_cancelled")
 
 
 _update_manager: Any | None = None
@@ -260,6 +478,28 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         # gated setting is still enforced at the point of use by the worker.
         logger.warning("Add-on settings reconciliation failed: %s", exc)
     yield
+    _shutdown_engine_processes()
+
+
+def _shutdown_engine_processes() -> None:
+    """Stop llama-server and the Docling worker when the server stops (window
+    closed, Ctrl+C in --headless). Only instances that exist are touched."""
+    try:
+        from app.core.engines.glm_ocr_server import GlmOcrServer
+
+        inst = GlmOcrServer.peek_instance()
+        if inst is not None:
+            inst.shutdown()
+    except Exception as exc:
+        logger.debug("GLM-OCR server shutdown: %s", exc)
+    try:
+        from app.core.engines.docling_worker_client import DoclingWorkerClient
+
+        client = DoclingWorkerClient._instance
+        if client is not None:
+            client.shutdown()
+    except Exception as exc:
+        logger.debug("Docling worker shutdown: %s", exc)
 
 
 app = FastAPI(
@@ -393,12 +633,14 @@ api_router = APIRouter()
 def _docling_enrichment_options(engine_kind: EngineKind) -> dict[str, bool]:
     """Read the user's Docling enrichment preferences.
 
-    Only consulted for the Docling route: the flags mean nothing to the other
-    engines, and reading settings takes a lock and may touch disk, which is not
-    worth paying on every MarkItDown conversion. A failure to read settings
-    yields the defaults rather than failing the conversion.
+    Only consulted for the Docling route and for Auto, which may run Docling:
+    the flags mean nothing to the other engines, and reading settings takes a
+    lock and may touch disk, which is not worth paying on every MarkItDown
+    conversion. A failure to read settings yields the defaults rather than
+    failing the conversion. Auto drops the flags itself, and says so, when the
+    recognition model is not installed (auto_engine._apply_enrichment_policy).
     """
-    if engine_kind != EngineKind.DOCLING:
+    if engine_kind not in (EngineKind.DOCLING, EngineKind.AUTO):
         return {}
     try:
         settings = EngineManager.get_instance().get_settings()
@@ -417,9 +659,28 @@ def resolve_engine(engine_name: str) -> EngineKind:
     norm = engine_name.lower().strip()
     if norm == "docling":
         return EngineKind.DOCLING
+    if norm in ("glm_ocr", "glm-ocr", "glmocr"):
+        return EngineKind.GLM_OCR
     if norm == "markit":
         return EngineKind.MARKIT
+    if norm == "auto":
+        return EngineKind.AUTO
     return EngineKind.MARKITDOWN
+
+
+ENGINE_PARAM_DESCRIPTION = (
+    "Conversion engine route: 'markitdown' (default), 'docling', 'markit', 'glm_ocr' "
+    "(downloadable OCR model for scans, photos, math and tables; PDFs and images only), "
+    "or 'auto' (InkDoc picks the engine per file and reports its choice in `auto`)"
+)
+CHECK_QUALITY_DESCRIPTION = (
+    "Run the missing-text check on PDFs (overrides the user's setting for this request). "
+    "Omit to use the setting."
+)
+JOB_ID_DESCRIPTION = (
+    "Optional client-generated id (8-100 chars of letters, digits, - _ . :) for "
+    "GET /convert/progress/{job_id} and POST /convert/cancel/{job_id}"
+)
 
 
 class UrlConvertRequest(BaseModel):
@@ -436,8 +697,10 @@ class UrlConvertRequest(BaseModel):
     )
     engine: str = Field(
         default="markitdown",
-        description="Conversion engine route: 'markitdown' (default), 'docling', or 'markit'",
+        description=ENGINE_PARAM_DESCRIPTION,
     )
+    check_quality: bool | None = Field(default=None, description=CHECK_QUALITY_DESCRIPTION)
+    job_id: str | None = Field(default=None, description=JOB_ID_DESCRIPTION)
 
 
 class SettingsPayload(BaseModel):
@@ -461,6 +724,20 @@ class SettingsPayload(BaseModel):
         description=(
             "Docling: recognise mathematical formulas and convert them to LaTeX. "
             "Shares one model with code enrichment."
+        ),
+    )
+    quality_check_enabled: bool | None = Field(
+        default=None,
+        description=(
+            "Compare each PDF conversion with the PDF's embedded text and warn when part "
+            "of it is missing. Read-only; never changes the saved file."
+        ),
+    )
+    glm_ocr_download_source: str | None = Field(
+        default=None,
+        description=(
+            "Where GLM-OCR downloads come from: 'auto' (official source first, InkDoc mirror "
+            "as fallback) or 'mirror_only' (for networks that block Hugging Face)."
         ),
     )
 
@@ -489,6 +766,14 @@ def sanitize_conversion_error(exc: Exception, context_name: str = "document") ->
     """Convert an internal conversion exception into a safe, informative user message."""
     exc_str = str(exc)
     exc_lower = exc_str.lower()
+
+    from app.core.converter import UserFacingConversionError
+
+    if isinstance(exc, UserFacingConversionError):
+        # Written for the user by the engine; only paths are redacted.
+        clean = re.sub(r"[A-Za-z]:\\[^\s:;,]+", "[path]", exc_str)
+        clean = re.sub(r"/(?:home|Users|usr|etc|var|tmp)/[^\s:;,]+", "[path]", clean)
+        return re.sub(r"\s+", " ", clean).strip()[:400] or f"Conversion failed for {context_name}."
 
     if "ssrf" in exc_lower or "private" in exc_lower or "prohibited" in exc_lower:
         return "Access to local or private network resources is prohibited."
@@ -644,6 +929,7 @@ def root(request: Request):
         "docling_version": get_docling_version(),
         "markit_available": is_markit_available(),
         "markit_version": get_markit_version(),
+        **_glm_ocr_health(),
         "web_bench_url": "/InkDoc",
         "docs_url": "/docs",
         "supported_extensions_count": len(SUPPORTED_EXTENSIONS),
@@ -671,7 +957,21 @@ def health_check():
         "docling_version": get_docling_version(),
         "markit_available": is_markit_available(),
         "markit_version": get_markit_version(),
+        **_glm_ocr_health(),
     }
+
+
+def _glm_ocr_health() -> dict[str, Any]:
+    """glm_ocr_available is true only when installed and self-tested (marker read only)."""
+    try:
+        from app.core.glm_ocr_manager import GlmOcrManager
+
+        mgr = GlmOcrManager.get_instance()
+        marker = mgr.read_marker()
+        version = (marker.get("model") or {}).get("version") if marker else None
+        return {"glm_ocr_available": mgr.is_usable(), "glm_ocr_version": version or "Not installed"}
+    except Exception:
+        return {"glm_ocr_available": False, "glm_ocr_version": "Not installed"}
 
 
 @api_router.get("/extensions", tags=["Info"])
@@ -690,16 +990,124 @@ def list_engines():
     return EngineManager.get_instance().get_all_engines_info()
 
 
+def _is_glm(engine_name: str) -> bool:
+    return engine_name.lower().strip().replace("-", "_") in ("glm_ocr", "glmocr")
+
+
+def _glm_manager() -> Any:
+    from app.core.glm_ocr_manager import GlmOcrManager
+
+    return GlmOcrManager.get_instance()
+
+
+class GlmOcrInstallRequest(BaseModel):
+    gpu: bool = Field(default=False, description="Also download the Vulkan GPU runtime (Windows/Linux)")
+    variant: str | None = Field(default=None, description="Model precision: 'q8' (default) or 'f16'")
+
+
+class GlmOcrGpuRequest(BaseModel):
+    enabled: bool = Field(..., description="Turn GPU acceleration on or off")
+
+
+def _run_glm_background(fn: Any, label: str) -> None:
+    """Run a GLM-OCR operation on its own thread; its progress is polled separately."""
+
+    def _run() -> None:
+        try:
+            fn()
+        except Exception as exc:
+            # Already recorded on the progress object the UI polls.
+            logger.error("GLM-OCR %s failed: %s", label, exc)
+
+    threading.Thread(target=_run, daemon=True, name=f"GlmOcr-{label}").start()
+
+
+@api_router.get("/engines/glm_ocr/status", tags=["Engines"])
+def glm_ocr_status(check_remote: bool = Query(False, description="Also check the signed online catalogue (once per session)")):
+    """GLM-OCR card state. Reads the completion marker only; never hashes model files."""
+    return _glm_manager().get_status(check_remote=check_remote)
+
+
+@api_router.post("/engines/glm_ocr/gpu", tags=["Engines"])
+def glm_ocr_gpu(payload: GlmOcrGpuRequest, request: Request):
+    """Switch GPU acceleration. Downloads and self-tests the Vulkan runtime on first enable."""
+    require_session_token(request)
+    from app.core.glm_ocr_manager import GlmOcrInstallError
+
+    mgr = _glm_manager()
+    try:
+        result = mgr.set_gpu(payload.enabled)
+    except GlmOcrInstallError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if result.get("needs_download"):
+        if mgr.is_busy():
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A GLM-OCR download is already running.")
+        _run_glm_background(mgr.install_gpu, "gpu")
+        return {"status": "started", "engine": "glm_ocr", "operation": "gpu"}
+    return {"status": "ok", "engine": "glm_ocr", **result}
+
+
+@api_router.post("/engines/glm_ocr/selftest", tags=["Engines"])
+def glm_ocr_selftest(request: Request):
+    """Run the GLM-OCR self-test again in the background. Requires session token."""
+    require_session_token(request)
+    mgr = _glm_manager()
+    if not mgr.is_installed():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="GLM-OCR is not installed.")
+    if mgr.is_busy():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A GLM-OCR operation is already running.")
+    _run_glm_background(mgr.rerun_selftest, "selftest")
+    return {"status": "started", "engine": "glm_ocr", "operation": "selftest"}
+
+
+@api_router.post("/engines/glm_ocr/update", tags=["Engines"])
+def glm_ocr_update(request: Request):
+    """Download only the changed parts of a newer pinned GLM-OCR, self-test, switch. Never automatic."""
+    require_session_token(request)
+    mgr = _glm_manager()
+    st = mgr.get_status(check_remote=True)
+    if not st.get("update_available"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="GLM-OCR is up to date.")
+    if mgr.is_busy():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A GLM-OCR operation is already running.")
+    _run_glm_background(lambda: mgr.install(operation="update"), "update")
+    return {"status": "started", "engine": "glm_ocr", "operation": "update"}
+
+
 @api_router.get("/engines/{engine_name}/progress", tags=["Engines"])
 def engine_progress(engine_name: str):
     """Query download / installation progress for an engine."""
+    if _is_glm(engine_name):
+        return _glm_manager().get_progress()
     return EngineManager.get_instance().get_progress(engine_name)
 
 
 @api_router.post("/engines/{engine_name}/install", tags=["Engines"])
-def install_engine(engine_name: str, background_tasks: BackgroundTasks, request: Request):
-    """Download and install an optional engine pack. Requires session token."""
+def install_engine(
+    engine_name: str,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    payload: GlmOcrInstallRequest | None = None,
+):
+    """Download and install an optional engine pack. Requires session token.
+
+    GLM-OCR takes an optional body {"gpu": bool, "variant": "q8"|"f16"}.
+    """
     require_session_token(request)
+    if _is_glm(engine_name):
+        mgr = _glm_manager()
+        st = mgr.get_status()
+        if st["status"] == "unsupported":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=st["reason"])
+        if st["status"] in ("unreleased", "defective"):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=st["reason"])
+        if mgr.is_busy():
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A GLM-OCR download is already running.")
+        body = payload or GlmOcrInstallRequest()
+        if body.variant is not None and body.variant not in {v["id"] for v in st["variants"]}:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown precision '{body.variant}'.")
+        _run_glm_background(lambda: mgr.install(gpu=body.gpu, variant=body.variant), "install")
+        return {"status": "started", "engine": "glm_ocr", "message": "Download started in background."}
     mgr = EngineManager.get_instance()
     if not mgr.is_platform_supported(engine_name):
         raise HTTPException(
@@ -716,7 +1124,10 @@ def install_engine(engine_name: str, background_tasks: BackgroundTasks, request:
 def cancel_install(engine_name: str, request: Request):
     """Cancel an active download or installation. Requires session token."""
     require_session_token(request)
-    cancelled = EngineManager.get_instance().cancel_install(engine_name)
+    if _is_glm(engine_name):
+        cancelled = _glm_manager().cancel()
+    else:
+        cancelled = EngineManager.get_instance().cancel_install(engine_name)
     return {"status": "cancelled" if cancelled else "not_running", "engine": engine_name}
 
 
@@ -725,6 +1136,8 @@ def remove_engine(engine_name: str, request: Request):
     """Remove an installed engine and all cached models. Requires session token."""
     require_session_token(request)
     try:
+        if _is_glm(engine_name):
+            return _glm_manager().remove()
         EngineManager.get_instance().remove_engine(engine_name)
         return {"status": "removed", "engine": engine_name}
     except Exception as exc:
@@ -735,6 +1148,8 @@ def remove_engine(engine_name: str, request: Request):
 def verify_engine(engine_name: str, request: Request):
     """Verify cryptographic file integrity of an installed engine tree. Requires session token."""
     require_session_token(request)
+    if _is_glm(engine_name):
+        return _glm_manager().verify()
     return EngineManager.get_instance().verify_full_installed_tree(engine_name)
 
 
@@ -842,7 +1257,15 @@ def get_settings():
 def update_settings(payload: SettingsPayload, request: Request):
     """Update user settings (e.g. fallback toggle, daily update check). Requires session token."""
     require_session_token(request)
-    updates = {k: v for k, v in payload.dict().items() if v is not None}
+    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if "glm_ocr_download_source" in updates:
+        from app.core.glm_ocr_manager import DOWNLOAD_SOURCES
+
+        if updates["glm_ocr_download_source"] not in DOWNLOAD_SOURCES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"glm_ocr_download_source must be one of {list(DOWNLOAD_SOURCES)}.",
+            )
 
     if any(updates.get(key) for key in ENRICHMENT_SETTING_KEYS):
         from app.core.addon_manager import AddonManager
@@ -959,6 +1382,25 @@ def _guard_engine_availability(engine_kind: EngineKind) -> None:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="engine_not_installed: IBM Docling is not installed. Please install it in Settings.",
             )
+    elif engine_kind == EngineKind.GLM_OCR:
+        # No silent substitution: an uninstalled GLM-OCR is refused, exactly like Docling.
+        mgr = _glm_manager()
+        st = mgr.get_status()
+        if st["status"] in ("unsupported", "unreleased", "defective") and not st["installed"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"engine_unsupported: {st['reason'] or 'GLM-OCR is not available on this platform.'}",
+            )
+        if not st["installed"] or st["status"] == "installing":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="engine_not_installed: GLM-OCR is not downloaded. Download it in Settings.",
+            )
+        if not st["usable"]:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="engine_not_ready: GLM-OCR did not pass its self-test. Open Settings and run it again.",
+            )
 
 
 @api_router.post("/convert/file", tags=["Conversion"])
@@ -969,13 +1411,13 @@ async def convert_file(
     ),
     enable_plugins: bool = Query(False, description="Enable MarkItDown plugins"),
     keep_data_uris: bool = Query(False, description="Keep data URIs in HTML conversions"),
-    engine: str = Query(
-        "markitdown", description="Conversion engine route: 'markitdown' (default), 'docling', or 'markit'"
-    ),
+    engine: str = Query("markitdown", description=ENGINE_PARAM_DESCRIPTION),
     response_format: str = Query(
         "text",
         description="Output format: 'text' returns raw Markdown; 'json' returns JSON metadata and content",
     ),
+    check_quality: bool | None = Query(None, description=CHECK_QUALITY_DESCRIPTION),
+    job_id: str | None = Query(None, description=JOB_ID_DESCRIPTION),
 ):
     """Convert an uploaded file (PDF, DOCX, XLSX, PPTX, Images, Audio, HTML, etc.) to Markdown."""
     _guard_update_not_applying()
@@ -985,9 +1427,9 @@ async def convert_file(
 
     _check_plugin_permission(enable_plugins)
     _guard_engine_availability(engine_kind)
+    job = _start_job(job_id)
 
     tmp_path = await _save_upload_to_temp(file, ext)
-    saved_path_str: str | None = None
     try:
         item = QueueItem(
             source=tmp_path,
@@ -999,42 +1441,42 @@ async def convert_file(
             enable_plugins=enable_plugins,
             keep_data_uris=keep_data_uris,
             engine=engine_kind,
+            quality_check=_quality_check_enabled(check_quality),
             **_docling_enrichment_options(engine_kind),
         )
-        async with get_conversion_semaphore(engine_kind):
-            markdown_text, saved_path_str = await asyncio.to_thread(
-                _perform_conversion, item, options, save_to_downloads
+        if engine_kind == EngineKind.AUTO:
+            markdown_text, saved_path_str = await _convert_auto(
+                item, options, save_to_downloads, job=job
             )
+        else:
+            markdown_text, saved_path_str = await _convert_explicit(
+                item, options, save_to_downloads, source_path=tmp_path, job=job
+            )
+        job.finish("done")
 
-        fallback_occurred = getattr(options, "fallback_occurred", False)
-        fallback_reason = getattr(options, "fallback_reason", "") or None
-        engine_used = "markitdown" if fallback_occurred else engine_kind.value
-
+        payload = _conversion_payload(options, engine_kind)
         if response_format.lower() == "json":
             return JSONResponse(
                 {
                     "success": True,
                     "filename": filename,
-                    "engine_requested": engine_kind.value,
-                    "engine_used": engine_used,
-                    "fallback": fallback_occurred,
-                    "fallback_reason": fallback_reason,
+                    **payload,
                     "markdown": markdown_text,
                     "saved_to_downloads": saved_path_str,
                 }
             )
-
-        resp = PlainTextResponse(markdown_text, media_type="text/markdown; charset=utf-8")
-        resp.headers["X-Engine-Requested"] = engine_kind.value
-        resp.headers["X-Engine-Used"] = engine_used
-        resp.headers["X-Fallback-Occurred"] = str(fallback_occurred).lower()
-        if fallback_reason:
-            resp.headers["X-Fallback-Reason"] = re.sub(r"[\r\n]+", " ", fallback_reason)[:200]
-        return resp
+        return _markdown_response(markdown_text, payload)
 
     except HTTPException:
+        job.finish("error")
         raise
     except Exception as exc:
+        from app.core.jobs import ConversionCancelledError
+
+        if isinstance(exc, ConversionCancelledError):
+            job.finish("cancelled")
+            raise _cancelled_exception() from exc
+        job.finish("error")
         logger.exception("File conversion failed for '%s': %s", filename, exc)
         if ext.lower() in {".wav", ".mp3", ".m4a", ".mp4"} and "AudioConverter" in str(exc):
             raise HTTPException(
@@ -1082,8 +1524,9 @@ async def convert_url(
     engine_kind = resolve_engine(payload.engine)
     _check_plugin_permission(payload.enable_plugins)
     _guard_engine_availability(engine_kind)
+    job = _start_job(payload.job_id)
 
-    saved_path_str: str | None = None
+    fetched: Any = None
     try:
         item = QueueItem(
             source=url,
@@ -1095,67 +1538,88 @@ async def convert_url(
             enable_plugins=payload.enable_plugins,
             keep_data_uris=payload.keep_data_uris,
             engine=engine_kind,
+            quality_check=_quality_check_enabled(payload.check_quality),
             **_docling_enrichment_options(engine_kind),
         )
-        async with get_conversion_semaphore(engine_kind):
-            markdown_text, saved_path_str = await asyncio.to_thread(
-                _perform_conversion, item, options, payload.save_to_downloads
+        # Fetched first, in a thread but outside any lane: the fetch has its own
+        # timeouts and size cap, and the temporary file has to outlive the
+        # conversion so a downloaded PDF can be routed and checked.
+        from app.core.converter import open_url_source
+
+        job.set_phase("fetching", "Downloading…")
+        fetched = await asyncio.to_thread(open_url_source, item)
+        job.raise_if_cancelled()
+
+        if engine_kind == EngineKind.AUTO:
+            markdown_text, saved_path_str = await _convert_auto(
+                item, options, payload.save_to_downloads, fetched=fetched, job=job
             )
+        else:
+            markdown_text, saved_path_str = await _convert_explicit(
+                item,
+                options,
+                payload.save_to_downloads,
+                source_path=str(fetched.path),
+                fetched=fetched,
+                job=job,
+            )
+        job.finish("done")
 
-        fallback_occurred = getattr(options, "fallback_occurred", False)
-        fallback_reason = getattr(options, "fallback_reason", "") or None
-        engine_used = "markitdown" if fallback_occurred else engine_kind.value
-
+        result = _conversion_payload(options, engine_kind)
         if response_format.lower() == "json":
             return JSONResponse(
                 {
                     "success": True,
                     "url": url,
-                    "engine_requested": engine_kind.value,
-                    "engine_used": engine_used,
-                    "fallback": fallback_occurred,
-                    "fallback_reason": fallback_reason,
+                    **result,
                     "markdown": markdown_text,
                     "saved_to_downloads": saved_path_str,
                 }
             )
-
-        resp = PlainTextResponse(markdown_text, media_type="text/markdown; charset=utf-8")
-        resp.headers["X-Engine-Requested"] = engine_kind.value
-        resp.headers["X-Engine-Used"] = engine_used
-        resp.headers["X-Fallback-Occurred"] = str(fallback_occurred).lower()
-        if fallback_reason:
-            resp.headers["X-Fallback-Reason"] = re.sub(r"[\r\n]+", " ", fallback_reason)[:200]
-        return resp
+        return _markdown_response(markdown_text, result)
 
     except HTTPException:
+        job.finish("error")
         raise
     except SSRFValidationError as exc:
+        job.finish("error")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid or prohibited URL: {exc}",
         ) from exc
     except UrlFetchTimeoutError as exc:
+        job.finish("error")
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
             detail=f"URL fetch timed out: {exc}",
         ) from exc
     except UrlFetchSizeExceededError as exc:
+        job.finish("error")
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"URL content too large: {exc}",
         ) from exc
     except UrlFetchError as exc:
+        job.finish("error")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"URL fetch failed: {exc}",
         ) from exc
     except Exception as exc:
+        from app.core.jobs import ConversionCancelledError
+
+        if isinstance(exc, ConversionCancelledError):
+            job.finish("cancelled")
+            raise _cancelled_exception() from exc
+        job.finish("error")
         logger.exception("URL conversion failed for '%s': %s", url, exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=sanitize_conversion_error(exc, context_name=url),
         ) from exc
+    finally:
+        if fetched is not None:
+            await asyncio.to_thread(fetched.cleanup)
 
 
 @api_router.post("/convert/batch", tags=["Conversion"])
@@ -1165,8 +1629,11 @@ async def convert_batch(
         False, description="Whether to also save the .md files to user's Downloads directory"
     ),
     enable_plugins: bool = Query(False, description="Enable MarkItDown plugins"),
-    engine: str = Query(
-        "markitdown", description="Conversion engine route: 'markitdown' (default), 'docling', or 'markit'"
+    engine: str = Query("markitdown", description=ENGINE_PARAM_DESCRIPTION),
+    check_quality: bool | None = Query(None, description=CHECK_QUALITY_DESCRIPTION),
+    job_id: str | None = Query(
+        None,
+        description=JOB_ID_DESCRIPTION + "; each file reports under '<job_id>-<index>' (0-based)",
     ),
 ):
     """Batch convert multiple files to Markdown. Returns a JSON map of results."""
@@ -1180,21 +1647,26 @@ async def convert_batch(
     engine_kind = resolve_engine(engine)
     _check_plugin_permission(enable_plugins)
     _guard_engine_availability(engine_kind)
+    if job_id:
+        _start_job(f"{job_id}-0")  # validates the id up front (400 before any work)
 
     results = {}
     base_options = ConversionOptions(
         enable_plugins=enable_plugins,
         engine=engine_kind,
+        quality_check=_quality_check_enabled(check_quality),
         **_docling_enrichment_options(engine_kind),
     )
 
-    for file in files:
+    for index, file in enumerate(files):
         filename = file.filename or "file"
         ext = Path(filename).suffix
+        job = _start_job(f"{job_id}-{index}") if job_id else _start_job(None)
         tmp_path = None
         try:
             tmp_path = await _save_upload_to_temp(file, ext)
         except HTTPException as he:
+            job.finish("error")
             results[filename] = {
                 "success": False,
                 "error": he.detail,
@@ -1209,26 +1681,31 @@ async def convert_batch(
                 engine=engine_kind,
             )
             item_options = dataclasses.replace(base_options)
-            async with get_conversion_semaphore(engine_kind):
-                markdown_text, saved_str = await asyncio.to_thread(
-                    _perform_conversion, item, item_options, save_to_downloads
+            if engine_kind == EngineKind.AUTO:
+                markdown_text, saved_str = await _convert_auto(
+                    item, item_options, save_to_downloads, job=job
                 )
-
-            fallback_occurred = getattr(item_options, "fallback_occurred", False)
-            fallback_reason = getattr(item_options, "fallback_reason", "") or None
-            engine_used = "markitdown" if fallback_occurred else engine_kind.value
+            else:
+                markdown_text, saved_str = await _convert_explicit(
+                    item, item_options, save_to_downloads, source_path=tmp_path, job=job
+                )
+            job.finish("done")
 
             results[filename] = {
                 "success": True,
-                "engine_requested": engine_kind.value,
-                "engine_used": engine_used,
-                "fallback": fallback_occurred,
-                "fallback_reason": fallback_reason,
+                **_conversion_payload(item_options, engine_kind),
                 "markdown": markdown_text,
                 "saved_to_downloads": saved_str,
             }
 
         except Exception as exc:
+            from app.core.jobs import ConversionCancelledError
+
+            if isinstance(exc, ConversionCancelledError):
+                job.finish("cancelled")
+                results[filename] = {"success": False, "error": "conversion_cancelled"}
+                continue
+            job.finish("error")
             logger.exception("Batch conversion failed for '%s': %s", filename, exc)
             results[filename] = {
                 "success": False,
@@ -1242,6 +1719,61 @@ async def convert_batch(
                     pass
 
     return JSONResponse({"total": len(files), "results": results})
+
+
+@api_router.post("/convert/estimate", tags=["Conversion"])
+async def convert_estimate(
+    file: UploadFile = File(..., description="PDF or image to estimate"),
+    engine: str = Query("glm_ocr", description="Only 'glm_ocr' is estimated"),
+):
+    """Pages and estimated GLM-OCR time for a file on this machine. Converts nothing.
+
+    The UI asks before a GLM-OCR job longer than `long_job_seconds`.
+    """
+    if resolve_engine(engine) != EngineKind.GLM_OCR:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only engine=glm_ocr is estimated.")
+    filename = file.filename or "file"
+    tmp_path = await _save_upload_to_temp(file, Path(filename).suffix)
+    try:
+        from app.core.engines.glm_ocr_engine import estimate_for_file
+
+        return {"filename": filename, **await asyncio.to_thread(estimate_for_file, tmp_path)}
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+
+@api_router.get("/convert/progress/{job_id}", tags=["Conversion"])
+def conversion_progress(job_id: str):
+    """Current phase of a conversion started with `job_id` (kept for one hour).
+
+    No session token: it only describes the caller's own job, and the id is a
+    random value the caller chose.
+    """
+    from app.core.jobs import JOBS
+
+    state = JOBS.get(job_id)
+    if state is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown job_id.")
+    return state
+
+
+@api_router.post("/convert/cancel/{job_id}", tags=["Conversion"])
+def cancel_conversion(job_id: str):
+    """Ask a running conversion to stop before its next phase. Nothing is saved.
+
+    The conversion's own request then ends with 409 `conversion_cancelled`. A
+    cancel that arrives before its request is remembered and applied when it does.
+    """
+    from app.core.jobs import JOBS, is_valid_job_id
+
+    if not is_valid_job_id(job_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid job_id.")
+    running = JOBS.cancel(job_id)
+    return {"status": "cancelling" if running else "not_running", "job_id": job_id}
 
 
 # Mount API routes at root, /InkDoc, and /MarkItDown (alias)

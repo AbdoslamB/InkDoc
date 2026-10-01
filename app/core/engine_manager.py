@@ -76,12 +76,28 @@ class InstallProgress:
 # Both Docling enrichment options default off deliberately: either one causes
 # Docling to load a 640 MB vision model at pipeline construction, for every
 # conversion, whether or not the document turns out to contain code.
+#
+# quality_check_enabled defaults on: the missing-text check only reads the PDF
+# and the result, never changes the saved file, and costs milliseconds on a
+# normal document (app/core/quality_check.py).
+#
+# GLM-OCR: GPU is opt-in (the Vulkan runtime is a separate download and is only
+# selected when its self-test beats the CPU); "auto" downloads from the official
+# source first and falls back to InkDoc's mirror; glm_ocr_catalogue_seen is the
+# highest signed catalogue version ever accepted, which blocks rollback.
 DEFAULT_SETTINGS: dict[str, Any] = {
     "fallback_to_markitdown": False,
     "check_for_updates_daily": False,
     "docling_code_enrichment": False,
     "docling_formula_enrichment": False,
+    "quality_check_enabled": True,
+    "glm_ocr_use_gpu": False,
+    "glm_ocr_download_source": "auto",
+    "glm_ocr_catalogue_seen": 0,
+    "glm_ocr_measured_spp": {},
 }
+
+GLM_OCR_ENGINE = "glm_ocr"
 
 
 # Settings whose truth lives outside settings.json. Each names the add-on that
@@ -321,6 +337,10 @@ class EngineManager:
 
     def is_engine_installed(self, engine_name: str = "docling") -> bool:
         """Return True if engine pack is installed OR system Docling detected in source mode."""
+        if engine_name.lower().strip().replace("-", "_") == GLM_OCR_ENGINE:
+            from app.core.glm_ocr_manager import GlmOcrManager
+
+            return GlmOcrManager.get_instance().is_installed()
         if engine_name.lower().strip() != "docling":
             return True  # markitdown and markit are always installed
         if self.is_pack_installed(engine_name):
@@ -339,6 +359,15 @@ class EngineManager:
         norm_name = engine_name.lower().strip()
         if norm_name in ("markitdown", "markit"):
             return EngineStatus.INSTALLED
+        if norm_name.replace("-", "_") == GLM_OCR_ENGINE:
+            from app.core.glm_ocr_manager import GlmOcrManager
+
+            state = GlmOcrManager.get_instance().get_status()["status"]
+            if state == "installed":
+                return EngineStatus.INSTALLED
+            if state in ("installable", "installing"):
+                return EngineStatus.INSTALLABLE
+            return EngineStatus.UNSUPPORTED
 
         if not self.is_platform_supported(norm_name):
             return EngineStatus.UNSUPPORTED
@@ -456,6 +485,15 @@ class EngineManager:
                 "update_available": False,
             }
 
+        # GLM-OCR has its own manager; its status reads the completion marker
+        # only (no hashing, no network), so listing engines stays cheap.
+        try:
+            from app.core.glm_ocr_manager import GlmOcrManager
+
+            engines_data[GLM_OCR_ENGINE] = GlmOcrManager.get_instance().get_status()
+        except Exception as exc:
+            logger.warning("Could not read GLM-OCR status: %s", exc)
+
         return {
             "platform": self.platform_key,
             "engines": engines_data,
@@ -556,6 +594,18 @@ class EngineManager:
             "error_message": prog.error_message,
             "elapsed_seconds": round(time.time() - prog.started_at, 1) if prog.started_at else 0,
         }
+
+    def is_install_in_progress(self, engine_name: str = "docling") -> bool:
+        """True while an install, update or removal of `engine_name` is running.
+
+        install_engine() and remove_engine() both hold _install_lock for their whole
+        duration, so the lock alone answers the question. The progress status is
+        checked as well because it is published the moment an install starts.
+        """
+        if self._install_lock.locked():
+            return True
+        prog = self._progress.get(engine_name)
+        return bool(prog and prog.status in ("downloading", "verifying", "extracting"))
 
     def cancel_install(self, engine_name: str = "docling") -> bool:
         """Request cancellation of an active installation."""

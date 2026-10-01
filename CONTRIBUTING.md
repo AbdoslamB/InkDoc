@@ -68,7 +68,7 @@ inkdoc/
 │   ├── core/                  # Conversion business logic & engine adapters
 │   │   ├── converter.py       # MarkItDown wrapper, option mapping & Downloads auto-save
 │   │   ├── queue_model.py     # EngineKind enum, QueueItem data definitions
-│   │   └── engines/           # IBM Docling & Markit engine adapters
+│   │   └── engines/           # IBM Docling, Markit & GLM-OCR engine adapters
 │   ├── server/                # Embedded FastAPI backend
 │   │   └── server.py          # Local REST endpoints (/convert, /health, /extensions)
 │   ├── desktop/               # Native desktop runner
@@ -146,8 +146,10 @@ python scripts/generate_engine_manifest.py --verify-manifest
 python -m pytest tests/
 
 # 4. UI logic tests (need Node.js; CI runs them on Linux)
+node tests/auto_engine_ui.test.js
 node tests/docs_release_selector.test.js
 node tests/enrichment_addon_ui.test.js
+node tests/glm_ocr_ui.test.js
 node tests/preview_word_count.test.js
 
 # 5. Verify code style with ruff
@@ -244,4 +246,4 @@ git pull origin main
 git tag v1.0.2
 git push origin v1.0.2
 ```
-A stable tag (no hyphen) stops at a **draft**: the update manifest is signed offline and attached first, and only then is the release published as Latest. `python scripts/release.py` drives the whole sequence; see `docs/RELEASE_RUNBOOK.md`.
+A stable tag (no hyphen) stops at a **draft**: the update manifest is signed offline and attached first, and only then is the release published as Latest. See `docs/RELEASE_RUNBOOK.md`.

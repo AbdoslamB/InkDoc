@@ -67,6 +67,47 @@ jobs:
         if: runner.os == 'Linux'
         run: node tests/preview_word_count.test.js
 
+      - name: Test Auto engine and missing-text check UI
+        if: runner.os == 'Linux'
+        run: node tests/auto_engine_ui.test.js
+
+      - name: Test GLM-OCR UI helpers
+        if: runner.os == 'Linux'
+        run: node tests/glm_ocr_ui.test.js
+
+      # installer.iss is otherwise only compiled by release.yml, after the tag is
+      # pushed, so a mistake in its Pascal [Code] cost a version number. Compile
+      # it here against a stand-in bundle (only the script is being checked).
+      - name: Compile the Windows installer script
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Inno Setup 6 or 7, wherever the runner image or choco put it: 7.x
+          # installs under "Inno Setup 7" (and 64-bit Program Files), so a
+          # hard-coded 6.x path would fail the build the day the image moves on.
+          $candidates = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 7\ISCC.exe",
+            "${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe"
+          )
+          $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            choco install innosetup -y --no-progress
+            $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          }
+          if (-not $iscc) {
+            $iscc = Get-ChildItem $env:ProgramFiles, ${env:ProgramFiles(x86)} -Filter ISCC.exe -Recurse -Depth 2 -ErrorAction SilentlyContinue |
+              Select-Object -First 1 -ExpandProperty FullName
+          }
+          if (-not $iscc) { Write-Error "Inno Setup compiler (ISCC.exe) not found."; exit 1 }
+          Write-Host "Using $iscc"
+          New-Item -ItemType Directory -Force -Path dist\inkdoc | Out-Null
+          Set-Content -Path dist\inkdoc\inkdoc.exe -Value "stand-in"
+          & $iscc /Q "/DMyAppVersion=0.0.0-ci" "/O$env:RUNNER_TEMP\iss-check" installer.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item -Recurse -Force dist
+
       - name: Engine manifest release guard (verify zero placeholder hashes)
         run: python scripts/generate_engine_manifest.py --verify-manifest
 
@@ -74,6 +115,11 @@ jobs:
       # An unreleased add-on passes; a half-filled or placeholder entry does not.
       - name: Add-on catalogue guard (verify no placeholder or half-filled entries)
         run: python scripts/verify_addon_catalogue.py
+
+      # Same guard for the GLM-OCR catalogue, with the validator the app uses.
+      # Unreleased (no URLs or hashes) passes; half-filled or off-allowlist fails.
+      - name: GLM-OCR catalogue guard
+        run: python scripts/verify_glm_ocr_catalogue.py
 
       # Collect the whole suite rather than naming files. The previous step listed
       # ten files by hand and ran each as `python tests/<file>.py`, which executes

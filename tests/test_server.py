@@ -834,6 +834,406 @@ def test_conversions_rejected_when_update_applying():
     print("[OK] test_conversions_rejected_when_update_applying passed")
 
 
+# ─── Auto engine and missing-text check (plan_for_new_features.md) ───────────
+
+def _fixture_pdf(*specs) -> bytes:
+    from tests._pdf_fixtures import build_pdf
+
+    return build_pdf(list(specs))
+
+
+def _scanned_pdf_bytes() -> bytes:
+    from tests._pdf_fixtures import image_page, prose_page
+
+    return _fixture_pdf(prose_page(80, 1), image_page("ccitt"), prose_page(80, 3))
+
+
+def _digital_pdf_bytes() -> bytes:
+    from tests._pdf_fixtures import prose_page
+
+    return _fixture_pdf(prose_page(80, 1), prose_page(80, 9), prose_page(80, 17))
+
+
+def _ocr(engines):
+    """Pretend the given OCR engines are usable (Docling may really be installed here)."""
+    from unittest.mock import patch
+
+    import app.core.auto_engine as auto
+
+    installable = not engines
+    return patch.multiple(
+        auto,
+        ocr_engines_usable=lambda: list(engines),
+        ocr_installable=lambda: installable,
+        docling_installable=lambda: installable,
+        glm_ocr_installable=lambda: False,
+    )
+
+
+def test_auto_without_docling_is_200_not_409(monkeypatch):
+    from unittest.mock import patch
+
+    from app.core.engine_manifest import EngineStatus
+
+    monkeypatch.setattr(server_module, "_conversion_semaphores", {})
+    mgr = server_module.EngineManager.get_instance()
+    with _ocr([]), patch.object(mgr, "get_engine_status", return_value=EngineStatus.INSTALLABLE):
+        resp = client.post(
+            "/convert/file?engine=auto&response_format=json",
+            files={"file": ("notes.txt", io.BytesIO(b"Plain words here"), "text/plain")},
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["engine_requested"] == "auto" and data["engine_used"] == "markitdown"
+        assert data["auto"]["chosen"] == "markitdown" and data["auto"]["reason"]
+        assert data["quality"] is None  # not a PDF
+
+        # Explicit Docling is still refused, exactly as before.
+        resp = client.post(
+            "/convert/file?engine=docling",
+            files={"file": ("a.pdf", io.BytesIO(b"%PDF-1.4"), "application/pdf")},
+        )
+        assert resp.status_code == 409
+
+
+def test_auto_pdf_json_and_headers(monkeypatch):
+    monkeypatch.setattr(server_module, "_conversion_semaphores", {})
+    with _ocr([]):
+        resp = client.post(
+            "/convert/file?engine=auto&response_format=json&check_quality=true",
+            files={"file": ("scan.pdf", io.BytesIO(_scanned_pdf_bytes()), "application/pdf")},
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["auto"]["chosen"] == "markitdown"
+        assert data["auto"]["hint"].startswith("Docling would read the 1 scanned page")
+        q = data["quality"]
+        assert q["checked"] and q["warning"] and q["scan_pages"] == [2]
+        assert q["suggestion"] == "install_docling"
+
+        resp = client.post(
+            "/convert/file?engine=auto&check_quality=true",
+            files={"file": ("scan.pdf", io.BytesIO(_scanned_pdf_bytes()), "application/pdf")},
+        )
+        assert resp.status_code == 200
+        assert resp.headers["X-Engine-Requested"] == "auto"
+        assert resp.headers["X-Engine-Used"] == "markitdown"
+        assert resp.headers["X-Auto-Reason"].startswith("1 of 3 pages is")
+        assert resp.headers["X-Quality-Warning"] == "true"
+
+
+def test_explicit_engine_check_and_api_override(monkeypatch):
+    """A failing check on explicit MarkItDown only warns: Docling is never called."""
+    from unittest.mock import patch
+
+    from app.core.engines.docling_worker_client import DoclingWorkerClient
+
+    monkeypatch.setattr(server_module, "_conversion_semaphores", {})
+    mgr = server_module.EngineManager.get_instance()
+
+    def forbidden(*_a, **_k):
+        raise AssertionError("explicit MarkItDown must never re-run with Docling")
+
+    with _ocr([server_module.EngineKind.DOCLING]), \
+         patch.object(DoclingWorkerClient, "convert_file", side_effect=forbidden), \
+         patch.object(mgr, "get_settings", return_value={"quality_check_enabled": False}):
+        files = {"file": ("scan.pdf", io.BytesIO(_scanned_pdf_bytes()), "application/pdf")}
+        data = client.post("/convert/file?response_format=json", files=files).json()
+        assert data["quality"] is None  # setting off
+        assert data["auto"] is None and data["engine_used"] == "markitdown"
+
+        files = {"file": ("scan.pdf", io.BytesIO(_scanned_pdf_bytes()), "application/pdf")}
+        data = client.post("/convert/file?response_format=json&check_quality=true", files=files).json()
+        q = data["quality"]
+        assert q["warning"] and q["suggestion"] == "docling"
+        assert q["message"] == (
+            "1 of 3 pages is a scanned image with no text. MarkItDown can't read it. Try Docling (OCR)."
+        )
+
+    with patch.object(mgr, "get_settings", return_value={"quality_check_enabled": True}):
+        files = {"file": ("scan.pdf", io.BytesIO(_scanned_pdf_bytes()), "application/pdf")}
+        data = client.post("/convert/file?response_format=json&check_quality=false", files=files).json()
+        assert data["quality"] is None  # request override wins over the setting
+
+
+def test_quality_setting_round_trips():
+    import tempfile
+    from unittest.mock import patch
+
+    from app.core.engine_manager import EngineManager
+
+    with tempfile.TemporaryDirectory() as td:
+        mgr = EngineManager()
+        with patch.object(mgr, "get_settings_file_path", return_value=Path(td) / "settings.json"), \
+             patch("app.server.server.EngineManager.get_instance", return_value=mgr), \
+             patch.object(server_module, "verify_session_token", return_value=True):
+            assert client.get("/settings").json()["quality_check_enabled"] is True
+            resp = client.post("/settings", json={"quality_check_enabled": False},
+                               headers={"X-InkDoc-Token": "x"})
+            assert resp.status_code == 200 and resp.json()["quality_check_enabled"] is False
+
+
+def test_saved_file_uses_the_uploaded_name(monkeypatch, tmp_path):
+    from unittest.mock import patch
+
+    monkeypatch.setattr(server_module, "_conversion_semaphores", {})
+    with patch("app.core.converter.get_downloads_dir", return_value=tmp_path):
+        for engine in ("markitdown", "auto"):
+            resp = client.post(
+                f"/convert/file?save_to_downloads=true&response_format=json&engine={engine}",
+                files={"file": ("My Report.txt", io.BytesIO(b"hello"), "text/plain")},
+            )
+            assert resp.status_code == 200, resp.text
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["My Report (1).md", "My Report.md"]
+
+
+def test_explicit_engine_saves_before_checking(monkeypatch, tmp_path):
+    from unittest.mock import patch
+
+    import app.core.quality_check as qc
+
+    monkeypatch.setattr(server_module, "_conversion_semaphores", {})
+    real_assess = qc.assess
+    seen = {}
+
+    def spying_assess(*args, **kwargs):
+        seen["files_at_check"] = sorted(p.name for p in tmp_path.iterdir())
+        return real_assess(*args, **kwargs)
+
+    with patch("app.core.converter.get_downloads_dir", return_value=tmp_path), \
+         patch.object(qc, "assess", side_effect=spying_assess), _ocr([]):
+        resp = client.post(
+            "/convert/file?save_to_downloads=true&response_format=json&check_quality=true",
+            files={"file": ("paper.pdf", io.BytesIO(_digital_pdf_bytes()), "application/pdf")},
+        )
+    assert resp.status_code == 200, resp.text
+    assert seen["files_at_check"] == ["paper.md"]
+    assert resp.json()["quality"]["checked"] is True
+
+
+def test_auto_escalation_saves_exactly_one_file(monkeypatch, tmp_path):
+    from unittest.mock import patch
+
+    from tests._pdf_fixtures import words
+
+    monkeypatch.setattr(server_module, "_conversion_semaphores", {})
+    full = "\n".join([words(80, 1), words(80, 9), words(80, 17)])
+
+    def fake_convert_local(file_item, options, *, fetched=None):
+        options.engine_used = file_item.engine
+        return words(80, 1) if file_item.engine == server_module.EngineKind.MARKITDOWN else full
+
+    with patch("app.core.converter.get_downloads_dir", return_value=tmp_path), \
+         patch("app.core.converter.convert_local", side_effect=fake_convert_local), \
+         _ocr([server_module.EngineKind.DOCLING]):
+        resp = client.post(
+            "/convert/file?engine=auto&save_to_downloads=true&response_format=json&check_quality=true",
+            files={"file": ("report.pdf", io.BytesIO(_digital_pdf_bytes()), "application/pdf")},
+        )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["engine_used"] == "docling" and data["auto"]["escalated"] is True
+    assert data["auto"]["escalation"]["kept"] == "docling"
+    assert data["markdown"] == full
+    assert [p.name for p in tmp_path.iterdir()] == ["report.md"]
+    assert (tmp_path / "report.md").read_text(encoding="utf-8") == full
+
+
+def test_auto_job_routed_to_docling_holds_the_docling_lane(monkeypatch):
+    from unittest.mock import patch
+
+    monkeypatch.setattr(server_module, "_conversion_semaphores", {})
+    seen = {}
+
+    def fake_convert_local(file_item, options, *, fetched=None):
+        sems = server_module._conversion_semaphores
+        seen["docling_free"] = sems["docling"]._value
+        seen["default_free"] = sems["default"]._value if "default" in sems else 2
+        options.engine_used = file_item.engine
+        return "docling text"
+
+    with patch("app.core.converter.convert_local", side_effect=fake_convert_local), \
+         _ocr([server_module.EngineKind.DOCLING]):
+        resp = client.post(
+            "/convert/file?engine=auto&response_format=json",
+            files={"file": ("scan.pdf", io.BytesIO(_scanned_pdf_bytes()), "application/pdf")},
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["engine_used"] == "docling"
+    assert seen == {"docling_free": 0, "default_free": server_module.MAX_CONCURRENT_CONVERSIONS}
+
+
+def test_fifty_auto_scans_do_not_starve_a_quick_job(monkeypatch):
+    """50 scanned PDFs on Auto queue for Docling; a quick file still converts at once.
+
+    This is the starvation revision 1's thread-blocking "lane gate" would cause:
+    every waiting job would hold a default-executor thread.
+    """
+    import asyncio
+    from unittest.mock import patch
+
+    import httpx
+
+    monkeypatch.setattr(server_module, "_conversion_semaphores", {})
+    release = threading.Event()
+    lock = threading.Lock()
+    state = {"active": 0, "peak": 0}
+
+    def fake_convert_local(file_item, options, *, fetched=None):
+        options.engine_used = file_item.engine
+        if file_item.engine != server_module.EngineKind.DOCLING:
+            return "quick output"
+        with lock:
+            state["active"] += 1
+            state["peak"] = max(state["peak"], state["active"])
+        try:
+            release.wait(timeout=30)
+        finally:
+            with lock:
+                state["active"] -= 1
+        return "docling output"
+
+    scan = _scanned_pdf_bytes()
+
+    async def run():
+        limits = httpx.Limits(max_connections=100)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1:13118", limits=limits
+        ) as http:
+            jobs = [
+                asyncio.create_task(http.post(
+                    "/InkDoc/convert/file?engine=auto&check_quality=false",
+                    files={"file": (f"scan{i}.pdf", scan)},
+                ))
+                for i in range(50)
+            ]
+            await asyncio.sleep(0.5)
+            try:
+                quick = await asyncio.wait_for(
+                    http.post("/InkDoc/convert/file?engine=auto",
+                              files={"file": ("quick.docx.txt", b"hello")}),
+                    timeout=10,
+                )
+                still_queued = sum(1 for j in jobs if not j.done())
+            finally:
+                release.set()
+            responses = await asyncio.gather(*jobs)
+        assert quick.status_code == 200 and quick.text == "quick output"
+        assert still_queued >= 45, still_queued
+        assert all(r.status_code == 200 for r in responses)
+        assert state["peak"] == 1
+
+    with patch("app.core.converter.convert_local", side_effect=fake_convert_local), \
+         _ocr([server_module.EngineKind.DOCLING]):
+        asyncio.run(run())
+
+
+def test_url_pdf_gets_a_quality_report_and_temp_file_is_deleted(monkeypatch, tmp_path):
+    from unittest.mock import patch
+
+    from app.core.url_fetcher import FetchedUrlResult
+
+    monkeypatch.setattr(server_module, "_conversion_semaphores", {})
+    created = []
+
+    def fake_fetch(url, **_kwargs):
+        path = tmp_path / f"inkdoc_fetch_{len(created)}.bin"  # no .pdf name: detected by magic
+        path.write_bytes(_scanned_pdf_bytes())
+        created.append(path)
+        return FetchedUrlResult(final_url=url, temp_file_path=path, content_bytes=None,
+                                content_type="application/pdf", charset=None, filename="doc")
+
+    with patch.object(server_module, "validate_url_for_ssrf", side_effect=lambda u: u), \
+         patch("app.core.url_fetcher.fetch_url_safely", side_effect=fake_fetch), _ocr([]):
+        data = client.post("/convert/url?response_format=json",
+                           json={"url": "https://example.com/doc", "check_quality": True}).json()
+        assert data["quality"]["scan_pages"] == [2] and data["quality"]["warning"]
+        assert data["engine_used"] == "markitdown"
+
+        data = client.post("/convert/url?response_format=json",
+                           json={"url": "https://example.com/doc", "engine": "auto"}).json()
+        assert data["auto"]["reason"].startswith("URL: 1 of 3 pages")
+    assert created and all(not p.exists() for p in created)
+
+
+def test_auto_rejected_while_update_applies():
+    set_update_applying(True)
+    try:
+        resp = client.post("/convert/file?engine=auto",
+                           files={"file": ("a.txt", io.BytesIO(b"x"), "text/plain")})
+        assert resp.status_code == 409 and "update in progress" in resp.json()["detail"].lower()
+    finally:
+        set_update_applying(False)
+
+
+def test_auto_counts_as_active_for_the_whole_job(monkeypatch):
+    from unittest.mock import patch
+
+    monkeypatch.setattr(server_module, "_conversion_semaphores", {})
+    seen = []
+    import app.core.auto_engine as auto
+
+    real_availability = auto._availability
+
+    def spy(path):
+        seen.append(server_module.get_active_conversions_count())
+        return real_availability(path)
+
+    with patch.object(auto, "_availability", side_effect=spy), _ocr([]):
+        resp = client.post("/convert/file?engine=auto", files={"file": ("a.txt", io.BytesIO(b"x"))})
+    assert resp.status_code == 200
+    assert seen == [1]  # counted before any conversion thread started
+    assert server_module.get_active_conversions_count() == 0
+
+
+def test_batch_with_auto(monkeypatch):
+    monkeypatch.setattr(server_module, "_conversion_semaphores", {})
+    with _ocr([]):
+        resp = client.post(
+            "/convert/batch?engine=auto&check_quality=true",
+            files=[
+                ("files", ("a.txt", io.BytesIO(b"alpha"), "text/plain")),
+                ("files", ("scan.pdf", io.BytesIO(_scanned_pdf_bytes()), "application/pdf")),
+            ],
+        )
+    assert resp.status_code == 200
+    results = resp.json()["results"]
+    assert results["a.txt"]["auto"]["chosen"] == "markitdown" and results["a.txt"]["quality"] is None
+    assert results["scan.pdf"]["quality"]["warning"] is True
+
+
+def test_job_progress_and_cancel(monkeypatch, tmp_path):
+    from unittest.mock import patch
+
+    from app.core.jobs import JOBS
+
+    monkeypatch.setattr(server_module, "_conversion_semaphores", {})
+    assert client.get("/convert/progress/never-seen-job").status_code == 404
+    assert client.post("/convert/cancel/bad id!").status_code in (400, 404)
+
+    resp = client.post("/convert/file?job_id=job-ok-0001",
+                       files={"file": ("a.txt", io.BytesIO(b"x"), "text/plain")})
+    assert resp.status_code == 200
+    state = client.get("/convert/progress/job-ok-0001").json()
+    assert state["status"] == "done"
+
+    assert client.post("/convert/file?job_id=bad",
+                       files={"file": ("a.txt", io.BytesIO(b"x"))}).status_code == 400
+
+    # A cancel that overtakes its request: the conversion stops and nothing is saved.
+    assert client.post("/convert/cancel/job-cancel-0001").json()["status"] == "not_running"
+    with patch("app.core.converter.get_downloads_dir", return_value=tmp_path):
+        for engine in ("markitdown", "auto"):
+            JOBS.cancel(f"job-cancel-{engine}")
+            resp = client.post(
+                f"/convert/file?engine={engine}&job_id=job-cancel-{engine}&save_to_downloads=true",
+                files={"file": ("a.txt", io.BytesIO(b"x"), "text/plain")},
+            )
+            assert resp.status_code == 409 and resp.json()["detail"] == "conversion_cancelled"
+            assert client.get(f"/convert/progress/job-cancel-{engine}").json()["status"] == "cancelled"
+    assert list(tmp_path.iterdir()) == []
+
+
 if __name__ == "__main__":
     print("Running API Server integration tests...")
     test_root()

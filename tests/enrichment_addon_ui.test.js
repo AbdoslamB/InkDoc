@@ -33,7 +33,7 @@ function makeElement() {
 
 const ELEMENT_NAMES = [
     "doclingCodeEnrichmentToggle", "doclingFormulaEnrichmentToggle",
-    "doclingFallbackToggle", "dailyUpdateToggle",
+    "doclingFallbackToggle", "dailyUpdateToggle", "qualityCheckToggle",
     "addonTitleEl", "addonStatusBadge", "addonReason",
     "addonProgressContainer", "addonProgressFill", "addonProgressText",
     "btnAddonInstall", "btnAddonVerify", "btnAddonRemove", "btnAddonCancel",

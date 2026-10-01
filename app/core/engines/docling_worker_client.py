@@ -130,6 +130,30 @@ class DoclingWorkerClient:
         with self._mutex:
             self._shutdown_locked()
 
+    def is_running(self) -> bool:
+        """True while a worker process is alive (it holds the Docling models in RAM)."""
+        proc = self._proc
+        return proc is not None and proc.poll() is None
+
+    def shutdown_if_idle(self) -> bool:
+        """Stop the worker only if no job is using it. Returns True when it was stopped.
+
+        Used by GLM-OCR's memory coordination: on a machine with little RAM, an
+        idle Docling worker (~1-2 GB) is let go before llama-server starts. A
+        busy worker is never interrupted; the mutex is held for the whole of a
+        conversion, so failing to take it without waiting means "busy".
+        """
+        if not self._mutex.acquire(blocking=False):
+            return False
+        try:
+            if self._proc is None:
+                return False
+            logger.info("Stopping the idle Docling worker to free memory for another engine.")
+            self._shutdown_locked()
+            return True
+        finally:
+            self._mutex.release()
+
     def _spawn_process(
         self,
         cmd: list[str],
@@ -268,6 +292,18 @@ class DoclingWorkerClient:
             "-I",
             str(worker_script),
         ]
+
+        # Both heavy engines in RAM at once (Docling ~1-2 GB, llama-server ~2-3 GB)
+        # is too much under 16 GB: let an idle GLM-OCR server go first. A busy one
+        # is never interrupted; the conversion lanes already serialise real work.
+        try:
+            from app.core.engines.glm_ocr_server import GlmOcrServer, is_low_memory_machine
+
+            glm = GlmOcrServer.peek_instance()
+            if glm is not None and glm.is_running() and is_low_memory_machine():
+                glm.shutdown_if_idle()
+        except Exception as exc:
+            logger.debug("Memory coordination with GLM-OCR skipped: %s", exc)
 
         logger.info("Spawning isolated Docling worker: %s", cmd)
         proc = self._spawn_process(

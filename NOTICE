@@ -1,0 +1,30 @@
+InkDoc
+Copyright (c) 2026 Abdoslam Baabbad. Licensed under the MIT License (see LICENSE).
+
+Optional components downloaded at runtime
+=========================================
+
+These are not part of InkDoc's own distribution. They are downloaded only when
+the user chooses to, from their official source first and from InkDoc's GitHub
+mirror (byte-identical copies) as a fallback, and are verified against SHA-256
+hashes pinned in InkDoc. Their license texts are installed next to them
+(<engines folder>/glm-ocr/licenses/) and ship inside InkDoc in
+app/core/assets/licenses/.
+
+GLM-OCR model (GGUF build)
+  Model:    zai-org/GLM-OCR          https://huggingface.co/zai-org/GLM-OCR
+  GGUF:     ggml-org/GLM-OCR-GGUF    https://huggingface.co/ggml-org/GLM-OCR-GGUF
+  License:  MIT (per the model card)
+  InkDoc uses the model only. It does not use the GLM-OCR SDK or the
+  PP-DocLayoutV3 layout model (both Apache License 2.0).
+
+llama.cpp (llama-server and its libraries)
+  Source:   ggml-org/llama.cpp       https://github.com/ggml-org/llama.cpp
+  License:  MIT, Copyright (c) 2023-2026 The ggml authors
+
+IBM Docling engine pack
+  Source:   docling-project/docling  https://github.com/docling-project/docling
+  License:  MIT (the pack bundles Docling's own dependencies under their licenses)
+
+Bundled conversion libraries are listed with their licenses in README.md
+("Authors, Credits & License").

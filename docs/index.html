@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>InkDoc: Multi-Engine Document-to-Markdown Workbench</title>
-<meta name="description" content="InkDoc is a free, open-source multi-engine desktop and web workbench for converting documents to Markdown. Powered by Microsoft MarkItDown, IBM Docling, and Markit." />
+<meta name="description" content="InkDoc is a free, open-source multi-engine desktop and web workbench for converting documents to Markdown. Powered by Microsoft MarkItDown, IBM Docling, Markit and the GLM-OCR model." />
 <link rel="icon" type="image/svg+xml" href="logo.svg" />
 <style>
   :root {
@@ -385,6 +385,18 @@
           <span class="mark">→</span>
           <div><h3 data-i18n="features.list.4.title">Advanced options, out of the way</h3><p data-i18n="features.list.4.body">Plugins, Azure Document Intelligence, and format hints live in a separate settings dialog.</p></div>
         </div>
+        <div class="feature-row">
+          <span class="mark">→</span>
+          <div><h3 data-i18n="features.list.5.title">Auto picks the engine</h3><p data-i18n="features.list.5.body">MarkItDown for digital files, GLM-OCR or Docling for scans and images when installed (GLM-OCR when it would finish within 5 minutes), Markit for YAML and XML. It never downloads anything on its own.</p></div>
+        </div>
+        <div class="feature-row">
+          <span class="mark">→</span>
+          <div><h3 data-i18n="features.list.6.title">Checks PDFs for missing text</h3><p data-i18n="features.list.6.body">Compares the result with the PDF's own text and warns, with a one-click fix, when pages or tables went missing.</p></div>
+        </div>
+        <div class="feature-row">
+          <span class="mark">→</span>
+          <div><h3 data-i18n="features.list.7.title">GLM-OCR for hard scans</h3><p data-i18n="features.list.7.body">An optional 1.45 GB OCR model for dense scans, phone photos, math and tables. Runs on your computer, faster with a GPU; documents are never uploaded.</p></div>
+        </div>
       </div>
     </div>
   </section>
@@ -513,7 +525,7 @@ python3 -m pip install -r requirements.txt
   var TRANSLATIONS = {
     en: {
       "page.title": "InkDoc: Multi-Engine Document-to-Markdown Workbench",
-      "meta.description": "InkDoc is a free, open-source multi-engine desktop and web workbench for converting documents to Markdown. Powered by Microsoft MarkItDown, IBM Docling, and Markit.",
+      "meta.description": "InkDoc is a free, open-source multi-engine desktop and web workbench for converting documents to Markdown. Powered by Microsoft MarkItDown, IBM Docling, Markit and the GLM-OCR model.",
       "nav.features": "Features",
       "nav.how": "How it works",
       "nav.formats": "Formats",
@@ -537,6 +549,12 @@ python3 -m pip install -r requirements.txt
       "features.list.3.body": "Switch live from the menu bar, no restart needed.",
       "features.list.4.title": "Advanced options, out of the way",
       "features.list.4.body": "Plugins, Azure Document Intelligence, and format hints live in a separate settings dialog.",
+      "features.list.5.title": "Auto picks the engine",
+      "features.list.5.body": "MarkItDown for digital files, GLM-OCR or Docling for scans and images when installed (GLM-OCR when it would finish within 5 minutes), Markit for YAML and XML. It never downloads anything on its own.",
+      "features.list.6.title": "Checks PDFs for missing text",
+      "features.list.6.body": "Compares the result with the PDF's own text and warns, with a one-click fix, when pages or tables went missing.",
+      "features.list.7.title": "GLM-OCR for hard scans",
+      "features.list.7.body": "An optional 1.45 GB OCR model for dense scans, phone photos, math and tables. Runs on your computer, faster with a GPU; documents are never uploaded.",
       "how.title": "How it works",
       "how.1.title": "Drop a file",
       "how.1.body": "Or click the drop zone to browse, or paste a URL.",
@@ -569,7 +587,7 @@ python3 -m pip install -r requirements.txt
     },
     es: {
       "page.title": "InkDoc: Banco de trabajo de conversión de documentos a Markdown multimotor",
-      "meta.description": "InkDoc es un banco de trabajo de escritorio y web multimotor gratuito y de código abierto para convertir documentos a Markdown. Impulsado por Microsoft MarkItDown, IBM Docling y Markit.",
+      "meta.description": "InkDoc es un banco de trabajo de escritorio y web multimotor gratuito y de código abierto para convertir documentos a Markdown. Impulsado por Microsoft MarkItDown, IBM Docling, Markit y el modelo GLM-OCR.",
       "nav.features": "Funciones",
       "nav.how": "Cómo funciona",
       "nav.formats": "Formatos",
@@ -593,6 +611,12 @@ python3 -m pip install -r requirements.txt
       "features.list.3.body": "Cambia en vivo desde la barra de menú, sin necesidad de reiniciar.",
       "features.list.4.title": "Opciones avanzadas, fuera del camino",
       "features.list.4.body": "Los plugins, Azure Document Intelligence y las sugerencias de formato viven en un cuadro de configuración aparte.",
+      "features.list.5.title": "Auto elige el motor",
+      "features.list.5.body": "MarkItDown para archivos digitales, GLM-OCR o Docling para escaneos e imágenes cuando están instalados (GLM-OCR si termina en menos de 5 minutos), Markit para YAML y XML. Nunca descarga nada por su cuenta.",
+      "features.list.6.title": "Revisa si falta texto en los PDF",
+      "features.list.6.body": "Compara el resultado con el texto del propio PDF y avisa, con una corrección de un clic, cuando faltan páginas o tablas.",
+      "features.list.7.title": "GLM-OCR para escaneos difíciles",
+      "features.list.7.body": "Un modelo OCR opcional de 1,45 GB para escaneos densos, fotos de documentos, fórmulas y tablas. Funciona en tu ordenador, más rápido con GPU; los documentos nunca se suben.",
       "how.title": "Cómo funciona",
       "how.1.title": "Suelta un archivo",
       "how.1.body": "O haz clic en la zona de arrastre para explorar, o pega una URL.",
@@ -625,7 +649,7 @@ python3 -m pip install -r requirements.txt
     },
     ar: {
       "page.title": "InkDoc: منصة تحويل المستندات إلى Markdown متعددة المحركات",
-      "meta.description": "منصة InkDoc هي أداة سطح مكتب وويب مجانية ومفتوحة المصدر لتحويل المستندات إلى Markdown مدعومة بمحركات Microsoft MarkItDown و IBM Docling و Markit.",
+      "meta.description": "منصة InkDoc هي أداة سطح مكتب وويب مجانية ومفتوحة المصدر لتحويل المستندات إلى Markdown مدعومة بمحركات Microsoft MarkItDown و IBM Docling و Markit ونموذج GLM-OCR.",
       "nav.features": "المميزات",
       "nav.how": "طريقة العمل",
       "nav.formats": "الصيغ المدعومة",
@@ -649,6 +673,12 @@ python3 -m pip install -r requirements.txt
       "features.list.3.body": "تبديل فوري بين العربية والإنجليزية والإسبانية دون الحاجة لإعادة التشغيل.",
       "features.list.4.title": "خيارات متقدمة منظمة",
       "features.list.4.body": "الإضافات وتحليلات Azure وتلميحات الصيغ متاحة في لوحة إعدادات مستقلة وسلسة.",
+      "features.list.5.title": "الوضع التلقائي يختار المحرك",
+      "features.list.5.body": "MarkItDown للملفات الرقمية، وGLM-OCR أو Docling للمستندات الممسوحة ضوئياً والصور عند تثبيتهما (GLM-OCR إذا كان سينتهي خلال 5 دقائق)، وMarkit لملفات YAML وXML. لا يقوم بتنزيل أي شيء من تلقاء نفسه.",
+      "features.list.6.title": "فحص النص المفقود في ملفات PDF",
+      "features.list.6.body": "يقارن النتيجة بالنص الأصلي داخل ملف PDF وينبّهك، مع إصلاح بنقرة واحدة، عند فقدان صفحات أو جداول.",
+      "features.list.7.title": "GLM-OCR للمستندات الممسوحة الصعبة",
+      "features.list.7.body": "نموذج OCR اختياري بحجم 1.45 جيجابايت للمستندات الممسوحة الكثيفة وصور المستندات والمعادلات والجداول. يعمل على جهازك وأسرع مع بطاقة الرسوميات، ولا يتم رفع مستنداتك أبداً.",
       "how.title": "كيف يعمل التطبيق",
       "how.1.title": "١. أسقط ملفاً",
       "how.1.body": "أو انقر لاستعراض الملفات من جهازك، أو الصق رابط صفحة أو فيديو.",

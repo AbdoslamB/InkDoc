@@ -22,11 +22,18 @@ class SourceKind(Enum):
 
 
 class EngineKind(str, Enum):
-    """Supported conversion engines."""
+    """Supported conversion engines.
+
+    AUTO is a routing mode, never a converter: app/core/auto_engine.py resolves it
+    to one of the concrete engines per file, and the engine that actually produced
+    the output is always reported as a concrete value (`engine_used`).
+    """
 
     MARKITDOWN = "markitdown"
     DOCLING = "docling"
     MARKIT = "markit"
+    GLM_OCR = "glm_ocr"
+    AUTO = "auto"
 
 
 @dataclass

@@ -965,6 +965,14 @@ body {
   color: #22d3ee;
 }
 
+.compact-engine-chip[data-engine="auto"] .compact-engine-icon {
+  color: #f472b6;
+}
+
+[data-theme="light"] .compact-engine-chip[data-engine="auto"] .compact-engine-icon {
+  color: #be185d;
+}
+
 .compact-drop-label {
   font-size: 12px;
   color: var(--muted);
@@ -1208,6 +1216,20 @@ body {
   opacity: 0.75;
 }
 
+.engine-pill[data-engine="auto"] .pill-engine-icon {
+  color: #f472b6;
+  opacity: 0.75;
+}
+
+[data-theme="light"] .engine-pill[data-engine="auto"] .pill-engine-icon {
+  color: #be185d;
+}
+
+.engine-pill:focus-visible {
+  outline: 2px solid var(--mark);
+  outline-offset: 2px;
+}
+
 .engine-pill:hover .pill-engine-icon {
   opacity: 1;
   transform: scale(1.08);
@@ -1296,6 +1318,35 @@ body {
     0 0 16px rgba(8, 145, 178, 0.22),
     0 2px 6px rgba(0, 0, 0, 0.08),
     inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+/* ── Auto — Rose Luminous ── */
+.engine-pill[data-engine="auto"].active {
+  background: linear-gradient(180deg, rgba(236, 72, 153, 0.22) 0%, rgba(236, 72, 153, 0.10) 100%);
+  border-color: #ec4899;
+  color: #f9a8d4;
+  box-shadow:
+    0 0 22px rgba(236, 72, 153, 0.38),
+    0 2px 8px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+.engine-pill[data-engine="auto"].active .pill-engine-icon {
+  color: #f9a8d4;
+}
+
+[data-theme="light"] .engine-pill[data-engine="auto"].active {
+  background: linear-gradient(180deg, rgba(190, 24, 93, 0.12) 0%, rgba(190, 24, 93, 0.05) 100%);
+  border-color: #be185d;
+  color: #9d174d;
+  box-shadow:
+    0 0 16px rgba(190, 24, 93, 0.2),
+    0 2px 6px rgba(0, 0, 0, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+[data-theme="light"] .engine-pill[data-engine="auto"].active .pill-engine-icon {
+  color: #9d174d;
 }
 
 /* ── Settings Popover Engine Card Icons (Keeps clean badge box) ── */
@@ -1641,6 +1692,10 @@ body {
 }
 
 .item-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
   font-size: 11px;
   color: var(--muted);
   margin-top: 1px;
@@ -1696,6 +1751,59 @@ body {
   font-style: italic;
 }
 
+.status-cancelled {
+  background-color: var(--sunken);
+  color: var(--muted);
+}
+
+/* Status column: the pill, plus a Cancel button while converting. */
+.item-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.item-status .status-converting {
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queue-cancel {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 50%;
+  color: var(--muted);
+}
+
+.queue-cancel:hover {
+  color: var(--danger);
+  background-color: var(--danger-tint);
+}
+
+/* Missing-text warning chip. Amber with text, never colour alone; both
+   themes clear WCAG AA (dark ≈ 9:1, light ≈ 7:1). */
+.status-warn {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background-color: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  white-space: nowrap;
+}
+
+[data-theme="light"] .status-warn {
+  background-color: rgba(180, 100, 0, 0.12);
+  color: #92400e;
+}
+
 /* Queue Engine Tag (shows engine when different from default) */
 .badge-queue-engine {
   font-size: 10px;
@@ -1727,6 +1835,15 @@ body {
 
 [data-theme="light"] .badge-queue-engine.markit {
   color: #0891b2;
+}
+
+.badge-queue-engine.auto {
+  background-color: rgba(236, 72, 153, 0.15);
+  color: #f9a8d4;
+}
+
+[data-theme="light"] .badge-queue-engine.auto {
+  color: #9d174d;
 }
 
 /* ═══════════════════════════════
@@ -1837,6 +1954,27 @@ body {
 }
 
 [data-theme="light"] .badge-fallback {
+  background-color: rgba(180, 100, 0, 0.12);
+  border-color: rgba(180, 100, 0, 0.3);
+  color: #92400e;
+}
+
+.badge-quality {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background-color: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  color: #fbbf24;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+[data-theme="light"] .badge-quality {
   background-color: rgba(180, 100, 0, 0.12);
   border-color: rgba(180, 100, 0, 0.3);
   color: #92400e;
@@ -2123,6 +2261,36 @@ body {
 .toast-notification.show {
   transform: translateY(0);
   opacity: 1;
+  pointer-events: auto;
+}
+
+/* Hidden toasts must not swallow clicks now that they can hold buttons. */
+.toast-notification {
+  pointer-events: none;
+  flex-wrap: wrap;
+}
+
+.toast-actions {
+  display: inline-flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.toast-action {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mark);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.toast-action:hover {
+  color: var(--mark-hover);
 }
 
 .toast-notification.toast-success {
@@ -2198,6 +2366,53 @@ body {
   background-color: var(--sunken);
   border-color: var(--rule);
   color: var(--muted);
+}
+
+/* Missing-text warnings: amber, readable in both themes (AA). */
+.conversion-notice.notice-warning {
+  background-color: rgba(245, 158, 11, 0.1);
+  border-color: rgba(245, 158, 11, 0.35);
+  color: #fbbf24;
+}
+
+[data-theme="light"] .conversion-notice.notice-warning {
+  background-color: rgba(180, 100, 0, 0.08);
+  border-color: rgba(180, 100, 0, 0.25);
+  color: #92400e;
+}
+
+/* Auto tips and notes: neutral, never alarming. */
+.conversion-notice.notice-info {
+  background-color: var(--mark-tint);
+  border-color: rgba(61, 171, 134, 0.3);
+  color: var(--ink);
+}
+
+[data-theme="light"] .conversion-notice.notice-info {
+  border-color: rgba(15, 110, 86, 0.25);
+}
+
+.conversion-notice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.conversion-notice-actions[hidden],
+.conversion-notice-details[hidden] {
+  display: none;
+}
+
+.conversion-notice-details {
+  margin: 4px 0 0 16px;
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--ink);
+  opacity: 0.85;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 /* ═══════════════════════════════
@@ -2613,4 +2828,138 @@ input[type="url"] {
     transform: none !important;
     will-change: auto !important;
   }
+}
+/* ═══════════════════════════════
+   GLM-OCR — Amber Luminous
+   (pill, compact chip, card icon, queue badge, card extras)
+═══════════════════════════════ */
+.engine-pill[data-engine="glm_ocr"] .pill-engine-icon,
+.compact-engine-chip[data-engine="glm_ocr"] .compact-engine-icon {
+  color: #fbbf24;
+}
+
+.engine-pill[data-engine="glm_ocr"] .pill-engine-icon {
+  opacity: 0.75;
+}
+
+[data-theme="light"] .engine-pill[data-engine="glm_ocr"] .pill-engine-icon,
+[data-theme="light"] .compact-engine-chip[data-engine="glm_ocr"] .compact-engine-icon {
+  color: #b45309;
+}
+
+.engine-pill[data-engine="glm_ocr"].active {
+  background: linear-gradient(180deg, rgba(245, 158, 11, 0.22) 0%, rgba(245, 158, 11, 0.10) 100%);
+  border-color: #f59e0b;
+  color: #fcd34d;
+  box-shadow:
+    0 0 22px rgba(245, 158, 11, 0.36),
+    0 2px 8px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+.engine-pill[data-engine="glm_ocr"].active .pill-engine-icon {
+  color: #fcd34d;
+  opacity: 1;
+}
+
+[data-theme="light"] .engine-pill[data-engine="glm_ocr"].active {
+  background: linear-gradient(180deg, rgba(180, 83, 9, 0.13) 0%, rgba(180, 83, 9, 0.05) 100%);
+  border-color: #b45309;
+  color: #92400e;
+  box-shadow:
+    0 0 16px rgba(180, 83, 9, 0.2),
+    0 2px 6px rgba(0, 0, 0, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+[data-theme="light"] .engine-pill[data-engine="glm_ocr"].active .pill-engine-icon {
+  color: #92400e;
+}
+
+.engine-card-icon.glm-ocr-icon {
+  background-color: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+}
+
+[data-theme="light"] .engine-card-icon.glm-ocr-icon {
+  background-color: rgba(180, 83, 9, 0.1);
+  color: #b45309;
+}
+
+.badge-queue-engine.glm_ocr {
+  background-color: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+}
+
+[data-theme="light"] .badge-queue-engine.glm_ocr {
+  color: #92400e;
+}
+
+/* Speed hint under the pill group while GLM-OCR is selected. */
+.engine-speed-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.engine-speed-hint[hidden] {
+  display: none;
+}
+
+.glm-privacy {
+  margin-top: 4px;
+}
+
+.glm-advanced {
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.glm-advanced > summary {
+  cursor: pointer;
+  color: var(--muted);
+  user-select: none;
+}
+
+.glm-advanced[open] > summary {
+  margin-bottom: 8px;
+}
+
+.glm-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+  color: var(--ink);
+}
+
+.glm-field select {
+  max-width: 62%;
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--rule);
+  background: var(--sunken);
+  color: inherit;
+}
+
+/* Bullet list under a confirmation dialog's message (GLM-OCR download warning). */
+.app-dialog-details {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+  text-align: left;
+}
+
+.app-dialog-details[hidden] {
+  display: none;
+}
+
+.app-dialog-details li + li {
+  margin-top: 4px;
 }

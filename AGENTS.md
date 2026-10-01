@@ -5,7 +5,8 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 ## What this is
 
 A unified desktop application and local web workbench around Microsoft's `markitdown` Python
-package, with optional IBM `docling` layout analysis and broad-format `markit` conversion routes.
+package, with optional IBM `docling` layout analysis, broad-format `markit` conversion routes, and the
+optional downloadable GLM-OCR model (run by llama.cpp's `llama-server`).
 It is **not** a fork of markitdown and contains no conversion logic of its own — every actual file-to-Markdown conversion goes through
 the real `markitdown` public API (`MarkItDown.convert_local()` / `convert_uri()`) or the engine adapters in `app/core/engines/`.
 
@@ -38,8 +39,9 @@ python -m compileall -q main.py app tests examples
 python main.py --headless --port 13199 &
 python -c "import urllib.request, time; time.sleep(2); res = urllib.request.urlopen('http://127.0.0.1:13199/health'); assert res.getcode() == 200; print('OK')"
 
-# Integration tests
-python tests/test_server.py
+# Test suite (CI runs exactly this) and the UI unit tests (Node, no npm)
+python -m pytest tests/ -q
+node tests/auto_engine_ui.test.js && node tests/preview_word_count.test.js && node tests/glm_ocr_ui.test.js
 
 # Lint (also run in CI)
 pip install ruff
@@ -67,10 +69,18 @@ nothing test-related should be left in the user's actual Downloads folder.
 
 - `app/core/` — Core conversion logic & engine adapters:
   - `converter.py` — Maps options to real `MarkItDown(...)` constructor kwargs. Dispatches `convert_local()` or `convert_uri()`. `auto_save_markdown()` / `get_downloads_dir()` / `unique_download_path()` implement collision-safe Downloads auto-save.
-  - `queue_model.py` — `EngineKind` enum (`markitdown`, `docling`, `markit`), `QueueItem` dataclass.
+  - `queue_model.py` — `EngineKind` enum (`markitdown`, `docling`, `markit`, `glm_ocr`, and `auto`, a routing mode that always resolves to one of the concrete engines), `QueueItem` dataclass.
   - `engines/` — Engine adapters (`docling_engine.py`, `markit_engine.py`).
+  - `pdf_probe.py` — One cheap pdfium pass over a PDF: per-page text layer, image coverage, and the scan-likely classifier that tells scanned pages from cover photos. Imports `pypdfium2` lazily, never raises (returns `None`), serialises pdfium with a lock.
+  - `quality_check.py` — Missing-text check: compares a PDF conversion's Markdown with the PDF's own text layer and builds the user-facing warning and suggestion. Read-only; never fails a conversion.
+  - `auto_engine.py` — The Auto engine: pure routing (`decide`, `should_escalate`, `pick_result`, `glm_time_gate`, `AUTO_ROUTES`), OCR availability ("only what is on disk"; GLM-OCR first, then Docling), and the async `run_auto`, which takes each engine's lane *before* using a thread and may re-convert once with the OCR engine. GLM-OCR is used only for files estimated to finish within `GLM_OCR_TIME_LIMIT_S` (5 min); otherwise Docling.
+  - `jobs.py` — In-memory job registry behind `/convert/progress/{job_id}` and `/convert/cancel/{job_id}` (phase labels and cooperative cancel; engine-neutral).
+  - `glm_ocr_catalogue.py` / `glm_ocr_catalogue.json` — GLM-OCR pins: model files (Hugging Face) and llama.cpp runtime builds per platform, each with sha256 and ordered sources (upstream first, InkDoc mirror second). `validate_glm_catalogue` (UNRELEASED / PUBLISHED / DEFECTIVE) is the one validator used by the app, CI and the signer. A signed remote catalogue (same Ed25519 envelope as the update manifest, `verify_signed_envelope`) can raise the pins without an app release; rollback is blocked by `catalogue_version`. Regenerate the JSON with `scripts/build_glm_ocr_catalogue.py`, never by hand.
+  - `glm_ocr_manager.py` — Download (per file: upstream, then mirror; separate partial file per source), selective runtime extraction (only `sha256_files`, symlinks written as regular files), self-test on the staged files, completion marker written LAST, partial updates, GPU (Vulkan) runtime, verify, remove (marker first). Status reads the marker only — never hashes, never touches the network.
+  - `engines/glm_ocr_server.py` — `llama-server` lifecycle: exact command line (`--offline`, loopback, per-session `--api-key`), full runtime re-hash before every launch, Windows Job Object / Linux parent-death signal / PID-file reaping, health wait, idle shutdown, crash restart, GPU→CPU and Metal→`-ngl 0` fallbacks, memory coordination with the Docling worker, warm-timed self-test.
+  - `engines/glm_ocr_engine.py` — GLM-OCR conversion: PDF pages (pdfium lock held per page) and images (EXIF transpose, transparency flattened, multi-frame TIFF), context budget, repetition guard, per-page progress and cancel through `options.job`.
 - `app/server/` — Embedded REST API backend:
-  - `server.py` — FastAPI REST API endpoints (`/convert/file`, `/convert/url`, `/convert/batch`, `/health`, `/extensions`), dual-mounts `/static` and `/ui`.
+  - `server.py` — FastAPI REST API endpoints (`/convert/file`, `/convert/url`, `/convert/batch`, `/convert/progress/{job_id}`, `/convert/cancel/{job_id}`, `/health`, `/extensions`), dual-mounts `/static` and `/ui`. Lanes: Docling (1), GLM-OCR (1), default (2) and a probe lane (1) for pdfium work, all acquired in async code before `asyncio.to_thread`. `/engines/{name}/…` dispatches `glm_ocr` to `GlmOcrManager`; `/convert/estimate` gives GLM-OCR's page count and time estimate. Explicit engines convert → auto-save → check; Auto probes → converts → checks → (maybe re-converts) → auto-saves once. Response metadata is built in one place, `_conversion_payload`.
 - `app/ui/` — **The single shared web & desktop UI**:
   - `index.html` — Application DOM structure, dropzone, engine pills, live preview pane, settings popover.
   - `style.css` — Inkbench design system: obsidian dark & light themes, glowing engine selector pills, responsive layout.

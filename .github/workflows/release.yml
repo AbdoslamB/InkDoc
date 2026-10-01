@@ -155,6 +155,10 @@ jobs:
             --add-data "assets${SEP}assets" \
             --add-data "app/core/manifest.json${SEP}app/core" \
             --add-data "app/core/addons.json${SEP}app/core" \
+            --add-data "app/core/glm_ocr_catalogue.json${SEP}app/core" \
+            --add-data "app/core/assets/glm_ocr_selftest.png${SEP}app/core/assets" \
+            --add-data "app/core/assets/licenses/LICENSE-GLM-OCR.txt${SEP}app/core/assets/licenses" \
+            --add-data "app/core/assets/licenses/LICENSE-llama.cpp.txt${SEP}app/core/assets/licenses" \
             main.py
 
       - name: Build single-file .exe (Windows)
@@ -178,6 +182,10 @@ jobs:
             --add-data "assets;assets" \
             --add-data "app/core/manifest.json;app/core" \
             --add-data "app/core/addons.json;app/core" \
+            --add-data "app/core/glm_ocr_catalogue.json;app/core" \
+            --add-data "app/core/assets/glm_ocr_selftest.png;app/core/assets" \
+            --add-data "app/core/assets/licenses/LICENSE-GLM-OCR.txt;app/core/assets/licenses" \
+            --add-data "app/core/assets/licenses/LICENSE-llama.cpp.txt;app/core/assets/licenses" \
             main.py
 
       - name: Sign inner executables (Windows)
@@ -196,11 +204,26 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-          if (-not (Test-Path $iscc)) {
-            choco install innosetup -y
-            $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          # Inno Setup 6 or 7, wherever the runner image or choco put it: 7.x
+          # installs under "Inno Setup 7" (and 64-bit Program Files), so a
+          # hard-coded 6.x path would fail the build the day the image moves on.
+          $candidates = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 7\ISCC.exe",
+            "${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe"
+          )
+          $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            choco install innosetup -y --no-progress
+            $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
           }
+          if (-not $iscc) {
+            $iscc = Get-ChildItem $env:ProgramFiles, ${env:ProgramFiles(x86)} -Filter ISCC.exe -Recurse -Depth 2 -ErrorAction SilentlyContinue |
+              Select-Object -First 1 -ExpandProperty FullName
+          }
+          if (-not $iscc) { Write-Error "Inno Setup compiler (ISCC.exe) not found."; exit 1 }
+          Write-Host "Using $iscc"
           $version = "${{ steps.ver.outputs.version }}"
           & $iscc "/DMyAppVersion=$version" installer.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

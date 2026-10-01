@@ -54,6 +54,21 @@ import uvicorn
 from app.server.server import app
 
 
+def stop_engine_processes() -> None:
+    """Stop llama-server (GLM-OCR) and the Docling worker before the app exits.
+
+    The server's lifespan does the same on a graceful stop, but the uvicorn
+    thread is a daemon and may be killed before it gets there. On Windows the
+    Job Object would end llama-server anyway; this keeps macOS and Linux tidy.
+    """
+    try:
+        from app.server.server import _shutdown_engine_processes
+
+        _shutdown_engine_processes()
+    except Exception:
+        pass
+
+
 def is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
     """Check if a network port is actively in use."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -494,6 +509,7 @@ def run_desktop(
         except KeyboardInterrupt:
             if server_thread:
                 server_thread.stop()
+            stop_engine_processes()
         return 0
 
     # Decision 3: Opt-in daily update check in desktop mode on startup (after 5s delay)
@@ -603,6 +619,7 @@ def run_desktop(
         _desktop_window = None
         if server_thread:
             server_thread.stop()
+        stop_engine_processes()
 
     window.events.closed += on_closed
 
@@ -613,6 +630,7 @@ def run_desktop(
         _desktop_window = None
         if server_thread:
             server_thread.stop()
+        stop_engine_processes()
 
     return 0
 

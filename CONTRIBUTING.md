@@ -170,6 +170,17 @@ All dependency updates (whether submitted manually or generated automatically by
 1. **Automated CI Validation**: The PR must cleanly pass all checks in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) across all supported platforms (Windows, macOS, and Linux).
 2. **Smoke Test of Built App**: Changes to core desktop runtime dependencies (including `pywebview`, `fastapi`, and `uvicorn`) require a local smoke test of a built application package to verify that desktop window events, pywebview loopback orchestration, and PyInstaller bundling continue to function without regressions.
 
+### Licenses for new dependencies, models and binaries
+
+Any pull request that adds or upgrades a dependency, a model, or a bundled or downloaded binary must, in the same pull request:
+
+1. **Check the license at the source.** Read the component's own LICENSE file, model card or package metadata for the exact version. Don't rely on memory or on another project's summary. Model weights often have a different license from the code that runs them, so check both.
+2. **Update [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).** Add or update its row: what InkDoc uses it for, upstream URL, copyright holder, exact license, and whether InkDoc bundles it, re-hosts it, mirrors it or lets the user's machine fetch it. If the upstream doesn't state something, write **UNVERIFIED** instead of guessing.
+3. **Add the full license text to [`LICENSES/`](LICENSES/).** Copy it unchanged, keeping the original copyright lines, and include any NOTICE file (Apache-2.0 requires it). For Python dependency changes, regenerate the affected list (`LICENSES/python-packages-desktop.txt` or `LICENSES/docling-pack-packages.md`) the way its header describes.
+4. **Flag copyleft, restricted or unclear licenses.** If anything is GPL, LGPL or AGPL, restricts commercial use (for example a non-commercial or research-only model license), or has unclear or custom terms, say so in the pull request description so a maintainer can decide. Don't add it quietly.
+
+Dependabot pull requests need the same check before merging.
+
 ---
 
 ## 7. Security Policy

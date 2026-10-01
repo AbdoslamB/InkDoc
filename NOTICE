@@ -1,30 +1,55 @@
 InkDoc
 Copyright (c) 2026 Abdoslam Baabbad. Licensed under the MIT License (see LICENSE).
 
-Optional components downloaded at runtime
-=========================================
+If you copy or redistribute InkDoc's code, in whole or in substantial part,
+the MIT License requires you to keep the copyright notice above and the
+license text with it. We also ask, though the license does not require it,
+that projects using InkDoc credit it visibly, for example:
+  Uses InkDoc (https://github.com/AbdoslamB/InkDoc) by Abdoslam Baabbad (MIT License).
 
-These are not part of InkDoc's own distribution. They are downloaded only when
-the user chooses to, from their official source first and from InkDoc's GitHub
-mirror (byte-identical copies) as a fallback, and are verified against SHA-256
-hashes pinned in InkDoc. Their license texts are installed next to them
-(<engines folder>/glm-ocr/licenses/) and ship inside InkDoc in
-app/core/assets/licenses/.
+The MIT License covers only InkDoc's own code. Every third-party component
+InkDoc bundles, re-hosts, mirrors or lets your computer download stays under
+its own license and terms. A third-party component or model may be used
+commercially only if, and to the extent that, its own license allows it. The full list is in THIRD_PARTY_NOTICES.md, the
+license texts are in LICENSES/, and DISCLAIMER.md explains what InkDoc does and
+does not promise and which features use the internet.
 
-GLM-OCR model (GGUF build)
+Bundled in the desktop app
+==========================
+
+CPython, 78 Python packages (among them Microsoft MarkItDown, FastAPI,
+pywebview and pypdfium2/PDFium), and the JavaScript libraries marked,
+DOMPurify and highlight.js, each under its own license. The Python packages
+include SpeechRecognition, which ships FLAC encoder
+binaries licensed under GPL-2.0. Texts: LICENSES/python-packages-desktop.txt
+and the other files in LICENSES/.
+
+Optional components (downloaded only when you choose to)
+=========================================================
+
+Docling engine pack
+  Built by InkDoc from the upstream projects and hosted on InkDoc's own GitHub
+  release (docling-pack-v1), not downloaded from the Docling project.
+  Contains Docling (MIT, https://github.com/docling-project/docling), the
+  "heron" layout model weights (Apache-2.0), the TableFormer weights
+  (CDLA-Permissive-2.0), RapidOCR and its PP-OCR models (Apache-2.0), a CPython
+  runtime, and 107 Python packages under their own licenses, some of
+  which bundle LGPL libraries. See LICENSES/docling-pack-packages.md.
+
+Code & Formula Recognition add-on
+  docling-project/CodeFormulaV2 model weights (CDLA-Permissive-2.0), hosted on
+  InkDoc's GitHub release docling-addon-v1.
+
+GLM-OCR model (GGUF build) and llama.cpp
   Model:    zai-org/GLM-OCR          https://huggingface.co/zai-org/GLM-OCR
   GGUF:     ggml-org/GLM-OCR-GGUF    https://huggingface.co/ggml-org/GLM-OCR-GGUF
   License:  MIT (per the model card)
-  InkDoc uses the model only. It does not use the GLM-OCR SDK or the
-  PP-DocLayoutV3 layout model (both Apache License 2.0).
-
-llama.cpp (llama-server and its libraries)
-  Source:   ggml-org/llama.cpp       https://github.com/ggml-org/llama.cpp
-  License:  MIT, Copyright (c) 2023-2026 The ggml authors
-
-IBM Docling engine pack
-  Source:   docling-project/docling  https://github.com/docling-project/docling
-  License:  MIT (the pack bundles Docling's own dependencies under their licenses)
-
-Bundled conversion libraries are listed with their licenses in README.md
-("Authors, Credits & License").
+  Runtime:  ggml-org/llama.cpp       https://github.com/ggml-org/llama.cpp
+  License:  MIT, Copyright (c) 2023-2026 The ggml authors; the Windows builds
+            also contain the LLVM OpenMP runtime (Apache-2.0 WITH LLVM-exception)
+  Downloaded from the official source first, and from InkDoc's GitHub mirror
+  (byte-identical copies) as a fallback, verified against SHA-256 hashes
+  pinned in InkDoc. The GLM-OCR and llama.cpp license texts are installed next
+  to them (<engines folder>/glm-ocr/licenses/) and ship inside InkDoc in
+  app/core/assets/licenses/. InkDoc uses the model only. It does not use the
+  GLM-OCR SDK or the PP-DocLayoutV3 layout model (both Apache License 2.0).

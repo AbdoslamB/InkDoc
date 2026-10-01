@@ -6,9 +6,9 @@
 
 # InkDoc
 
-### Turn any document into clean, AI-ready Markdown — locally on your machine
+### Turn any document into clean, AI-ready Markdown — most conversions run right on your machine
 
-A unified desktop workbench and local REST API that bridges **Microsoft MarkItDown**, **IBM Docling**, **Shift Labs Markit** and the **GLM-OCR** model into one zero-friction Markdown pipeline — with collision-safe auto-saving.
+A unified desktop workbench and local REST API that bridges **Microsoft MarkItDown**, **Docling**, a broad-format **Markit** engine and the **GLM-OCR** model into one zero-friction Markdown pipeline — with collision-safe auto-saving.
 
 <br />
 
@@ -154,7 +154,7 @@ gh attestation verify inkdoc-setup.exe --repo AbdoslamB/inkdoc
       <br />
       <b>Multi-Engine Conversion Pipeline</b>
       <br />
-      Intelligently dispatches between <b>Microsoft MarkItDown</b> (fast everyday documents), <b>IBM Docling</b> (deep layout analysis and TableFormer reconstruction), <b>Shift Labs Markit</b> (broad formats like EPUB and Jupyter Notebooks) and <b>GLM-OCR</b> (a downloadable OCR model for scans, photos, math and tables). <b>Auto</b> picks the engine per file, and every PDF is <b>checked for missing text</b> so a silently incomplete conversion gets a warning and a one-click fix.
+      Intelligently dispatches between <b>Microsoft MarkItDown</b> (fast everyday documents), <b>Docling</b> (deep layout analysis and TableFormer reconstruction), <b>Markit</b> (InkDoc's own broad-format extractors, inspired by Shift Labs' Markit, for formats like EPUB, YAML and Jupyter Notebooks) and <b>GLM-OCR</b> (a downloadable OCR model for scans, photos, math and tables). <b>Auto</b> picks the engine per file, and every PDF is <b>checked for missing text</b> so a silently incomplete conversion gets a warning and a one-click fix.
     </td>
     <td width="50%" valign="top">
       <img src="assets/readme/feature-ui.svg" width="44" alt="" />
@@ -207,15 +207,15 @@ flowchart LR
 
 |  | **MarkItDown** | **Docling** *(Optional Pack)* | **Markit** | **GLM-OCR** *(Optional Download)* |
 | :--- | :--- | :--- | :--- | :--- |
-| **Upstream** | [Microsoft](https://github.com/microsoft/markitdown) | [IBM Research](https://github.com/DS4SD/docling) | [Shift Labs](https://github.com/shift-labs-ai/markit) | [zai-org](https://huggingface.co/zai-org/GLM-OCR) model, run by [llama.cpp](https://github.com/ggml-org/llama.cpp) |
-| **Distribution** | **Bundled** out of the box | **Optional 1-click in-app pack** (Settings) | **Bundled** out of the box | **Optional download** from Settings (~1.45 GB) |
+| **Upstream** | [Microsoft](https://github.com/microsoft/markitdown) | [Docling project](https://github.com/docling-project/docling) (started by IBM Research) | InkDoc's own engine, inspired by [Shift Labs' Markit](https://github.com/shift-labs-ai/markit) | [zai-org](https://huggingface.co/zai-org/GLM-OCR) model, run by [llama.cpp](https://github.com/ggml-org/llama.cpp) |
+| **Distribution** | **Bundled** out of the box | **Optional 1-click in-app pack** (Settings), built and hosted by InkDoc | **Bundled** (InkDoc's extractors). On macOS/Linux with Node.js installed, it runs Shift Labs' `@shiftlabs/markit`, which `npx` downloads from npm | **Optional download** from Settings (~1.45 GB) |
 | **Primary strengths** | High throughput, official Microsoft parsers, lightweight runtime | Vision models, reading-order graph segmentation, formula parsing | Multi-format versatility, specialized pure-Python extractors | Strongest small open OCR model: reads dense scans, phone photos, LaTeX math and complex tables |
 | **Best for** | Word (`.docx`), Excel (`.xlsx`), PowerPoint (`.pptx`), HTML, CSV, JSON, XML, audio | Academic papers, multi-column articles, dense technical specifications, scanned PDFs | EPUB e-books, Jupyter Notebooks (`.ipynb`), YAML configs, RSS/Atom feeds | Scanned PDFs and images (`.png`, `.jpg`, `.tiff`, `.webp`, `.gif`…) where other engines struggle |
-| **Optical & structural recovery** | Native document metadata, EXIF parsing, speech-to-text transcription via ffmpeg | **Deep OCR** (RapidOCR/EasyOCR), **TableFormer** AI table reconstruction, layout parsing | Code cells, inline outputs, e-book chapter boundary stitching | Full-page vision-language OCR, EXIF auto-rotation, per-page progress with Cancel |
+| **Optical & structural recovery** | Native document metadata, EXIF parsing, speech-to-text transcription (the audio is sent to Google's speech-recognition service) | **Deep OCR** (RapidOCR), **TableFormer** AI table reconstruction, layout parsing | Code cells, inline outputs, e-book chapter boundary stitching | Full-page vision-language OCR, EXIF auto-rotation, per-page progress with Cancel |
 
 > [!NOTE]
 > **Optional Engine Architecture & Zero Silent Substitution:**
-> MarkItDown and Markit are pre-bundled in all InkDoc distributions. IBM Docling is packaged as an optional, on-demand engine pack due to its deep neural weights.
+> MarkItDown and InkDoc's Markit extractors are pre-bundled in all InkDoc distributions. Docling is packaged as an optional, on-demand engine pack due to its deep neural weights.
 > Pre-built pack platform availability is derived dynamically from manifest keys in [`app/core/manifest.json`](app/core/manifest.json) (`windows-x86_64`, `linux-x86_64`, `macos-arm64`). When running from source, if `docling` is installed in your local Python environment (`pip install docling`), InkDoc dynamically detects it in source mode and enables it immediately without needing a binary pack.
 > *(Release Status: Standalone engine pack downloads are verified against manifest checksums and published release tags. Unverified or placeholder hashes are rejected fail-closed to guarantee supply-chain integrity.)*
 > InkDoc enforces a **zero silent substitution** contract: if Docling or GLM-OCR is selected but not installed, the request is refused (HTTP 409 `engine_not_installed`), and Docling is never silently routed to another engine on an error unless you explicitly enable the *"Fall back to MarkItDown if Docling fails"* setting.
@@ -228,7 +228,7 @@ flowchart LR
 - **Official source first, mirror fallback.** The model comes from Hugging Face and the runtime from the llama.cpp releases. If either fails for any reason (blocked, down, rate limited, or a wrong hash), the same files come from InkDoc's own GitHub release. Every file is checked against SHA-256 hashes pinned in InkDoc, and the runtime files are re-hashed before every launch.
 - **Tested before use.** The install is only complete when the model reads a known test image on your computer, which also measures its speed there.
 - **Speed.** On a laptop CPU (Ryzen 9 4900HS) expect roughly 15–40 seconds per page; with **GPU acceleration** (Settings, Vulkan on Windows/Linux for NVIDIA, AMD and Intel graphics, Metal on Apple Silicon) about 4–7 seconds per page on the same laptop's integrated Radeon. Long jobs show *"Page 7 / 30 · ~8 min left"* with a **Cancel** button, and InkDoc asks before starting a job longer than 5 minutes.
-- **Private and offline after install.** Your documents never leave your computer; the server listens on the loopback interface only, with a per-session key, and runs with downloads disabled.
+- **Private and offline after install.** Documents converted with GLM-OCR never leave your computer; the server listens on the loopback interface only, with a per-session key, and runs with downloads disabled.
 - **Auto uses it only when it is quick enough.** For scans and images, Auto prefers GLM-OCR when it is installed and the file should finish within 5 minutes on your computer; otherwise it uses Docling (or tells you how to run GLM-OCR yourself).
 
 ### Auto engine & missing-text check
@@ -250,9 +250,12 @@ Each format has a recommended engine, which is what **Auto** uses, and you can a
 | 📊 | **Office documents** | Microsoft Word (`.docx`), Excel (`.xlsx`), PowerPoint (`.pptx`), CSV, TSV | `MarkItDown` |
 | 📕 | **PDFs & scanned docs** | Native PDF, scanned PDF (with OCR), multi-column articles, research papers | `MarkItDown` for digital PDFs, `GLM-OCR` or `Docling` for scanned pages |
 | 💻 | **Developer & data** | Jupyter Notebooks (`.ipynb`), YAML (`.yaml`, `.yml`), JSON, XML | `Markit` for YAML and XML, `MarkItDown` for notebooks and JSON |
-| 📚 | **Publications & web** | EPUB e-books, web URLs, YouTube links (automatic transcript extraction) | `MarkItDown` |
-| 🎙️ | **Audio recordings** | WAV, MP3, M4A (speech-to-text audio transcription via ffmpeg) | `MarkItDown` |
+| 📚 | **Publications & web** | EPUB e-books, web URLs, YouTube links (transcripts are fetched from YouTube) | `MarkItDown` |
+| 🎙️ | **Audio recordings** | WAV, MP3, M4A (speech-to-text through Google's speech-recognition service; MP3 and M4A also need ffmpeg) | `MarkItDown` |
 | 🖼️ | **Images & photos** | PNG, JPEG, TIFF, BMP, WebP, GIF (EXIF metadata & technical attributes) | `GLM-OCR` or `Docling` for OCR when installed, otherwise `MarkItDown` |
+
+> [!NOTE]
+> **What goes online:** most conversions run locally. Audio transcription sends the audio to Google's speech-recognition service, and URL and YouTube conversion fetch content from those sites. Engine downloads, update checks and the interface fonts also use the internet. [DISCLAIMER.md](DISCLAIMER.md#network-use-and-privacy) lists every case.
 
 <br />
 
@@ -421,19 +424,44 @@ Contributions, bug reports, and feature proposals are welcome.
 
 **Author & lead maintainer:** [Abdoslam Baabbad](https://github.com/AbdoslamB) ([`@AbdoslamB`](https://github.com/AbdoslamB))
 
-InkDoc is built on excellent open-source work:
+InkDoc is built on excellent open-source work. Code and model weights are listed separately because their licenses differ:
 
-| Role | Project | Credit | License |
-| :--- | :--- | :--- | :--- |
-| Core conversion engine | [`markitdown`](https://github.com/microsoft/markitdown) | Microsoft Corporation | MIT |
-| AI document analysis | [`docling`](https://github.com/DS4SD/docling) | IBM Research Zurich | MIT |
-| Broad-format extractors | [`@shiftlabs/markit`](https://github.com/shift-labs-ai/markit) *(inspiration)* | Shift Labs AI | MIT |
-| Prototype foundation | Early open-source concept | Andres Torres | MIT |
+| Role | Project | Kind | Credit | License |
+| :--- | :--- | :--- | :--- | :--- |
+| Core conversion engine | [`markitdown`](https://github.com/microsoft/markitdown) | Code | Microsoft Corporation | MIT |
+| AI document analysis | [`docling`](https://github.com/docling-project/docling) | Code | The Docling Contributors (started by IBM Research Zurich) | MIT |
+| Layout model "heron" | [`docling-layout-heron`](https://huggingface.co/docling-project/docling-layout-heron) | Model weights | Docling project | Apache-2.0 |
+| Table structure (TableFormer) | [`docling-models`](https://huggingface.co/docling-project/docling-models) | Model weights | Docling project | CDLA-Permissive-2.0 |
+| Code & formula recognition add-on | [`CodeFormulaV2`](https://huggingface.co/docling-project/CodeFormulaV2) | Model weights | Docling project | CDLA-Permissive-2.0 |
+| OCR inside Docling | [`RapidOCR`](https://github.com/RapidAI/RapidOCR) | Code and model weights (PP-OCR, from [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR)) | RapidAI; PaddlePaddle Authors | Apache-2.0 |
+| OCR model | [`GLM-OCR`](https://huggingface.co/zai-org/GLM-OCR) | Model weights | Z.ai (zai-org) | MIT (per the model card) |
+| GLM-OCR runtime | [`llama.cpp`](https://github.com/ggml-org/llama.cpp) | Code and binaries | The ggml authors | MIT |
+| Broad-format engine | [`@shiftlabs/markit`](https://github.com/shift-labs-ai/markit) *(inspiration; run via `npx` where available)* | Code | Shift Labs | MIT |
+| Local REST API | [`fastapi`](https://github.com/fastapi/fastapi) | Code | Sebastián Ramírez | MIT |
+| Desktop window | [`pywebview`](https://github.com/r0x0r/pywebview) | Code | Roman Sirokov | BSD-3-Clause |
+| Markdown preview | [`marked`](https://github.com/markedjs/marked) | Code | MarkedJS, Christopher Jeffrey | MIT |
+| Prototype foundation | Early open-source concept | — | Andres Torres | MIT |
 
-This project is licensed under the **[MIT License](LICENSE)**.
+EasyOCR is not included: InkDoc's Docling pack uses RapidOCR. The full list of components, including all bundled Python packages, is in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+InkDoc's own code is licensed under the **[MIT License](LICENSE)**. Third-party components keep their own licenses; see [Legal](#legal).
 
 > [!NOTE]
-> **InkDoc** is an independent open-source project authored and maintained by Abdoslam Baabbad. It is not affiliated with, endorsed by, or sponsored by Microsoft Corporation or IBM Corporation.
+> **InkDoc** is an independent open-source project authored and maintained by Abdoslam Baabbad. It is not affiliated with, endorsed by, or sponsored by Microsoft, IBM, the Docling project, Z.ai, Shift Labs, Google, or the llama.cpp project. Product names and trademarks belong to their owners.
+
+## <a id="legal"></a>Legal
+
+InkDoc's MIT License covers only InkDoc's own code. The components and models it uses or downloads stay under their own licenses, including some that are not MIT (such as CDLA-Permissive-2.0, Apache-2.0 and GPL-2.0), and you are responsible for reviewing and following them. You may use a third-party component or model commercially only if, and to the extent that, its own license allows it. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), the full texts in [LICENSES/](LICENSES/), and [DISCLAIMER.md](DISCLAIMER.md), which also explains which features use the internet.
+
+### Crediting InkDoc
+
+If you copy or redistribute InkDoc's code, in whole or in substantial part, the MIT License requires you to keep InkDoc's copyright notice and license text with it.
+
+Beyond that requirement, if InkDoc helps your project, please credit it where your users can see it, for example in your README or about page:
+
+> Uses [InkDoc](https://github.com/AbdoslamB/InkDoc) by Abdoslam Baabbad (MIT License).
+
+For papers and reports, GitHub's **Cite this repository** button (from [`CITATION.cff`](CITATION.cff)) gives a ready-made citation.
 
 <br />
 

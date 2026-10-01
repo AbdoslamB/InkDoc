@@ -1,0 +1,6 @@
+# InkDoc landing page: https://abdoslamb.github.io/InkDoc/
+# Everything on the site may be crawled.
+User-agent: *
+Allow: /
+
+Sitemap: https://abdoslamb.github.io/InkDoc/sitemap.xml

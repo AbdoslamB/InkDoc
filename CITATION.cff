@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If InkDoc helps your project, please credit it as below."
+type: software
+title: "InkDoc"
+abstract: "A desktop workbench and local REST API that converts documents to Markdown using Microsoft MarkItDown, Docling, a broad-format Markit engine and the GLM-OCR model."
+authors:
+  - family-names: "Baabbad"
+    given-names: "Abdoslam"
+repository-code: "https://github.com/AbdoslamB/InkDoc"
+url: "https://abdoslamb.github.io/InkDoc/"
+license: MIT

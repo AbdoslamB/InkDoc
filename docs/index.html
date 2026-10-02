@@ -3957,7 +3957,14 @@ python3 -m pip install -r requirements.txt
         });
       });
 
-      /* GitHub data, after the page has settled: star count and the latest app release */
+      /* Called by the self-contained release block (end of page) once the newest app release is known. */
+      window.__inkdocRelease = function (t) {
+        tag = t;
+        $("#verTag").textContent = tag; $("#ver").hidden = false;
+        setCta();
+      };
+
+      /* GitHub data, after the page has settled: star count */
       function gh(path, fn) {
         var ctl = "AbortController" in window ? new AbortController() : null;
         var stop = setTimeout(function () { if (ctl) ctl.abort(); }, 5000);
@@ -3979,15 +3986,6 @@ python3 -m pip install -r requirements.txt
             el.textContent = fmt(Math.round(n * e));
             if (p < 1) requestAnimationFrame(step);
           })(t0);
-        });
-        gh("/releases?per_page=15", function (list) {
-          if (!Array.isArray(list)) return;
-          var rel = list.find(function (r) { return r && !r.draft && !r.prerelease && /^v\d+\.\d+\.\d+$/.test(r.tag_name); });
-          if (!rel) return;
-          tag = rel.tag_name;
-          $$("a[href*='/releases/latest/download/']").forEach(function (l) { l.href = pinned(l.href); });
-          $("#verTag").textContent = tag; $("#ver").hidden = false;
-          setCta();
         });
       });
 
@@ -4056,6 +4054,36 @@ python3 -m pip install -r requirements.txt
         nearObs.observe(box);
         new IntersectionObserver(function (es) { inView = es[0].isIntersecting; playback(); }, { threshold: 0.2 }).observe(box);
       })();
+    })();
+  </script>
+  <script>
+    (function () {
+      // Dynamically upgrade download links to newest published app release (ignoring engine packs,
+      // pre-releases and drafts). Kept self-contained on purpose: tests/docs_release_selector.test.js
+      // finds this block by the comment above and runs it on its own with only fetch, AbortController,
+      // timers and document available. The page script hears the result through window.__inkdocRelease.
+      function run() {
+        var controller = new AbortController();
+        var timeout = setTimeout(function () { controller.abort(); }, 5000);
+        fetch("https://api.github.com/repos/AbdoslamB/inkdoc/releases?per_page=15", { signal: controller.signal })
+          .then(function (res) { return res.ok ? res.json() : null; })
+          .then(function (releases) {
+            clearTimeout(timeout);
+            if (!Array.isArray(releases)) return;
+            var appRelease = releases.find(function (r) {
+              return r && !r.draft && !r.prerelease && typeof r.tag_name === "string" && /^v\d+\.\d+\.\d+$/.test(r.tag_name);
+            });
+            if (!appRelease) return;
+            var tag = appRelease.tag_name;
+            document.querySelectorAll('a[href*="/releases/latest/download/"]').forEach(function (link) {
+              link.href = link.href.replace("/releases/latest/download/", "/releases/download/" + tag + "/");
+            });
+            if (typeof window !== "undefined" && typeof window.__inkdocRelease === "function") window.__inkdocRelease(tag);
+          })
+          .catch(function () { /* keep the /releases/latest/ links */ });
+      }
+      if (typeof requestIdleCallback === "function") requestIdleCallback(run, { timeout: 2500 });
+      else run();
     })();
   </script>
 </body>

@@ -19,6 +19,7 @@ A unified desktop workbench and local REST API that bridges **Microsoft MarkItDo
   <a href="#download"><img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-475569?style=flat-square&labelColor=0d1117" alt="Platform support" /></a>
   <a href="https://github.com/AbdoslamB/InkDoc/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://img.shields.io/github/actions/workflow/status/AbdoslamB/InkDoc/ci.yml?branch=main&style=flat-square&labelColor=0d1117&logo=githubactions&logoColor=white&label=CI" alt="CI status" /></a>
   <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/badge/linter-Ruff-2b2f36?style=flat-square&labelColor=0d1117&logo=ruff&logoColor=white" alt="Linted with Ruff" /></a>
+  <img src="https://img.shields.io/github/downloads/AbdoslamB/InkDoc/total?style=flat-square&label=downloads" alt="Total downloads">
 </p>
 
 <p align="center">

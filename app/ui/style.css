@@ -154,13 +154,54 @@ body {
   transition: background-color var(--transition-normal), color var(--transition-normal);
 }
 
+/* Theme switch circle reveal (View Transitions, where supported; app.js).
+   Only the circle animates: no default cross-fade, and no colour fades
+   inside it. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+html.theme-switching,
+html.theme-switching * {
+  transition: none !important;
+}
+
+/* Layout width (Settings → General → Display). The server puts the saved
+   choice on <html> before first paint; no attribute means Standard. Never
+   transitioned: animating it would re-lay out a long document every frame. */
+:root {
+  --layout-max: 1400px;
+  --preview-scale: 1;
+}
+
+/* Preview text size (Settings → General → Display), one rule per step; the
+   server puts the saved step on <html> before first paint. Every font size in
+   the preview is calc(<former px> * --preview-scale), so 100% is exactly the
+   former size. Never transitioned, for the same reason as the width. */
+html[data-text-size="85"] { --preview-scale: 0.85; }
+html[data-text-size="90"] { --preview-scale: 0.9; }
+html[data-text-size="110"] { --preview-scale: 1.1; }
+html[data-text-size="120"] { --preview-scale: 1.2; }
+html[data-text-size="135"] { --preview-scale: 1.35; }
+html[data-text-size="150"] { --preview-scale: 1.5; }
+
+html[data-layout-width="wide"] {
+  --layout-max: 1920px;
+}
+
+html[data-layout-width="full"] {
+  --layout-max: none;
+}
+
 .app-container {
   display: flex;
   flex-direction: column;
   height: 100%;
   height: 100dvh;
   max-height: 100dvh;
-  max-width: 1400px;
+  max-width: var(--layout-max);
   margin: 0 auto;
   padding: 0 24px;
   /* No overflow:hidden here — .app-header intentionally breaks out to full
@@ -364,26 +405,254 @@ body {
   position: relative;
 }
 
-.settings-popover {
-  display: none;
-  position: absolute;
-  top: calc(100% + 10px);
+/* Settings drawer: fixed to the right edge, from the bottom of the header
+   (--settings-top, set by app.js on open) to the bottom of the window, so the
+   title bar stays draggable and its buttons stay clickable. Below the confirm
+   dialog (500) and toasts (999), which Settings itself opens. */
+:root {
+  --settings-width: clamp(520px, 44vw, 680px);
+}
+
+/* While Settings is open, toasts sit beside it over the dimmed page, so they
+   never cover its buttons. Only where there is room for both: always in the
+   desktop app, whose window is at least 960px wide. */
+@media (min-width: 960px) {
+  .settings-open .toast-notification {
+    right: calc(var(--settings-width) + 24px);
+  }
+}
+
+.settings-scrim {
+  position: fixed;
+  top: var(--settings-top, 64px);
   right: 0;
-  width: 320px;
-  max-width: calc(100vw - 32px);
-  max-height: calc(100vh - 70px);
-  max-height: calc(100dvh - 70px);
-  overflow-y: auto;
+  bottom: 0;
+  left: 0;
+  background-color: rgba(0, 0, 0, 0.35);
+  z-index: 199;
+  animation: fadeIn 0.15s ease;
+}
+
+.settings-scrim[hidden] {
+  display: none;
+}
+
+.settings-drawer {
+  display: none;
+  position: fixed;
+  top: var(--settings-top, 64px);
+  right: 0;
+  bottom: 0;
+  width: var(--settings-width);
+  max-width: 100vw;
+  flex-direction: column;
   background-color: var(--elevated);
-  border: 1px solid var(--rule);
-  border-radius: 12px;
+  border-left: 1px solid var(--rule);
   box-shadow: var(--shadow-popover);
   z-index: 200;
 }
 
-.settings-popover.open {
-  display: block;
-  animation: fadeSlideIn 0.15s ease;
+.settings-drawer:focus {
+  outline: none;
+}
+
+.settings-drawer.open {
+  display: flex;
+  animation: settingsDrawerIn 0.18s ease-out;
+}
+
+@keyframes settingsDrawerIn {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.settings-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px 10px 18px;
+  border-bottom: 1px solid var(--rule);
+  flex-shrink: 0;
+}
+
+.settings-drawer-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.settings-close {
+  width: 30px;
+  height: 30px;
+}
+
+.settings-drawer-body {
+  display: grid;
+  grid-template-columns: 148px minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 8px;
+  border-right: 1px solid var(--rule);
+  background-color: var(--sunken);
+  overflow-y: auto;
+}
+
+.settings-nav-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.settings-nav-item:hover {
+  color: var(--ink);
+  background-color: var(--elevated);
+}
+
+.settings-nav-item[aria-current="page"] {
+  color: var(--mark);
+  background-color: var(--mark-tint);
+}
+
+.settings-nav-item:focus-visible {
+  outline: 2px solid var(--mark);
+  outline-offset: -2px;
+}
+
+/* Shown on Updates while an update is available or on its way. */
+.settings-nav-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: var(--mark);
+  flex-shrink: 0;
+}
+
+.settings-nav-dot[hidden] {
+  display: none;
+}
+
+/* Each pane scrolls on its own, so switching back keeps its place. */
+.settings-pane {
+  grid-column: 2;
+  grid-row: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.settings-pane[hidden] {
+  display: none;
+}
+
+/* About */
+.about-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.about-logo {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+}
+
+.about-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.about-version {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.about-text {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.about-read-more {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--mark);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.about-read-more:hover {
+  text-decoration: underline;
+}
+
+.about-read-more:focus-visible {
+  outline: 2px solid var(--mark);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* Narrow browser tabs (Web Bench; the desktop window is at least 960px wide):
+   full width, with the sections as a row of tabs above the content. */
+@media (max-width: 640px) {
+  :root {
+    --settings-width: 100vw;
+  }
+
+  .settings-drawer {
+    border-left: none;
+  }
+
+  .settings-drawer-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .settings-nav {
+    flex-direction: row;
+    border-right: none;
+    border-bottom: 1px solid var(--rule);
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .settings-nav-item {
+    width: auto;
+    flex-shrink: 0;
+  }
+
+  .settings-pane {
+    grid-column: 1;
+    grid-row: 2;
+  }
 }
 
 @keyframes fadeSlideIn {
@@ -416,6 +685,231 @@ body {
   color: var(--faint);
   margin-top: 6px;
   line-height: 1.45;
+}
+
+/* Save folder (Preferences): where auto-save writes. */
+.save-folder {
+  margin-top: 10px;
+}
+
+.save-folder-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.save-folder-label {
+  font-size: 13px;
+  color: var(--ink);
+}
+
+/* Display (General): layout width as a three-way segmented control. Real
+   radio buttons, hidden with .sr-only, so arrow keys and screen readers
+   treat it as one group. */
+.settings-display {
+  border-top: 1px solid var(--rule);
+}
+
+/* Unrelated groups within a section (Preferences: saving, Docling fallback,
+   PDF check) get a thin line between them, inset by the section's padding so
+   it reads lighter than the full-width line between sections. */
+.settings-group + .settings-group {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--rule);
+}
+
+.layout-width-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.layout-width-label {
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.segmented {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  background-color: var(--sunken);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.segmented-option {
+  position: relative;
+  cursor: pointer;
+}
+
+.segmented-option span {
+  display: block;
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--muted);
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.segmented-option:hover span {
+  color: var(--ink);
+}
+
+.segmented-option input:checked + span {
+  color: var(--mark);
+  background-color: var(--mark-tint);
+}
+
+.segmented-option input:focus-visible + span {
+  outline: 2px solid var(--mark);
+  outline-offset: -2px;
+}
+
+/* Add-ons: one card per add-on, styled like the engine cards. */
+.addons-intro {
+  margin-top: 0;
+  margin-bottom: 12px;
+}
+
+.addon-card {
+  padding: 12px 14px;
+  background-color: var(--sunken);
+  border: 1px solid var(--rule-subtle);
+  border-radius: 8px;
+}
+
+.addon-card + .addon-card {
+  margin-top: 8px;
+}
+
+.addon-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.addon-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.addon-card-meta {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--faint);
+}
+
+/* Preview text size (Display): A- and A+ only, with a live sample below. */
+.text-size {
+  margin-top: 14px;
+}
+
+.text-size-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.text-size-buttons {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  background-color: var(--sunken);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.text-size-btn {
+  min-width: 36px;
+  height: 26px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.text-size-btn:hover:not([aria-disabled="true"]) {
+  color: var(--ink);
+  background-color: var(--elevated);
+}
+
+/* At the smallest or largest size; still focusable, so keyboard focus stays. */
+.text-size-btn[aria-disabled="true"] {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.text-size-btn:focus-visible {
+  outline: 2px solid var(--mark);
+  outline-offset: -2px;
+}
+
+/* A real piece of preview: it uses .markdown-rendered, so it follows
+   --preview-scale exactly as the document does. */
+.markdown-rendered.text-size-sample {
+  height: auto;
+  margin-top: 10px;
+  padding: 10px 12px;
+  background-color: var(--sunken);
+  border: 1px solid var(--rule-subtle);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.markdown-rendered.text-size-sample h3 {
+  margin-top: 0;
+}
+
+.markdown-rendered.text-size-sample p {
+  margin-bottom: 0;
+}
+
+.save-folder-actions {
+  display: inline-flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.save-folder-path {
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* Keep the end of the path (the folder's own name) visible. */
+  direction: rtl;
+  text-align: left;
+}
+
+/* Amber with text, never colour alone; same tones as the missing-text warning. */
+.save-folder-problem {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #fbbf24;
+}
+
+[data-theme="light"] .save-folder-problem {
+  color: #92400e;
 }
 
 .settings-engines {
@@ -601,25 +1095,6 @@ body {
   margin-top: 8px;
 }
 
-.settings-divider {
-  height: 1px;
-  background-color: var(--rule);
-}
-
-.settings-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--muted);
-  font-size: 13px;
-  text-decoration: none;
-  transition: color var(--transition-fast);
-}
-
-.settings-link:hover {
-  color: var(--ink);
-}
-
 .settings-version {
   font-size: 11px;
   color: var(--faint);
@@ -729,6 +1204,7 @@ body {
 
 /* Toggle Switch */
 .toggle-switch {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -738,8 +1214,41 @@ body {
   color: var(--muted);
 }
 
+/* Hidden visually but still a real checkbox, so Tab reaches every switch
+   and Space flips it (display: none took switches out of the keyboard). */
 .toggle-switch input {
-  display: none;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.toggle-switch input:focus-visible + .toggle-slider {
+  outline: 2px solid var(--mark);
+  outline-offset: 2px;
+}
+
+/* Settings used from the keyboard (.keyboard-nav, set by app.js): show the
+   focus ring on :focus. WebKit doesn't treat the drawer's own Tab handling
+   as keyboard focus after a mouse click, so :focus-visible alone would leave
+   macOS and Linux keyboard users without a ring. Same rings as above. */
+.settings-drawer.keyboard-nav :focus {
+  outline: 2px solid var(--mark);
+  outline-offset: 2px;
+}
+
+.settings-drawer.keyboard-nav .settings-nav-item:focus,
+.settings-drawer.keyboard-nav .text-size-btn:focus,
+.settings-drawer.keyboard-nav .segmented-option input:focus + span {
+  outline: 2px solid var(--mark);
+  outline-offset: -2px;
+}
+
+.settings-drawer.keyboard-nav .toggle-switch input:focus + .toggle-slider {
+  outline: 2px solid var(--mark);
+  outline-offset: 2px;
 }
 
 .toggle-slider {
@@ -2025,7 +2534,7 @@ body {
 ═══════════════════════════════ */
 .markdown-rendered {
   color: var(--ink);
-  font-size: 14px;
+  font-size: calc(14px * var(--preview-scale));
   line-height: 1.7;
   height: 100%;
 }
@@ -2043,15 +2552,15 @@ body {
 }
 
 .markdown-rendered h1 {
-  font-size: 24px;
+  font-size: calc(24px * var(--preview-scale));
 }
 
 .markdown-rendered h2 {
-  font-size: 20px;
+  font-size: calc(20px * var(--preview-scale));
 }
 
 .markdown-rendered h3 {
-  font-size: 16px;
+  font-size: calc(16px * var(--preview-scale));
 }
 
 .markdown-rendered p {
@@ -2065,7 +2574,7 @@ body {
 
 .markdown-rendered code {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: calc(12px * var(--preview-scale));
   padding: 2px 6px;
   border-radius: 4px;
   background-color: var(--sunken);
@@ -2085,7 +2594,7 @@ body {
   background: transparent;
   padding: 0;
   color: var(--ink);
-  font-size: 13px;
+  font-size: calc(13px * var(--preview-scale));
 }
 
 /* ─── Syntax highlighting ────────────────────────────────────────────────────
@@ -2199,7 +2708,72 @@ body {
   width: 100%;
   border-collapse: collapse;
   margin: 1.5em 0;
-  font-size: 13px;
+  font-size: calc(13px * var(--preview-scale));
+}
+
+/* Each table scrolls sideways on its own (app.js wraps it), so a wide table
+   no longer moves the whole document. */
+.markdown-rendered .table-scroll {
+  overflow-x: auto;
+  margin: 1.5em 0;
+}
+
+.markdown-rendered .table-scroll > table {
+  margin: 0;
+}
+
+/* Pictures fit the preview instead of widening it. */
+.markdown-rendered img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Running text keeps today's longest line (the Standard preview is under
+   1000px wide) when Wide or Full gives tables, code and images more room.
+   Headings are left out so their rules still span the page. */
+.markdown-rendered > p,
+.markdown-rendered > ul,
+.markdown-rendered > ol,
+.markdown-rendered > dl,
+.markdown-rendered > blockquote {
+  max-width: calc(1000px * var(--preview-scale));
+}
+
+/* Markdown puts a picture inside a paragraph; that paragraph is not text. */
+.markdown-rendered > p:has(> img) {
+  max-width: none;
+}
+
+/* Math formulas (Settings → Add-ons). Until KaTeX has drawn it, or if it
+   can't, a formula shows its exact LaTeX in the code font. KaTeX sizes
+   itself in em, so drawn formulas follow the preview text size. */
+.markdown-rendered .math-tex {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  color: var(--muted);
+}
+
+.markdown-rendered .math-tex.math-done {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+.markdown-rendered .math-block {
+  display: block;
+  margin: 1em 0;
+  text-align: center;
+  white-space: pre-wrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.markdown-rendered .math-block.math-done {
+  white-space: normal;
+}
+
+.markdown-rendered .math-block .katex-display {
+  margin: 0;
 }
 
 .markdown-rendered th,
@@ -2228,7 +2802,7 @@ body {
   border: none;
   outline: none;
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: calc(13px * var(--preview-scale));
   color: var(--ink);
   line-height: 1.6;
   resize: none;
@@ -2822,7 +3396,9 @@ input[type="url"] {
   .chevron-icon,
   .dropzone-section.is-collapsed .chevron-icon,
   .app-dialog-overlay,
-  .app-dialog {
+  .app-dialog,
+  .settings-scrim,
+  .settings-drawer.open {
     transition: opacity 80ms ease !important;
     animation: none !important;
     transform: none !important;

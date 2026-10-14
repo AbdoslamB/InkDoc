@@ -79,6 +79,34 @@ jobs:
         if: runner.os == 'Linux'
         run: node tests/desktop_download_ui.test.js
 
+      - name: Test save folder setting UI
+        if: runner.os == 'Linux'
+        run: node tests/save_folder_ui.test.js
+
+      - name: Test preview links and release notes UI
+        if: runner.os == 'Linux'
+        run: node tests/preview_links_ui.test.js
+
+      - name: Test theme toggle UI
+        if: runner.os == 'Linux'
+        run: node tests/theme_toggle_ui.test.js
+
+      - name: Test Settings drawer UI
+        if: runner.os == 'Linux'
+        run: node tests/settings_drawer_ui.test.js
+
+      - name: Test layout width setting UI
+        if: runner.os == 'Linux'
+        run: node tests/layout_width_ui.test.js
+
+      - name: Test preview text size UI
+        if: runner.os == 'Linux'
+        run: node tests/text_size_ui.test.js
+
+      - name: Test math formulas UI
+        if: runner.os == 'Linux'
+        run: node tests/math_render_ui.test.js
+
       # installer.iss is otherwise only compiled by release.yml, after the tag is
       # pushed, so a mistake in its Pascal [Code] cost a version number. Compile
       # it here against a stand-in bundle (only the script is being checked).

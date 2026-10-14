@@ -95,7 +95,23 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "glm_ocr_download_source": "auto",
     "glm_ocr_catalogue_seen": 0,
     "glm_ocr_measured_spp": {},
+    # Auto-save folder; "" is Downloads. Set only through the desktop folder
+    # dialog (app/core/save_location.py), never through POST /settings.
+    "save_dir": "",
+    # How much of a wide window the UI uses: "standard" (1400px, as before),
+    # "wide" (1920px) or "full". Kept here rather than in browser storage, which
+    # the desktop app's web view does not keep between launches.
+    "layout_width": "standard",
+    # Text size of the document preview (Rendered and Raw tabs), in percent.
+    # Only the interface's own steps are accepted; 100 is the size used before.
+    "preview_text_size": 100,
+    # Built-in add-on (Settings → Add-ons): draw LaTeX math in the preview with
+    # the bundled KaTeX. Off means the preview is parsed exactly as before.
+    "render_math": True,
 }
+
+LAYOUT_WIDTHS = ("standard", "wide", "full")
+PREVIEW_TEXT_SIZES = (85, 90, 100, 110, 120, 135, 150)
 
 GLM_OCR_ENGINE = "glm_ocr"
 

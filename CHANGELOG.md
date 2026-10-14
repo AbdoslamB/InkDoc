@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - TBD
+
+### Changed
+- **Settings** now opens as a wider panel on the right with four sections:
+  **General**, **Engines**, **Updates** and **About**. "Check for updates
+  daily" has moved to Updates, and About has a short description of InkDoc.
+  The panel closes from the gear, the **X**, **Esc** or a click outside it.
+  The title bar stays usable while it is open, and dragging a file onto the
+  window closes it so the file lands in the drop zone. Prompts to install or
+  fix an engine open it on Engines. While it is open, notifications appear
+  beside it instead of over its buttons.
+- In Settings → General, thin lines now separate the unrelated preferences
+  (saving, the Docling fallback and the PDF check), so each description sits
+  clearly with its own switch.
+- Switching between the dark and light theme now reveals the new theme as
+  a circle growing from the theme button, as on the website. Where the
+  system's web engine doesn't support it, or "reduce motion" is on, the
+  theme switches instantly as before.
+
+### Security
+- In the desktop app, links inside converted documents and release notes no
+  longer open inside InkDoc's window: web links open in your browser, and
+  other links are ignored.
+- The page can now call only the nine desktop functions it uses; nothing else
+  in the desktop app is reachable from page scripts.
+- If the save folder's location can't be checked, files are saved to
+  Downloads instead.
+- Release notes are shown as plain text if the HTML sanitiser is unavailable.
+- The preview's HTML sanitiser, DOMPurify, is updated from 3.1.6 to 3.4.16,
+  picking up the upstream security fixes released since.
+
+### Added
+- **Save folder** setting (Settings → General): choose where auto-save
+  writes, instead of always using Downloads. **Change…** opens your system's
+  folder dialog, the choice is remembered, and the desktop **Download** button's
+  Save dialog opens there too. If the folder is missing or can't be written to
+  (for example an unplugged drive), files are saved to Downloads and InkDoc
+  says so; the folder is used again once it is back. The folder can only be
+  chosen in the desktop app: no web page or API request can change it. API
+  responses report a fallback in the new `save_fallback` field
+  ([#6](https://github.com/AbdoslamB/InkDoc/issues/6)).
+- **Layout width** setting (Settings → General → Display): **Standard** (up to
+  1,400 px, as before), **Wide** (up to 1,920 px) or **Full** (the whole
+  window). On large screens, tables, code and images get the extra room while
+  paragraphs keep a readable line length; windows narrower than 1,400 px look
+  the same with any choice. It is remembered between launches of the desktop
+  app and applied before the window first draws, so the layout never jumps.
+  `GET`/`POST /settings` report and accept it as `layout_width`.
+- **Preview text size** (Settings → General → Display): **A−** and **A+** make
+  the converted document's text smaller or larger in seven steps (85% to 150%),
+  in both the Rendered and Raw tabs, with a live sample right below the
+  buttons. Headings, code and tables keep their proportions, and 100% is
+  exactly the size used before. It is remembered between launches like the
+  layout width; `GET`/`POST /settings` use `preview_text_size` (85, 90, 100,
+  110, 120, 135 or 150).
+- **Math formulas** in the preview, and a new **Settings → Add-ons** section
+  where it can be switched off. LaTeX from Docling's formula recognition and
+  GLM-OCR (`$…$`, `$$…$$`, `\(…\)`, `\[…\]`) is drawn as real formulas
+  with KaTeX instead of showing as mangled text. KaTeX is bundled, works
+  offline and is loaded only for documents that contain math, so other
+  documents, startup and saved files are unchanged. Prices such as $5 and
+  code are left alone; if ordinary text with $ signs is ever shown as math,
+  turn **Math formulas** off. `GET`/`POST /settings` use `render_math`.
+
+### Fixed
+- A wide table in the preview now scrolls sideways on its own instead of
+  moving the whole document, and large pictures shrink to fit the preview.
+- Every switch in Settings can now be reached with Tab and flipped with
+  Space, and keyboard focus in Settings is visible on macOS and Linux too.
+
 ## [1.1.1] - 2026-10-14
 
 ### Fixed
@@ -160,7 +230,8 @@ Initial release.
 - Windows installer (`inkdoc-setup.exe`), portable executable (`inkdoc.exe`) and
   portable ZIP; macOS (Apple Silicon) bundle; Linux (x86_64) bundle.
 
-[Unreleased]: https://github.com/AbdoslamB/InkDoc/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/AbdoslamB/InkDoc/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/AbdoslamB/InkDoc/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/AbdoslamB/InkDoc/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/AbdoslamB/InkDoc/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/AbdoslamB/InkDoc/releases/tag/v1.0.0

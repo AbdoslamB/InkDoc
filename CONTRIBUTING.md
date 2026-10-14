@@ -66,7 +66,8 @@ The codebase follows a domain-driven structure:
 inkdoc/
 ├── app/
 │   ├── core/                  # Conversion business logic & engine adapters
-│   │   ├── converter.py       # MarkItDown wrapper, option mapping & Downloads auto-save
+│   │   ├── converter.py       # MarkItDown wrapper, option mapping & collision-safe auto-save
+│   │   ├── save_location.py   # Save folder setting (Downloads by default) & its fallback
 │   │   ├── queue_model.py     # EngineKind enum, QueueItem data definitions
 │   │   └── engines/           # IBM Docling, Markit & GLM-OCR engine adapters
 │   ├── server/                # Embedded FastAPI backend
@@ -151,6 +152,14 @@ node tests/docs_release_selector.test.js
 node tests/enrichment_addon_ui.test.js
 node tests/glm_ocr_ui.test.js
 node tests/preview_word_count.test.js
+node tests/desktop_download_ui.test.js
+node tests/save_folder_ui.test.js
+node tests/preview_links_ui.test.js
+node tests/theme_toggle_ui.test.js
+node tests/settings_drawer_ui.test.js
+node tests/layout_width_ui.test.js
+node tests/text_size_ui.test.js
+node tests/math_render_ui.test.js
 
 # 5. Verify code style with ruff
 ruff check .
@@ -180,6 +189,17 @@ Any pull request that adds or upgrades a dependency, a model, or a bundled or do
 4. **Flag copyleft, restricted or unclear licenses.** If anything is GPL, LGPL or AGPL, restricts commercial use (for example a non-commercial or research-only model license), or has unclear or custom terms, say so in the pull request description so a maintainer can decide. Don't add it quietly.
 
 Dependabot pull requests need the same check before merging.
+
+### Bundled UI libraries (`app/ui/vendor/`)
+
+The page's JavaScript, CSS and fonts (marked, DOMPurify, highlight.js, KaTeX) are bundled, never fetched at runtime, and pinned by SHA-256 in [`app/ui/vendor/VENDOR.json`](app/ui/vendor/VENDOR.json). Dependabot does not see them. To update one:
+
+1. Download the exact version (`npm pack <name>@<version>`) into an empty folder and check that the tarball's sha512 matches `npm view <name>@<version> dist.integrity`. Prefer a release that has been out for at least two weeks.
+2. Copy only the files `VENDOR.json` lists for that library, unchanged.
+3. Update the library's `version`, `upstream_integrity` and file hashes in `VENDOR.json`, its row in `THIRD_PARTY_NOTICES.md`, and its file in `LICENSES/` (see above).
+4. Run `python -m pytest tests/test_vendor_manifest.py`, then the UI tests and a manual look at the preview.
+
+Files in `app/ui/vendor/` are never line-ending converted (see `.gitattributes`), so their hashes match on every OS.
 
 ---
 

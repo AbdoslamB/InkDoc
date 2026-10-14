@@ -19,7 +19,7 @@ import tempfile
 import threading
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 logger = logging.getLogger("inkdoc.server")
@@ -57,15 +57,20 @@ try:
     from app.core.converter import (
         SUPPORTED_EXTENSIONS,
         ConversionOptions,
-        auto_save_markdown,
         convert_item,
         get_markitdown_version,
     )
     from app.core.download_utils import SecurityError
-    from app.core.engine_manager import EngineManager, EngineStatus
+    from app.core.engine_manager import (
+        LAYOUT_WIDTHS,
+        PREVIEW_TEXT_SIZES,
+        EngineManager,
+        EngineStatus,
+    )
     from app.core.engines.docling_engine import get_docling_version, is_docling_available
     from app.core.engines.markit_engine import get_markit_version, is_markit_available
     from app.core.queue_model import EngineKind, QueueItem, SourceKind
+    from app.core.save_location import folder_state, save_markdown
     from app.core.security import SSRFValidationError, validate_url_for_ssrf
     from app.core.url_fetcher import (
         UrlFetchError,
@@ -218,9 +223,17 @@ def _perform_conversion(
         job.raise_if_cancelled()
     saved_path_str: str | None = None
     if save_to_downloads:
-        saved_path = auto_save_markdown(item, markdown_text)
-        saved_path_str = str(saved_path)
+        saved_path_str = _auto_save(item, markdown_text, options)
     return markdown_text, saved_path_str
+
+
+def _auto_save(item: QueueItem, markdown_text: str, options: ConversionOptions) -> str:
+    """Write to the save folder (Downloads if that fails) and note any fallback on `options`."""
+    saved_path, fallback = save_markdown(item, markdown_text)
+    if fallback:
+        options.save_fallback = fallback
+        options.engine_warnings = [*options.engine_warnings, fallback]
+    return str(saved_path)
 
 
 def _header_value(text: str) -> str:
@@ -347,8 +360,7 @@ async def _convert_auto(
         saved_path_str: str | None = None
         if save_to_downloads:
             job.set_phase("saving", "Saving…")
-            saved_path = await asyncio.to_thread(auto_save_markdown, item, markdown_text)
-            saved_path_str = str(saved_path)
+            saved_path_str = await asyncio.to_thread(_auto_save, item, markdown_text, options)
     return markdown_text, saved_path_str
 
 
@@ -382,6 +394,8 @@ def _conversion_payload(options: ConversionOptions, engine_kind: EngineKind) -> 
         # Notes that are not failures, e.g. a GLM-OCR page cut short because the
         # model repeated itself, or GPU acceleration falling back to the CPU.
         "warnings": list(getattr(options, "engine_warnings", None) or []),
+        # Auto-save wrote to Downloads because the chosen save folder failed.
+        "save_fallback": getattr(options, "save_fallback", None),
     }
 
 
@@ -397,6 +411,9 @@ def _markdown_response(markdown_text: str, payload: dict[str, Any]) -> PlainText
         resp.headers["X-Auto-Reason"] = _header_value(payload["auto"]["reason"])
     if payload.get("warnings"):
         resp.headers["X-Engine-Warnings"] = _header_value(" | ".join(payload["warnings"]))
+    if payload.get("save_fallback"):
+        # Its own header too: in the joined warnings it could be cut off.
+        resp.headers["X-Save-Fallback"] = _header_value(payload["save_fallback"])
     quality = payload["quality"]
     if quality:
         resp.headers["X-Quality-Warning"] = str(bool(quality.get("warning"))).lower()
@@ -740,6 +757,27 @@ class SettingsPayload(BaseModel):
             "as fallback) or 'mirror_only' (for networks that block Hugging Face)."
         ),
     )
+    layout_width: Literal["standard", "wide", "full"] | None = Field(
+        default=None,
+        description=(
+            "How much of a wide window the UI uses: 'standard' (up to 1400px), 'wide' "
+            "(up to 1920px) or 'full'. Applied from the next page load on."
+        ),
+    )
+    preview_text_size: Literal[85, 90, 100, 110, 120, 135, 150] | None = Field(
+        default=None,
+        description=(
+            "Text size of the document preview in percent: 85, 90, 100 (the default), "
+            "110, 120, 135 or 150. Applied from the next page load on."
+        ),
+    )
+    render_math: bool | None = Field(
+        default=None,
+        description=(
+            r"Draw LaTeX math ($...$, $$...$$, \(...\), \[...\]) in the preview with the "
+            "bundled KaTeX (default true). Never changes saved files or API output."
+        ),
+    )
 
 
 # Resource and DoS protection limits
@@ -830,6 +868,40 @@ async def _save_upload_to_temp(file: UploadFile, ext: str) -> str:
     return tmp_path
 
 
+def _initial_layout_width() -> str:
+    """The saved layout width, or "standard" for anything unexpected.
+
+    It is written into a script on the page, so only one of the known values
+    may ever come out of here, whatever a hand-edited settings.json holds.
+    """
+    try:
+        value = EngineManager.get_instance().get_settings().get("layout_width")
+    except Exception:
+        return "standard"
+    return value if value in LAYOUT_WIDTHS else "standard"
+
+
+def _initial_preview_text_size() -> int:
+    """The saved preview text size, or 100 for anything unexpected (see above)."""
+    try:
+        value = EngineManager.get_instance().get_settings().get("preview_text_size")
+    except Exception:
+        return 100
+    # bool is an int in Python; True must not pass for 1.
+    if isinstance(value, bool) or value not in PREVIEW_TEXT_SIZES:
+        return 100
+    return int(value)
+
+
+def _initial_render_math() -> str:
+    """'off' only when math rendering was switched off; anything else is 'on'."""
+    try:
+        value = EngineManager.get_instance().get_settings().get("render_math")
+    except Exception:
+        return "on"
+    return "off" if value is False else "on"
+
+
 def _serve_bench_html() -> HTMLResponse:
     index_file = UI_DIR / "index.html"
     if index_file.exists():
@@ -851,11 +923,19 @@ def _serve_bench_html() -> HTMLResponse:
             if custom_titlebar
             else ""
         )
+        # The layout width and preview text size likewise, or the page would
+        # render at the defaults and then jump.
+        layout_width = _initial_layout_width()
+        text_size = _initial_preview_text_size()
+        render_math = _initial_render_math()
         token_injection = (
             f'<script id="inkdoc-session-token" nonce="{nonce}">'
             f'window.__INKDOC_SESSION_TOKEN__ = "{SESSION_TOKEN}";'
             f'window.__INKDOC_CUSTOM_TITLEBAR__ = {"true" if custom_titlebar else "false"};'
             f'{titlebar_class}'
+            f"document.documentElement.dataset.layoutWidth = '{layout_width}';"
+            f"document.documentElement.dataset.textSize = '{text_size}';"
+            f"document.documentElement.dataset.renderMath = '{render_math}';"
             f'</script>'
         )
         if "<head>" in html_content:
@@ -1250,6 +1330,9 @@ def get_settings():
     """Retrieve current user settings, plus anything startup had to correct."""
     settings = dict(EngineManager.get_instance().get_settings())
     settings["addon_reconciliation"] = _ADDON_RECONCILIATION
+    # The folder auto-save writes to now. Read-only here: it is chosen in the
+    # desktop app's folder dialog, never through POST /settings.
+    settings["save_folder"] = folder_state()
     return settings
 
 

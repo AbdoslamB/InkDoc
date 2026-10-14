@@ -485,6 +485,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const updateErrorBox          = document.getElementById("updateErrorBox");
   const updateErrorMsg          = document.getElementById("updateErrorMsg");
   const dailyUpdateToggle       = document.getElementById("dailyUpdateToggle");
+  const settingsUpdateDot       = document.getElementById("settingsUpdateDot");
+  const aboutVersion            = document.getElementById("aboutVersion");
 
   let updatePollInterval = null;
   let currentUpdateState = null;
@@ -539,30 +541,24 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // Opens the Settings popover from anywhere in the page. When called from a
-  // click, that click must not reach the document-level "click outside closes
-  // Settings" handler, which would shut the popover again straight away.
-  function openSettings(e) {
-    if (e && typeof e.stopPropagation === "function") e.stopPropagation();
-    settingsPopover.classList.add("open");
-    loadSettings();
-    refreshAddonStatus();
-    refreshGlm(true);
-  }
-
   // Bind unified pill clicks
   allEnginePills.forEach((btn) => {
     if (btn) {
       btn.addEventListener("click", (e) => {
         if (btn.dataset.engine === "docling" && btn.classList.contains("is-installable")) {
-          openSettings(e);
+          openSettings(e, "engines");
           showToast("Docling is not installed yet. Click 'Install Docling' in Settings to enable it.", "info");
           return;
         }
         if (btn.dataset.engine === "glm_ocr" && btn.classList.contains("is-installable")) {
-          openSettings(e);
+          openSettings(e, "engines");
           const card = document.getElementById("engineCardGlmOcr");
-          if (card) card.open = true;
+          if (card) {
+            card.open = true;
+            // Its buttons (Download, Verify…) to the middle of the pane: the card
+            // is the last and tallest, and at the bottom the toast would cover them.
+            (card.querySelector(".engine-actions") || card).scrollIntoView({ block: "center" });
+          }
           showToast(
             glmStatus && glmStatus.installed
               ? "GLM-OCR didn't pass its self-test. Run it again in Settings."
@@ -815,23 +811,165 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // ─── Settings Popover ────────────────────────────────────────────────────
+  // ─── Settings Drawer ─────────────────────────────────────────────────────
+  // A panel on the right, below the header, with four sections. The gear, the
+  // X, Escape and a click outside close it; clicks in the confirm dialog and in
+  // toasts do not, since Settings opens those itself and they sit above it.
+  // Nothing here runs while it is closed.
+  const settingsScrim    = document.getElementById("settingsScrim");
+  const settingsCloseBtn = document.getElementById("settingsCloseBtn");
+  const settingsNav      = document.getElementById("settingsNav");
+  const settingsNavItems = Array.from(document.querySelectorAll("[data-settings-section]"));
+  const settingsPanes    = Array.from(document.querySelectorAll("[data-settings-pane]"));
+  const appHeader        = document.querySelector(".app-header");
+  const SETTINGS_FOCUSABLE = 'button, [href], input, select, textarea, summary, [tabindex]:not([tabindex="-1"])';
+  let settingsSection = "general";
+  let settingsReturnFocus = null;
+
+  function isSettingsOpen() {
+    return settingsPopover.classList.contains("open");
+  }
+
+  // The drawer starts where the header ends, so the title bar stays usable.
+  // Not rounded: at 125% or 150% display scaling the header ends between
+  // pixels, and rounding would leave a hairline gap or overlap.
+  function placeSettings() {
+    if (!appHeader) return;
+    const top = Math.max(0, appHeader.getBoundingClientRect().bottom);
+    document.documentElement.style.setProperty("--settings-top", `${top}px`);
+  }
+
+  function showSettingsSection(name) {
+    if (!settingsPanes.some((pane) => pane.dataset.settingsPane === name)) return;
+    settingsSection = name;
+    settingsPanes.forEach((pane) => { pane.hidden = pane.dataset.settingsPane !== name; });
+    settingsNavItems.forEach((item) => {
+      if (item.dataset.settingsSection === name) item.setAttribute("aria-current", "page");
+      else item.removeAttribute("aria-current");
+    });
+  }
+
+  // Opens Settings from anywhere in the page: on `section` if given (callers
+  // outside the gear are all about an engine), otherwise where it was left.
+  // When called from a click, that click must not reach the document-level
+  // "click outside closes Settings" handler, which would shut it straight away.
+  function openSettings(e, section) {
+    if (e && typeof e.stopPropagation === "function") e.stopPropagation();
+    if (section) showSettingsSection(section);
+    if (!isSettingsOpen()) {
+      settingsReturnFocus = document.activeElement;
+      placeSettings();
+      settingsPopover.classList.add("open");
+      document.documentElement.classList.add("settings-open"); // moves toasts beside it
+      settingsScrim.hidden = false;
+      settingsBtn.setAttribute("aria-expanded", "true");
+      const current = settingsNavItems.find((item) => item.dataset.settingsSection === settingsSection);
+      (current || settingsPopover).focus();
+    }
+    loadSettings();
+    fetchUpdateStatus();
+    refreshAddonStatus();
+    refreshGlm(true);
+  }
+
+  // restoreFocus is false when the user has moved on (clicked elsewhere, or
+  // dragged a file in): focus then stays where they put it.
+  function closeSettings({ restoreFocus = true } = {}) {
+    if (!isSettingsOpen()) return;
+    settingsPopover.classList.remove("open", "keyboard-nav");
+    document.documentElement.classList.remove("settings-open");
+    settingsScrim.hidden = true;
+    settingsBtn.setAttribute("aria-expanded", "false");
+    const back = settingsReturnFocus;
+    settingsReturnFocus = null;
+    if (!restoreFocus) return;
+    const usable = back && back !== document.body && back.isConnected && back.getClientRects().length > 0;
+    (usable ? back : settingsBtn).focus();
+  }
+
   settingsBtn.addEventListener("click", (e) => {
     e.stopPropagation();
-    const isOpen = settingsPopover.classList.toggle("open");
-    if (isOpen) {
-      loadSettings();
-      fetchUpdateStatus();
-      refreshAddonStatus();
-      refreshGlm(true);
+    if (isSettingsOpen()) closeSettings();
+    else openSettings(e);
+  });
+
+  settingsCloseBtn.addEventListener("click", () => closeSettings());
+
+  // composedPath() is fixed when the click starts, so a button that re-renders
+  // its own card still counts as inside.
+  document.addEventListener("click", (e) => {
+    if (!isSettingsOpen()) return;
+    const path = typeof e.composedPath === "function" ? e.composedPath() : [e.target];
+    const keepOpen = [settingsPopover, settingsBtn, appDialogOverlay, toastNotification];
+    if (path.some((el) => keepOpen.includes(el))) return;
+    closeSettings({ restoreFocus: e.target === settingsScrim });
+  });
+
+  // A file dragged towards the page is meant for the drop zone under the scrim.
+  settingsScrim.addEventListener("dragenter", () => closeSettings({ restoreFocus: false }));
+
+  // While the confirm dialog is up, Escape and Tab belong to it.
+  // Tab is always moved here rather than left to the web engine: with macOS's
+  // "Keyboard navigation" off (the default), WebKit's own Tab skips buttons and
+  // would jump to the URL box behind the drawer.
+  document.addEventListener("keydown", (e) => {
+    if (!isSettingsOpen() || !appDialogOverlay.hidden) return;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeSettings();
+    } else if (e.key === "Tab") {
+      // A radio group is one stop, on its selected option, as browsers do.
+      const focusables = Array.from(settingsPopover.querySelectorAll(SETTINGS_FOCUSABLE))
+        .filter((el) => !el.disabled && el.getClientRects().length > 0 && !(el.type === "radio" && !el.checked));
+      if (focusables.length === 0) return;
+      e.preventDefault();
+      const idx = focusables.indexOf(document.activeElement);
+      const last = focusables.length - 1;
+      const next = e.shiftKey
+        ? (idx <= 0 ? last : idx - 1)
+        : (idx < 0 || idx === last ? 0 : idx + 1);
+      settingsPopover.classList.add("keyboard-nav");
+      focusables[next].focus();
     }
   });
 
-  document.addEventListener("click", (e) => {
-    if (!settingsPopover.contains(e.target) && e.target !== settingsBtn) {
-      settingsPopover.classList.remove("open");
-    }
+  // WebKit shows :focus-visible for focus moved by script only if the
+  // previous focus showed it too, so after a mouse click the Tab handling
+  // above would never show a focus ring on macOS or Linux. While the drawer
+  // is used from the keyboard it carries .keyboard-nav, and the CSS shows the
+  // ring on :focus; a click or tap takes it away again.
+  settingsPopover.addEventListener("pointerdown", () => settingsPopover.classList.remove("keyboard-nav"));
+
+  // Focused on click too: WebKit on macOS doesn't focus clicked buttons, and
+  // the arrow keys below start from the focused item.
+  settingsNavItems.forEach((item) => {
+    item.addEventListener("click", () => {
+      showSettingsSection(item.dataset.settingsSection);
+      item.focus();
+    });
   });
+
+  // Arrow keys move between sections, as in the engine pill group. They start
+  // from the focused item, which Tab can move away from the shown section.
+  settingsNav.addEventListener("keydown", (e) => {
+    const keys = ["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"];
+    if (!keys.includes(e.key)) return;
+    e.preventDefault();
+    let idx = settingsNavItems.indexOf(document.activeElement);
+    if (idx < 0) idx = settingsNavItems.findIndex((item) => item.dataset.settingsSection === settingsSection);
+    if (e.key === "Home") idx = 0;
+    else if (e.key === "End") idx = settingsNavItems.length - 1;
+    else if (e.key === "ArrowRight" || e.key === "ArrowDown") idx = (idx + 1) % settingsNavItems.length;
+    else idx = (idx - 1 + settingsNavItems.length) % settingsNavItems.length;
+    showSettingsSection(settingsNavItems[idx].dataset.settingsSection);
+    settingsPopover.classList.add("keyboard-nav");
+    settingsNavItems[idx].focus();
+  });
+
+  window.addEventListener("resize", () => {
+    if (isSettingsOpen()) placeSettings();
+  });
+  // ─── End settings drawer ─────────────────────────────────────────────────
 
   // ─── Progress Polling for Engine Installation ────────────────────────────
   async function pollDoclingProgress() {
@@ -1802,6 +1940,11 @@ document.addEventListener("DOMContentLoaded", () => {
         if (doclingFormulaEnrichmentToggle && !doclingFormulaEnrichmentToggle.disabled) {
           doclingFormulaEnrichmentToggle.checked = Boolean(s.docling_formula_enrichment);
         }
+        if (s.layout_width !== undefined) syncLayoutWidth(s.layout_width);
+        if (s.preview_text_size !== undefined) syncTextSize(s.preview_text_size);
+        if (s.render_math !== undefined) syncRenderMath(s.render_math);
+        // Last, so nothing in the save folder row can stop the toggles above.
+        renderSaveFolder(s.save_folder);
       }
     } catch (_) {}
   }
@@ -1926,6 +2069,134 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  // ─── Layout width ────────────────────────────────────────────────────────
+  // How much of a wide window InkDoc uses (Settings → General → Display). The
+  // server puts the saved choice on <html> before first paint, so the page
+  // never jumps on load. It is saved in settings.json, not browser storage,
+  // which the desktop app's web view clears on every launch. A change applies
+  // at once and is undone if it can't be saved.
+  const LAYOUT_WIDTHS = ["standard", "wide", "full"];
+  const layoutWidthRadios = Array.from(document.querySelectorAll('input[name="layoutWidth"]'));
+  let layoutWidth = applyLayoutWidth(document.documentElement.dataset.layoutWidth);
+  let layoutWidthSaves = 0; // newest save wins; loadSettings waits for it
+
+  function applyLayoutWidth(value) {
+    const width = LAYOUT_WIDTHS.includes(value) ? value : "standard";
+    if (document.documentElement.dataset.layoutWidth !== width) {
+      document.documentElement.dataset.layoutWidth = width;
+    }
+    layoutWidthRadios.forEach((radio) => { radio.checked = radio.value === width; });
+    return width;
+  }
+
+  // From GET /settings, each time Settings opens. Skipped while a change is
+  // being saved, so a slower read can't put the old choice back.
+  function syncLayoutWidth(value) {
+    if (layoutWidthSaves === 0) layoutWidth = applyLayoutWidth(value);
+  }
+
+  layoutWidthRadios.forEach((radio) => {
+    radio.addEventListener("change", async () => {
+      if (!radio.checked || radio.value === layoutWidth) return;
+      const previous = layoutWidth;
+      layoutWidth = applyLayoutWidth(radio.value);
+      const save = ++layoutWidthSaves;
+      let saved = false;
+      try {
+        const resp = await fetchWithToken(`${apiBase}/settings`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ layout_width: layoutWidth }),
+        });
+        saved = resp.ok;
+      } catch (_) {}
+      if (save !== layoutWidthSaves) return; // a newer choice is on its way
+      layoutWidthSaves = 0;
+      if (!saved) {
+        layoutWidth = applyLayoutWidth(previous);
+        showToast("Couldn't save the layout width.", "error");
+      }
+    });
+  });
+  // ─── End layout width ────────────────────────────────────────────────────
+
+  // ─── Preview text size ───────────────────────────────────────────────────
+  // A− and A+ (Settings → General → Display) step through seven sizes for the
+  // document preview, Rendered and Raw. As with the layout width, the server
+  // puts the saved step on <html> before first paint and settings.json keeps
+  // it. A click applies at once (the live sample and the preview follow through
+  // CSS); the save waits until the clicking stops, so several clicks are one
+  // write, and only one save is ever in flight.
+  const TEXT_SIZES = [85, 90, 100, 110, 120, 135, 150];
+  const TEXT_SIZE_SAVE_DELAY_MS = 400;
+  const btnTextSmaller = document.getElementById("btnTextSmaller");
+  const btnTextLarger  = document.getElementById("btnTextLarger");
+  const textSizeStatus = document.getElementById("textSizeStatus");
+  let textSize = applyTextSize(Number(document.documentElement.dataset.textSize));
+  let textSizeSaved = textSize; // what settings.json is known to hold
+  let textSizeTimer = null;
+  let textSizeSaving = false;
+
+  // aria-disabled rather than disabled at the ends: a disabled button would
+  // drop keyboard focus the moment it reached the limit.
+  function applyTextSize(value) {
+    const size = TEXT_SIZES.includes(value) ? value : 100;
+    if (document.documentElement.dataset.textSize !== String(size)) {
+      document.documentElement.dataset.textSize = String(size);
+    }
+    if (btnTextSmaller) btnTextSmaller.setAttribute("aria-disabled", String(size === TEXT_SIZES[0]));
+    if (btnTextLarger) btnTextLarger.setAttribute("aria-disabled", String(size === TEXT_SIZES[TEXT_SIZES.length - 1]));
+    return size;
+  }
+
+  function stepTextSize(direction) {
+    const idx = TEXT_SIZES.indexOf(textSize) + direction;
+    if (idx < 0 || idx >= TEXT_SIZES.length) return;
+    textSize = applyTextSize(TEXT_SIZES[idx]);
+    // No size is shown on screen; screen readers are told.
+    if (textSizeStatus) textSizeStatus.textContent = `Preview text size ${textSize}%`;
+    clearTimeout(textSizeTimer);
+    textSizeTimer = setTimeout(saveTextSize, TEXT_SIZE_SAVE_DELAY_MS);
+  }
+
+  async function saveTextSize() {
+    textSizeTimer = null;
+    if (textSizeSaving) {
+      textSizeTimer = setTimeout(saveTextSize, TEXT_SIZE_SAVE_DELAY_MS);
+      return;
+    }
+    const value = textSize;
+    if (value === textSizeSaved) return;
+    textSizeSaving = true;
+    let saved = false;
+    try {
+      const resp = await fetchWithToken(`${apiBase}/settings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ preview_text_size: value }),
+      });
+      saved = resp.ok;
+    } catch (_) {}
+    textSizeSaving = false;
+    if (saved) {
+      textSizeSaved = value;
+    } else if (textSize === value && !textSizeTimer) {
+      // Not moved on since: show what is actually saved again.
+      textSize = applyTextSize(textSizeSaved);
+      showToast("Couldn't save the text size.", "error");
+    }
+  }
+
+  // From GET /settings, each time Settings opens; never over a pending change.
+  function syncTextSize(value) {
+    if (textSizeTimer || textSizeSaving) return;
+    textSize = textSizeSaved = applyTextSize(Number(value));
+  }
+
+  if (btnTextSmaller) btnTextSmaller.addEventListener("click", () => stepTextSize(-1));
+  if (btnTextLarger) btnTextLarger.addEventListener("click", () => stepTextSize(1));
+  // ─── End preview text size ───────────────────────────────────────────────
+
   // ─── Update Management UI ─────────────────────────────────────────────────
   function formatBytes(bytes) {
     if (!bytes || bytes <= 0) return "0 B";
@@ -1942,8 +2213,14 @@ document.addEventListener("DOMContentLoaded", () => {
     if (appCurrentVersionBadge) {
       appCurrentVersionBadge.textContent = `v${s.current_version || "—"}`;
     }
+    if (aboutVersion) aboutVersion.textContent = `Version ${s.current_version || "—"}`;
 
     const state = s.state || "idle";
+    // Marks Settings → Updates while an update waits or is on its way. Left as
+    // is while checking, so "Check again" doesn't make it blink.
+    if (settingsUpdateDot && state !== "checking") {
+      settingsUpdateDot.hidden = !["available", "downloading", "verifying", "ready_to_install", "ready_to_reveal"].includes(state);
+    }
 
     if (state === "checking") {
       if (btnCheckUpdates) btnCheckUpdates.disabled = true;
@@ -1985,9 +2262,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
       if (s.release_notes && s.release_notes.trim()) {
         try {
-          const rawHtml = marked.parse(s.release_notes);
-          const cleanHtml = window.DOMPurify ? window.DOMPurify.sanitize(rawHtml) : rawHtml;
-          if (updateNotesContent) updateNotesContent.innerHTML = cleanHtml;
+          if (window.DOMPurify) {
+            const cleanHtml = window.DOMPurify.sanitize(marked.parse(s.release_notes));
+            if (updateNotesContent) updateNotesContent.innerHTML = cleanHtml;
+          } else if (updateNotesContent) {
+            // No sanitiser loaded: show the notes as text, never as HTML.
+            updateNotesContent.textContent = s.release_notes;
+          }
           if (updateNotesAccordion) updateNotesAccordion.style.display = "block";
         } catch (_) {
           if (updateNotesContent) updateNotesContent.textContent = s.release_notes;
@@ -2357,6 +2638,26 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  // ─── Links in converted documents and release notes ─────────────────────
+  // In the desktop app a plain link would load the other page inside InkDoc's
+  // own window. Web links open in the system browser instead, and no other
+  // link may replace the app; links to a heading in the same document still
+  // scroll. In a browser tab (Web Bench) links behave as before.
+  function handleContentLinkClick(e) {
+    if (!window.pywebview) return;
+    const link = e.target && e.target.closest ? e.target.closest("a[href]") : null;
+    if (!link) return;
+    const href = link.getAttribute("href") || "";
+    if (href.startsWith("#")) return;
+    e.preventDefault();
+    if (/^https?:\/\//i.test(href)) {
+      withWindowApi((api) => Promise.resolve(api.open_external_link(href)).catch(() => {}));
+    }
+  }
+  if (renderedOutput) renderedOutput.addEventListener("click", handleContentLinkClick);
+  if (updateNotesContent) updateNotesContent.addEventListener("click", handleContentLinkClick);
+  // ─── End content links ───────────────────────────────────────────────────
+
   // ─── External Links (Settings) ─────────────────────────────────────────────
   // Inside the desktop app, route through pywebview so links open in the OS
   // default browser instead of navigating the app's own window. In a plain
@@ -2468,15 +2769,59 @@ document.addEventListener("DOMContentLoaded", () => {
   // ─── Theme Toggle ────────────────────────────────────────────────────────
   const savedTheme = readStorage("inkdoc-theme") || readStorage("markitdown-theme") || "dark";
   document.documentElement.setAttribute("data-theme", savedTheme);
+  // The theme the last click asked for. A View Transition applies it a frame
+  // later, so a quick second click must not read it back from the page.
+  let requestedTheme = document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";
 
-  themeToggle.addEventListener("click", () => {
-    const current = document.documentElement.getAttribute("data-theme");
-    const next = current === "dark" ? "light" : "dark";
-    document.documentElement.setAttribute("data-theme", next);
-    writeStorage("inkdoc-theme", next);
+  function applyTheme(theme) {
+    document.documentElement.setAttribute("data-theme", theme);
+    writeStorage("inkdoc-theme", theme);
     // The maximise button is drawn natively, so it can't pick up the new
     // palette from CSS on its own.
     if (window.__inkdocSyncTitlebar) window.__inkdocSyncTitlebar();
+  }
+
+  // The new theme grows as a circle from the button, as on the website, where
+  // the web engine supports View Transitions. Without them, or with reduced
+  // motion, it switches at once as before.
+  themeToggle.addEventListener("click", () => {
+    requestedTheme = requestedTheme === "dark" ? "light" : "dark";
+    const next = requestedTheme;
+    const root = document.documentElement;
+    const reduceMotion = typeof window.matchMedia === "function"
+      && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduceMotion || typeof document.startViewTransition !== "function") {
+      applyTheme(next);
+      return;
+    }
+
+    const r = themeToggle.getBoundingClientRect();
+    const x = r.left + r.width / 2;
+    const y = r.top + r.height / 2;
+    const radius = Math.hypot(Math.max(x, window.innerWidth - x), Math.max(y, window.innerHeight - y));
+    // Pause the colour fades, or the circle would reveal half-faded colours.
+    root.classList.add("theme-switching");
+    const finish = () => root.classList.remove("theme-switching");
+
+    let transition;
+    try {
+      transition = document.startViewTransition(() => applyTheme(next));
+    } catch (_) {
+      applyTheme(next);
+      finish();
+      return;
+    }
+    // Short on purpose: while a View Transition plays, the engine sends clicks
+    // and drops to the page background, where they are ignored.
+    transition.ready
+      .then(() => {
+        root.animate(
+          { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${radius}px at ${x}px ${y}px)`] },
+          { duration: 350, easing: "cubic-bezier(.2,.8,.2,1)", pseudoElement: "::view-transition-new(root)" }
+        );
+      })
+      .catch(() => {});
+    transition.finished.then(finish, finish);
   });
 
   // ─── Auto-save Toggle ────────────────────────────────────────────────────
@@ -2484,8 +2829,8 @@ document.addEventListener("DOMContentLoaded", () => {
     autoSaveToDownloads = e.target.checked;
     showToast(
       autoSaveToDownloads
-        ? "Converted files will also be saved to ~/Downloads"
-        : "Auto-save to Downloads disabled",
+        ? `Converted files will also be saved to ${saveFolderState ? saveFolderState.path : "Downloads"}`
+        : "Auto-save disabled",
       "info"
     );
   });
@@ -2831,7 +3176,7 @@ document.addEventListener("DOMContentLoaded", () => {
       item.errorType = "failed";
       selectItem(item.id);
       showToast(isGlm ? item.error : "Docling is not installed. Install in Settings.", "error");
-      openSettings();
+      openSettings(null, "engines");
       return;
     }
 
@@ -2866,7 +3211,7 @@ document.addEventListener("DOMContentLoaded", () => {
     showToast(hint, "info", {
       duration: 9000,
       actions: [
-        { label: hint.includes("Docling") ? "Install Docling" : "Open Settings", onClick: (e) => openSettings(e) },
+        { label: hint.includes("Docling") ? "Install Docling" : "Open Settings", onClick: (e) => openSettings(e, "engines") },
         { label: "Don't show again", onClick: () => writeStorage(HIDE_AUTO_HINT_KEY, "1") },
       ],
     });
@@ -2912,6 +3257,7 @@ document.addEventListener("DOMContentLoaded", () => {
         showToast(`Converted ${label} via ${via}`, "success");
       }
     }
+    noteSaveFallback(data.save_fallback);
   }
 
   function applyNetworkError(item, err, engineToUse, isUrl) {
@@ -3214,6 +3560,363 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  // ─── Table scroll boxes ──────────────────────────────────────────────────
+  // Each rendered table goes in its own box that scrolls sideways, so a wide
+  // table no longer drags the whole document with it. Nothing is measured:
+  // one wrapper per table, no layout read, so it stays cheap on long documents.
+  function wrapTables(root) {
+    root.querySelectorAll("table").forEach((table) => {
+      if (table.parentElement && table.parentElement.classList.contains("table-scroll")) return;
+      const box = document.createElement("div");
+      box.className = "table-scroll";
+      table.replaceWith(box);
+      box.appendChild(table);
+    });
+  }
+  // ─── End table scroll boxes ──────────────────────────────────────────────
+
+  // ─── Math formulas (built-in add-on: KaTeX) ──────────────────────────────
+  // LaTeX from Docling's formula recognition and GLM-OCR ($…$, $$…$$, \(…\),
+  // \[…\]) is drawn with KaTeX in the Rendered tab. Switched off in Settings →
+  // Add-ons, or for a document with no delimiter at all, the Markdown goes
+  // through the global parser exactly as before. KaTeX is bundled and loaded
+  // only the first time a document has math; formulas on screen are drawn
+  // first and the rest in short slices, so the window never blocks. Saved
+  // files, Copy, Download and the Raw tab always use the Markdown itself.
+  const KATEX_JS  = "/static/vendor/katex/katex.min.js";
+  const KATEX_CSS = "/static/vendor/katex/katex.min.css";
+  const MATH_HINT = /\$|\\\(|\\\[/;
+  const MATH_INLINE_MAX = 1000;   // characters in one inline formula
+  const MATH_MAX = 5000;          // a display formula longer than this stays text
+  const MATH_LOOKAHEAD = 512;     // one search for an inline formula reads no further
+  const MATH_DOC_MAX = 2000000;   // larger documents are parsed exactly as before
+  const MATH_SLICE_MS = 6;        // KaTeX work per slice…
+  const MATH_SLICE_MAX = 8;       // …and formulas per slice: the browser lays
+                                  // out what was inserted after each slice
+  const MATH_CACHE_MAX = 500;
+  const KATEX_OPTIONS = { throwOnError: true, trust: false, strict: "ignore", maxSize: 20, maxExpand: 500, output: "htmlAndMathml" };
+  // KaTeX's <annotation> holds the LaTeX again; DOMPurify drops the element but
+  // would keep its text inside <math>, so drop the text too.
+  const MATH_SANITIZE = { ADD_FORBID_CONTENTS: ["annotation"] };
+  // Placeholders carry this per-session value and only they are drawn, so
+  // look-alike HTML written into a document (class="math-tex") never is.
+  const MATH_MARK = mathMark();
+  const mathToggle = document.getElementById("mathToggle");
+  let renderMath = document.documentElement.dataset.renderMath !== "off";
+  let mathParser = null;
+  let katexLoader = null;
+  let mathRun = 0;                // every render bumps it; older work stops
+  let mathObserver = null;
+  let mathSaves = 0;
+  const mathCache = new Map();    // "D"/"I" + LaTeX → sanitised KaTeX HTML, or null if it failed
+
+  function mathMark() {
+    const bytes = new Uint8Array(8);
+    if (window.crypto && typeof window.crypto.getRandomValues === "function") {
+      window.crypto.getRandomValues(bytes);
+    } else {
+      for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+    }
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+
+  function mathPlaceholder(tex, display) {
+    const tag = display ? "div" : "span";
+    const cls = display ? "math-tex math-block" : "math-tex";
+    return `<${tag} class="${cls}" data-math="${MATH_MARK}" data-display="${display ? 1 : 0}">${escapeHtml(tex)}</${tag}>`;
+  }
+
+  // $$…$$ or \[…\] starting a line, on one line (Docling) or across lines
+  // (GLM-OCR). A blank line inside means it isn't a formula, so a stray $$
+  // can never swallow the rest of the document. Every search here is
+  // bounded (the paragraph, or MATH_MAX), so parsing stays linear: marked
+  // asks again before every block, and unbounded searches made a large
+  // document with one $ take tens of seconds (security review, 1.2.0).
+  const MATH_BLOCK = {
+    name: "mathBlock",
+    level: "block",
+    // marked passes the rest of the current block from its second character
+    // on, so only the following lines can start a formula, and a blank line
+    // ends the paragraph it would cut, so nothing past it matters here.
+    start(src) {
+      let i = src.indexOf("\n");
+      while (i !== -1) {
+        i++;
+        let j = i;
+        while (j < src.length && (src[j] === " " || src[j] === "\t")) j++;
+        if (j >= src.length || src[j] === "\n") return undefined;
+        if (j - i <= 3 && (src.startsWith("$$", j) || src.startsWith("\\[", j))) return i;
+        i = src.indexOf("\n", j);
+      }
+      return undefined;
+    },
+    tokenizer(src) {
+      const m = /^[ \t]{0,3}(\$\$|\\\[)/.exec(src);
+      if (!m) return undefined;
+      const close = m[1] === "$$" ? "$$" : "\\]";
+      const from = m[0].length;
+      const end = src.slice(from, from + MATH_MAX + close.length).indexOf(close);
+      if (end < 0) return undefined;
+      const body = src.slice(from, from + end);
+      const tex = body.trim();
+      if (!tex || /\n[ \t]*\n/.test(body)) return undefined;
+      let after = from + end + close.length;
+      while (src[after] === " " || src[after] === "\t") after++;
+      if (after < src.length && src[after] !== "\n") return undefined;
+      if (src[after] === "\n") after++;
+      return { type: "mathBlock", raw: src.slice(0, after), text: tex };
+    },
+    renderer(token) { return mathPlaceholder(token.text, true) + "\n"; },
+  };
+
+  // \(…\), $…$ and $$…$$ inside a line. For $, Pandoc's rule, which keeps
+  // prices out: the opening $ is not followed by a space, the closing $ is
+  // not preceded by a space nor followed by a digit; here the formula also
+  // stays on one line and never runs into a backtick, so a price can't pair
+  // with a $ inside inline code. \$ is always a literal dollar. Code spans
+  // and code blocks are read by marked before this rule can see them.
+  const MATH_INLINE = {
+    name: "mathInline",
+    level: "inline",
+    // Looks at most MATH_LOOKAHEAD characters ahead. When no formula can start
+    // there, it hands marked a point to cut the text at (a space if there is
+    // one, so links aren't split) and is asked again from there: each call
+    // costs the same, however long the paragraph.
+    start(src) {
+      const limit = Math.min(src.length, MATH_LOOKAHEAD);
+      let cut = -1;
+      for (let i = 0; i < limit; i++) {
+        const c = src[i];
+        if (c === "$") return i;
+        if (c === "\\") {
+          if (src[i + 1] === "(") return i;
+          i++; // skip whatever is escaped, \$ included
+          continue;
+        }
+        if (c === " " || c === "\n" || c === "\t") cut = i;
+      }
+      if (limit === src.length) return undefined;
+      return cut > 0 ? cut : limit - 1;
+    },
+    tokenizer(src) {
+      if (src.startsWith("\\(")) {
+        const end = src.slice(2, 2 + MATH_INLINE_MAX + 2).indexOf("\\)");
+        const tex = end > 0 ? src.slice(2, 2 + end) : "";
+        if (!tex.trim() || tex.includes("\n\n")) return undefined;
+        return { type: "mathInline", raw: src.slice(0, end + 4), text: tex.trim(), display: false };
+      }
+      if (src[0] !== "$") return undefined;
+      const display = src[1] === "$";
+      const open = display ? 2 : 1;
+      const first = src[open];
+      if (!first || first === "$" || /\s/.test(first)) return undefined;
+      let i = open;
+      while (i < src.length && i - open <= MATH_INLINE_MAX) {
+        const c = src[i];
+        if (c === "\\") { i += 2; continue; }
+        if (c === "\n" || c === "`") return undefined;
+        if (c === "$") break;
+        i++;
+      }
+      if (src[i] !== "$" || i - open > MATH_INLINE_MAX) return undefined;
+      if (display && src[i + 1] !== "$") return undefined;
+      const tex = src.slice(open, i);
+      if (/\s$/.test(tex)) return undefined;
+      const close = i + (display ? 2 : 1);
+      if (/\d/.test(src[close] || "")) return undefined;
+      return { type: "mathInline", raw: src.slice(0, close), text: tex, display };
+    },
+    renderer(token) { return mathPlaceholder(token.text, token.display); },
+  };
+
+  // The one place the preview's Markdown becomes HTML.
+  function markdownToHtml(md) {
+    if (!renderMath || md.length > MATH_DOC_MAX || !MATH_HINT.test(md) || typeof window.marked.Marked !== "function") {
+      return window.marked.parse(md);
+    }
+    if (!mathParser) {
+      mathParser = new window.marked.Marked({ gfm: true, breaks: true });
+      mathParser.use({ extensions: [MATH_BLOCK, MATH_INLINE] });
+    }
+    return mathParser.parse(md);
+  }
+
+  // Script and stylesheet together: KaTeX's HTML is unreadable without its
+  // CSS, so if either fails the formulas simply stay as LaTeX text. If the
+  // script ran but didn't register window.katex (a document can shadow the
+  // globals its loader checks, e.g. <a id="exports">), the next document may
+  // try again; a missing file is not retried.
+  function loadKatex() {
+    if (katexLoader) return katexLoader;
+    katexLoader = new Promise((resolve) => {
+      const done = (ok) => {
+        const k = window.katex;
+        const usable = ok && k && typeof k.renderToString === "function";
+        if (ok && !usable) katexLoader = null;
+        resolve(usable ? k : null);
+      };
+      const css = document.createElement("link");
+      css.rel = "stylesheet";
+      css.href = KATEX_CSS;
+      const cssLoaded = new Promise((r) => { css.onload = () => r(true); css.onerror = () => r(false); });
+      const js = document.createElement("script");
+      js.src = KATEX_JS;
+      js.async = true;
+      const jsLoaded = new Promise((r) => { js.onload = () => r(true); js.onerror = () => r(false); });
+      document.head.appendChild(css);
+      document.head.appendChild(js);
+      Promise.all([cssLoaded, jsLoaded]).then(([a, b]) => {
+        if (!a || !b) console.warn("Math formulas: KaTeX could not be loaded; showing LaTeX as text.");
+        done(a && b);
+      });
+    });
+    return katexLoader;
+  }
+
+  function typesetOne(node, katex) {
+    const tex = node.textContent;
+    const display = node.dataset.display === "1";
+    // The parser already keeps to these limits; checked again here because
+    // KaTeX's output grows with its input and one formula is drawn at once.
+    if (tex.length > (display ? MATH_MAX : MATH_INLINE_MAX)) {
+      node.classList.add("math-error");
+      node.title = "Too long to render as a formula";
+      return;
+    }
+    const key = (display ? "D" : "I") + tex;
+    let html = mathCache.get(key);
+    if (html === undefined) {
+      try {
+        html = window.DOMPurify.sanitize(katex.renderToString(tex, { ...KATEX_OPTIONS, displayMode: display }), MATH_SANITIZE);
+      } catch (_) {
+        html = null;
+      }
+      if (mathCache.size >= MATH_CACHE_MAX) mathCache.delete(mathCache.keys().next().value);
+      mathCache.set(key, html);
+    }
+    if (html === null) {
+      node.classList.add("math-error");
+      node.title = "Couldn't render this formula";
+      return;
+    }
+    node.innerHTML = html;
+    node.classList.add("math-done");
+  }
+
+  function cancelMath() {
+    mathRun++;
+    if (mathObserver) {
+      mathObserver.disconnect();
+      mathObserver = null;
+    }
+  }
+
+  // Formulas on screen (or within 600px of it) first, then the rest in
+  // document order, in slices of MATH_SLICE_MS. setTimeout rather than
+  // requestIdleCallback, which WebKit (macOS, Linux) doesn't have.
+  function typesetMath(root) {
+    cancelMath();
+    const run = mathRun;
+    if (!renderMath || !window.DOMPurify) return;
+    const nodes = Array.from(root.querySelectorAll(`.math-tex[data-math="${MATH_MARK}"]`));
+    if (nodes.length === 0) return;
+    loadKatex().then((katex) => {
+      if (!katex || run !== mathRun) return;
+      const left = new Set(nodes);
+      const soon = [];
+      let next = 0;
+      let queued = false;
+      // Only the first report matters: it says which formulas are on screen
+      // now. After that the rest go in document order anyway, and keeping
+      // hundreds of targets observed would cost a check on every frame.
+      if (typeof window.IntersectionObserver === "function") {
+        mathObserver = new window.IntersectionObserver((entries) => {
+          entries.forEach((e) => { if (e.isIntersecting && left.has(e.target)) soon.push(e.target); });
+          if (mathObserver) mathObserver.disconnect();
+          mathObserver = null;
+          kick();
+        }, { root: root.closest(".tab-content"), rootMargin: "600px 0px" });
+        nodes.forEach((n) => mathObserver.observe(n));
+      }
+      function take() {
+        while (soon.length) {
+          const n = soon.shift();
+          if (left.has(n)) return n;
+        }
+        while (next < nodes.length) {
+          const n = nodes[next++];
+          if (left.has(n)) return n;
+        }
+        return null;
+      }
+      function kick() {
+        if (queued) return;
+        queued = true;
+        setTimeout(step, 0);
+      }
+      function step() {
+        queued = false;
+        if (run !== mathRun) return;
+        const until = performance.now() + MATH_SLICE_MS;
+        let count = 0;
+        do {
+          const n = take();
+          if (!n) {
+            if (mathObserver) mathObserver.disconnect();
+            mathObserver = null;
+            return;
+          }
+          left.delete(n);
+          typesetOne(n, katex);
+        } while (++count < MATH_SLICE_MAX && performance.now() < until);
+        kick();
+      }
+      kick();
+    });
+  }
+
+  // The switch: off means the preview is parsed exactly as before and KaTeX
+  // is never loaded. Applies at once (the open document is drawn again) and
+  // is kept in settings.json; the server puts it on <html> before first paint.
+  function applyRenderMath(on) {
+    renderMath = on;
+    document.documentElement.dataset.renderMath = on ? "on" : "off";
+    if (mathToggle) mathToggle.checked = on;
+    if (activeItemId) selectItem(activeItemId);
+  }
+
+  // From GET /settings, each time Settings opens; never over a pending save.
+  function syncRenderMath(value) {
+    const on = value !== false;
+    if (mathSaves === 0 && on !== renderMath) applyRenderMath(on);
+  }
+
+  if (mathToggle) {
+    mathToggle.checked = renderMath;
+    mathToggle.addEventListener("change", async () => {
+      const on = mathToggle.checked;
+      const before = renderMath;
+      applyRenderMath(on);
+      const save = ++mathSaves;
+      let saved = false;
+      try {
+        const resp = await fetchWithToken(`${apiBase}/settings`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ render_math: on }),
+        });
+        saved = resp.ok;
+      } catch (_) {}
+      if (save !== mathSaves) return; // a newer change decides
+      mathSaves = 0;
+      if (!saved) {
+        applyRenderMath(before);
+        showToast("Couldn't save the math setting.", "error");
+      }
+    });
+  }
+  // ─── End math formulas ───────────────────────────────────────────────────
+
   // ─── Select & Display Item ───────────────────────────────────────────────
   const EMPTY_HINT_SVG = `<svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line></svg>`;
 
@@ -3248,7 +3951,7 @@ document.addEventListener("DOMContentLoaded", () => {
   function qualityNoticeActions(item) {
     const action = qualityAction(item.quality);
     if (!action) return [];
-    if (action.install) return [{ label: action.label, onClick: (e) => openSettings(e) }];
+    if (action.install) return [{ label: action.label, onClick: (e) => openSettings(e, "engines") }];
     if (!(item.fileRef || item.sourceUrl)) return [];
     return [{ label: action.label, onClick: () => reconvertItem(item, action.engine) }];
   }
@@ -3292,6 +3995,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function selectItem(id) {
+    cancelMath(); // formulas still being drawn belong to the previous preview
     activeItemId = id;
     const item = queue.find((i) => i.id === id);
     if (!item) return;
@@ -3425,7 +4129,7 @@ document.addEventListener("DOMContentLoaded", () => {
       );
     } else if (item.auto && item.auto.hint) {
       showConversionNotice("info", "Tip", item.auto.hint, {
-        actions: [{ label: item.auto.hint.includes("Docling") ? "Install Docling" : "Open Settings", onClick: (e) => openSettings(e) }],
+        actions: [{ label: item.auto.hint.includes("Docling") ? "Install Docling" : "Open Settings", onClick: (e) => openSettings(e, "engines") }],
         details,
       });
     } else if (item.warnings && item.warnings.length) {
@@ -3442,7 +4146,7 @@ document.addEventListener("DOMContentLoaded", () => {
           window.marked.use({ gfm: true, breaks: true });
         }
       } catch (_) {}
-      const rawHtml = window.marked.parse(md);
+      const rawHtml = markdownToHtml(md);
       if (window.DOMPurify) {
         renderedOutput.innerHTML = window.DOMPurify.sanitize(rawHtml);
       } else {
@@ -3451,7 +4155,9 @@ document.addEventListener("DOMContentLoaded", () => {
     } else {
       renderedOutput.innerHTML = renderBasicMarkdown(md);
     }
+    wrapTables(renderedOutput);
     highlightCodeBlocks(renderedOutput);
+    typesetMath(renderedOutput);
 
     renderQueue();
   }
@@ -3514,6 +4220,72 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
   // ─── End desktop save ─────────────────────────────────────────────────────
+
+  // ─── Save folder ─────────────────────────────────────────────────────────
+  // Where auto-save writes. Shown everywhere, changed only in the desktop app:
+  // the path comes from the system's folder dialog (pywebview.api), never from
+  // this page, and no HTTP request can set it.
+  const saveFolderPath      = document.getElementById("saveFolderPath");
+  const saveFolderProblem   = document.getElementById("saveFolderProblem");
+  const saveFolderHint      = document.getElementById("saveFolderHint");
+  const btnChangeSaveFolder = document.getElementById("btnChangeSaveFolder");
+  const btnResetSaveFolder  = document.getElementById("btnResetSaveFolder");
+  let saveFolderState = null;
+  // Each fallback sentence is shown once per session, so a batch of files into
+  // a missing folder gives one notice rather than one per file.
+  const shownSaveFallbacks = new Set();
+
+  function renderSaveFolder(state) {
+    if (!state || !saveFolderPath) return;
+    saveFolderState = state;
+    const shown = state.custom ? state.chosen : state.path;
+    // The path box is right-to-left so a long path keeps its end visible; the
+    // marks stop that from moving a leading "/" or drive letter to the other side.
+    saveFolderPath.textContent = `\u200E${shown}\u200E`;
+    saveFolderPath.title = shown;
+    saveFolderProblem.textContent = state.problem || "";
+    saveFolderProblem.style.display = state.problem ? "" : "none";
+    const desktop = Boolean(window.pywebview);
+    btnChangeSaveFolder.style.display = desktop ? "" : "none";
+    btnResetSaveFolder.style.display = desktop && state.custom ? "" : "none";
+    saveFolderHint.style.display = desktop ? "none" : "";
+  }
+
+  function changeSaveFolder(method) {
+    withWindowApi((api) => {
+      btnChangeSaveFolder.disabled = true;
+      btnResetSaveFolder.disabled = true;
+      Promise.resolve()
+        .then(() => api[method]())
+        .then((res) => {
+          if (res && res.status === "saved") {
+            renderSaveFolder(res.folder);
+            shownSaveFallbacks.clear();
+            if (res.warning) showToast(res.warning, "info");
+            else showToast(`Auto-save now uses ${res.folder.path}`, "success");
+          } else if (!res || res.status !== "cancelled") {
+            showToast(`Could not change the save folder: ${(res && res.message) || "unknown error"}`, "error");
+          }
+        })
+        .catch((err) => {
+          showToast(`Could not change the save folder: ${(err && err.message) || err}`, "error");
+        })
+        .finally(() => {
+          btnChangeSaveFolder.disabled = false;
+          btnResetSaveFolder.disabled = false;
+        });
+    });
+  }
+
+  function noteSaveFallback(message) {
+    if (!message || shownSaveFallbacks.has(message)) return;
+    shownSaveFallbacks.add(message);
+    showToast(message, "info");
+  }
+
+  if (btnChangeSaveFolder) btnChangeSaveFolder.addEventListener("click", () => changeSaveFolder("choose_save_folder"));
+  if (btnResetSaveFolder) btnResetSaveFolder.addEventListener("click", () => changeSaveFolder("reset_save_folder"));
+  // ─── End save folder ─────────────────────────────────────────────────────
 
   btnDownloadMarkdown.addEventListener("click", () => {
     const item = queue.find((i) => i.id === activeItemId);

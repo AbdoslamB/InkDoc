@@ -53,18 +53,30 @@ if _repo_root not in sys.path:
 
 import uvicorn
 
-from app.core.converter import get_downloads_dir, sanitize_filename
+from app.core.converter import sanitize_filename
+from app.core.save_location import check_usable, folder_state, store_save_dir
 from app.server.server import app
 
 
 def _default_save_dir() -> Path:
-    """Folder the Download button's Save dialog opens in."""
-    return get_downloads_dir()
+    """Folder the Download button's Save dialog opens in: the save folder, Downloads by default."""
+    return Path(folder_state()["path"])
 
 
 def _url_origin(url: str | None) -> str:
     parsed = urlparse(url or "")
     return f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else ""
+
+
+def _dialog_path(result) -> str:
+    """The one path a file dialog returned, or "" when it was cancelled.
+
+    A tuple on Windows, GTK and Qt (Qt cancels with ("",)); a plain string from
+    the macOS Save panel.
+    """
+    if isinstance(result, str):
+        return result
+    return result[0] if result else ""
 
 
 # A str from JSON has no surrogate pairs, so any surrogate in it is unpaired.
@@ -337,17 +349,24 @@ def _setup_window_chrome(title: str, controls: WindowControls, window, origin: s
 
 
 class WindowControls:
-    """Exposed to the page as pywebview.api, for the custom title bar buttons."""
+    """Window controls, the Download button's save and the save folder.
+
+    The page reaches these only through _page_functions(), never this object.
+    """
 
     def __init__(self) -> None:
         self._window = None
         self._chrome = None
         self._hwnd = 0
         self._app_origin = ""
+        self._owns_server = True
 
-    def attach(self, window, app_url: str = "") -> None:
+    def _attach(self, window, app_url: str = "", owns_server: bool = True) -> None:
+        """Private (pywebview exposes every public method to the page): it holds the
+        origin the file and settings methods trust."""
         self._window = window
         self._app_origin = _url_origin(app_url)
+        self._owns_server = owns_server
 
     def attach_chrome(self, hwnd: int) -> None:
         """Subclass the native window so the shell treats our drawn title bar as
@@ -459,9 +478,7 @@ class WindowControls:
         if not window:
             return {"status": "error", "message": "The app window is not ready."}
         try:
-            # pywebview gives the bridge to any page the window shows, including one
-            # reached through a link in a converted document; only InkDoc's own may save.
-            if not self._app_origin or _url_origin(window.get_current_url()) != self._app_origin:
+            if not self._on_app_page(window):
                 return {"status": "error", "message": "Saving is only available from InkDoc itself."}
 
             import webview
@@ -475,8 +492,7 @@ class WindowControls:
                 save_filename=name,
                 file_types=("Markdown files (*.md)",),
             )
-            # A tuple on Windows, GTK and Qt; a plain string on macOS.
-            chosen = result if isinstance(result, str) else (result[0] if result else "")
+            chosen = _dialog_path(result)
             if not chosen:
                 return {"status": "cancelled"}
 
@@ -508,6 +524,128 @@ class WindowControls:
             return {"status": "saved", "path": str(path)}
         except Exception as exc:
             return {"status": "error", "message": str(exc) or type(exc).__name__}
+
+    def choose_save_folder(self) -> dict:
+        """Pick the save folder in the system's folder dialog and remember it.
+
+        The only way the save folder is ever set: the page asks, but the path
+        comes from the dialog, never from JavaScript, and is checked by writing
+        a test file before it is stored. Returns {"status": "saved", "folder"}
+        (plus "warning" when it could not be kept for next time),
+        {"status": "cancelled"} or {"status": "error", "message"}.
+        """
+        window = self._window
+        if not window:
+            return {"status": "error", "message": "The app window is not ready."}
+        try:
+            refused = self._save_folder_refusal(window)
+            if refused:
+                return refused
+
+            import webview
+
+            chosen = _dialog_path(
+                window.create_file_dialog(webview.FileDialog.FOLDER, directory=str(_default_save_dir()))
+            )
+            if not chosen:
+                return {"status": "cancelled"}
+
+            # The real path, so a link picked in the dialog is stored as its target.
+            folder = Path(chosen).resolve()
+            problem = check_usable(folder)
+            if problem:
+                return {"status": "error", "message": problem}
+            return self._stored(str(folder))
+        except Exception as exc:
+            return {"status": "error", "message": str(exc) or type(exc).__name__}
+
+    def reset_save_folder(self) -> dict:
+        """Save to Downloads again. Same return shape as choose_save_folder()."""
+        window = self._window
+        if not window:
+            return {"status": "error", "message": "The app window is not ready."}
+        try:
+            refused = self._save_folder_refusal(window)
+            if refused:
+                return refused
+            return self._stored("")
+        except Exception as exc:
+            return {"status": "error", "message": str(exc) or type(exc).__name__}
+
+    def _save_folder_refusal(self, window) -> dict | None:
+        if not self._on_app_page(window):
+            return {"status": "error", "message": "Settings can only be changed from InkDoc itself."}
+        if not self._owns_server:
+            # This window joined an InkDoc that was already running; that process
+            # does the saving and would never see a folder stored from here.
+            return {
+                "status": "error",
+                "message": "InkDoc is already open in another window. Change the save folder there.",
+            }
+        return None
+
+    def _stored(self, value: str) -> dict:
+        result = {"status": "saved", "folder": None}
+        if not store_save_dir(value):
+            result["warning"] = "The folder is used until InkDoc closes, but it couldn't be saved for next time."
+        result["folder"] = folder_state()
+        return result
+
+    def _on_app_page(self, window) -> bool:
+        """pywebview gives the bridge to any page the window shows, including one
+        reached through a link in a converted document; only InkDoc's own may use
+        the methods that write files or settings.
+        """
+        return bool(self._app_origin) and _url_origin(window.get_current_url()) == self._app_origin
+
+
+def _page_functions(controls: WindowControls) -> tuple:
+    """The functions the page can call as pywebview.api.<name>, one per method app.js uses.
+
+    Registered with window.expose() instead of passing `controls` as js_api:
+    pywebview finds an exposed function by its exact name only, while a js_api
+    object would also let the page reach underscore-named helpers and the
+    objects they hold.
+    """
+
+    def open_external_link(url):
+        return controls.open_external_link(url)
+
+    def toggle_maximize_window():
+        return controls.toggle_maximize_window()
+
+    def set_titlebar_button_rect(left, top, right, bottom):
+        return controls.set_titlebar_button_rect(left, top, right, bottom)
+
+    def set_titlebar_colors(bg, bg_hover, fg, fg_hover):
+        return controls.set_titlebar_colors(bg, bg_hover, fg, fg_hover)
+
+    def minimize_window():
+        return controls.minimize_window()
+
+    def close_window():
+        return controls.close_window()
+
+    def save_markdown(filename, content):
+        return controls.save_markdown(filename, content)
+
+    def choose_save_folder():
+        return controls.choose_save_folder()
+
+    def reset_save_folder():
+        return controls.reset_save_folder()
+
+    return (
+        open_external_link,
+        toggle_maximize_window,
+        set_titlebar_button_rect,
+        set_titlebar_colors,
+        minimize_window,
+        close_window,
+        save_markdown,
+        choose_save_folder,
+        reset_save_folder,
+    )
 
 
 _desktop_window = None
@@ -675,11 +813,11 @@ def run_desktop(
         # make the whole surface draggable, so selecting text or dragging a file onto
         # the drop zone would move the window instead.
         easy_drag=False,
-        # Exposed on every platform, not just the frameless custom titlebar:
-        # open_external_link() is also used for regular in-page links.
-        js_api=window_controls,
     )
-    window_controls.attach(window, app_url)
+    window_controls._attach(window, app_url, owns_server=server_thread is not None)
+    # Exposed on every platform, not just the frameless custom titlebar:
+    # open_external_link() is also used for regular in-page links.
+    window.expose(*_page_functions(window_controls))
     _desktop_window = window
 
     # Warm markitdown only after the page has loaded, so the ~2s import does not

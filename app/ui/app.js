@@ -3489,6 +3489,32 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  // ─── Desktop save (Download button) ──────────────────────────────────────
+  // The desktop window does not perform <a download> (pywebview cancels it),
+  // so the app saves through a native Save dialog instead. The toast reports
+  // what actually happened; a cancelled dialog says nothing.
+  function saveMarkdownViaDesktop(fileName, content) {
+    withWindowApi((api) => {
+      btnDownloadMarkdown.disabled = true;
+      Promise.resolve()
+        .then(() => api.save_markdown(fileName, content))
+        .then((res) => {
+          if (res && res.status === "saved") {
+            showToast(`Saved to ${res.path}`, "success");
+          } else if (!res || res.status !== "cancelled") {
+            showToast(`Could not save the file: ${(res && res.message) || "unknown error"}`, "error");
+          }
+        })
+        .catch((err) => {
+          showToast(`Could not save the file: ${(err && err.message) || err}`, "error");
+        })
+        .finally(() => {
+          btnDownloadMarkdown.disabled = false;
+        });
+    });
+  }
+  // ─── End desktop save ─────────────────────────────────────────────────────
+
   btnDownloadMarkdown.addEventListener("click", () => {
     const item = queue.find((i) => i.id === activeItemId);
     if (!item || !item.markdown) {
@@ -3497,12 +3523,18 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     const content  = rawEditor.value || item.markdown;
+    const baseName = item.name.replace(/\.[^/.]+$/, "");
+    const fileName = `${baseName || "document"}.md`;
+    if (window.pywebview) {
+      saveMarkdownViaDesktop(fileName, content);
+      return;
+    }
+
     const blob     = new Blob([content], { type: "text/markdown;charset=utf-8" });
     const url      = URL.createObjectURL(blob);
     const a        = document.createElement("a");
-    const baseName = item.name.replace(/\.[^/.]+$/, "");
     a.href         = url;
-    a.download     = `${baseName || "document"}.md`;
+    a.download     = fileName;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);

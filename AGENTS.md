@@ -41,7 +41,7 @@ python -c "import urllib.request, time; time.sleep(2); res = urllib.request.urlo
 
 # Test suite (CI runs exactly this) and the UI unit tests (Node, no npm)
 python -m pytest tests/ -q
-node tests/auto_engine_ui.test.js && node tests/preview_word_count.test.js && node tests/glm_ocr_ui.test.js
+node tests/auto_engine_ui.test.js && node tests/preview_word_count.test.js && node tests/glm_ocr_ui.test.js && node tests/desktop_download_ui.test.js
 
 # Lint (also run in CI)
 pip install ruff

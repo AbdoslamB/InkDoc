@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- The **Download** button in the desktop app now opens a Save dialog (starting
+  in Downloads) and writes the `.md` file where you choose. It previously did
+  nothing while showing "Downloaded", because the desktop window blocks
+  in-page downloads. The message now only reports a save that actually
+  happened. The browser version is unchanged
+  ([#6](https://github.com/AbdoslamB/InkDoc/issues/6)).
+
 ## [1.1.0] - 2026-10-01
 
 ### Added

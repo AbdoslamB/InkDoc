@@ -8,11 +8,13 @@ from __future__ import annotations
 import argparse
 import io
 import os
+import re
 import socket
 import sys
 import threading
 import time
 import webbrowser
+from pathlib import Path
 from urllib.parse import urlparse
 
 # Configure thread pool limits before any native scientific libraries load.
@@ -51,7 +53,22 @@ if _repo_root not in sys.path:
 
 import uvicorn
 
+from app.core.converter import get_downloads_dir, sanitize_filename
 from app.server.server import app
+
+
+def _default_save_dir() -> Path:
+    """Folder the Download button's Save dialog opens in."""
+    return get_downloads_dir()
+
+
+def _url_origin(url: str | None) -> str:
+    parsed = urlparse(url or "")
+    return f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else ""
+
+
+# A str from JSON has no surrogate pairs, so any surrogate in it is unpaired.
+_LONE_SURROGATE = re.compile("[\ud800-\udfff]")
 
 
 def stop_engine_processes() -> None:
@@ -326,9 +343,11 @@ class WindowControls:
         self._window = None
         self._chrome = None
         self._hwnd = 0
+        self._app_origin = ""
 
-    def attach(self, window) -> None:
+    def attach(self, window, app_url: str = "") -> None:
         self._window = window
+        self._app_origin = _url_origin(app_url)
 
     def attach_chrome(self, hwnd: int) -> None:
         """Subclass the native window so the shell treats our drawn title bar as
@@ -423,6 +442,72 @@ class WindowControls:
             return True
         except Exception:
             return False
+
+    def save_markdown(self, filename: str, content: str) -> dict:
+        """Save the previewed Markdown where the user picks in a native Save dialog.
+
+        The page's <a download> route does nothing here: pywebview cancels
+        downloads by default (silently on WebView2), and on macOS it cannot read
+        a blob: URL at all. Reachable from page JavaScript, so the page only
+        suggests a file name; nothing is written until the user confirms a
+        location. Returns {"status": "saved", "path"}, {"status": "cancelled"}
+        or {"status": "error", "message"}; never raises into JS.
+        """
+        if not isinstance(filename, str) or not isinstance(content, str):
+            return {"status": "error", "message": "Nothing to save."}
+        window = self._window
+        if not window:
+            return {"status": "error", "message": "The app window is not ready."}
+        try:
+            # pywebview gives the bridge to any page the window shows, including one
+            # reached through a link in a converted document; only InkDoc's own may save.
+            if not self._app_origin or _url_origin(window.get_current_url()) != self._app_origin:
+                return {"status": "error", "message": "Saving is only available from InkDoc itself."}
+
+            import webview
+
+            # Last component, extension dropped; not Path(), which reads "a:" as a drive on Windows.
+            base = filename.replace("\\", "/").rsplit("/", 1)[-1]
+            name = f"{sanitize_filename(os.path.splitext(base)[0])}.md"
+            result = window.create_file_dialog(
+                webview.FileDialog.SAVE,
+                directory=str(_default_save_dir()),
+                save_filename=name,
+                file_types=("Markdown files (*.md)",),
+            )
+            # A tuple on Windows, GTK and Qt; a plain string on macOS.
+            chosen = result if isinstance(result, str) else (result[0] if result else "")
+            if not chosen:
+                return {"status": "cancelled"}
+
+            path = Path(chosen)
+            renamed = False
+            # strip("."): Python 3.14+ reports "notes." as having the suffix ".".
+            if not path.suffix.strip("."):
+                # GTK, Qt and macOS do not add the filter's extension.
+                path = path.with_name(f"{path.name.rstrip('.') or 'untitled'}.md")
+                renamed = True
+            # The other backends ask before replacing the file they returned; GTK
+            # never asks, and none of them saw the name once ".md" was added here.
+            gui_name = getattr(getattr(window, "gui", None), "__name__", "")
+            if (
+                (renamed or gui_name.endswith(".gtk"))
+                and path.exists()
+                and not window.create_confirmation_dialog(
+                    "Replace file?", f"{path.name} already exists. Replace it?"
+                )
+            ):
+                return {"status": "cancelled"}
+
+            # Encode before opening: write_text truncates first, so text it cannot
+            # encode would empty a file the user chose to replace. A lone surrogate
+            # (garbled OCR text) becomes U+FFFD, as in a browser download; line
+            # endings are written as is.
+            data = _LONE_SURROGATE.sub("\ufffd", content).encode("utf-8")
+            path.write_bytes(data)
+            return {"status": "saved", "path": str(path)}
+        except Exception as exc:
+            return {"status": "error", "message": str(exc) or type(exc).__name__}
 
 
 _desktop_window = None
@@ -594,7 +679,7 @@ def run_desktop(
         # open_external_link() is also used for regular in-page links.
         js_api=window_controls,
     )
-    window_controls.attach(window)
+    window_controls.attach(window, app_url)
     _desktop_window = window
 
     # Warm markitdown only after the page has loaded, so the ~2s import does not

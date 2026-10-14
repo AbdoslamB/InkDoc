@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-10-14
+
 ### Fixed
 - The **Download** button in the desktop app now opens a Save dialog (starting
   in Downloads) and writes the `.md` file where you choose. It previously did
@@ -158,6 +160,7 @@ Initial release.
 - Windows installer (`inkdoc-setup.exe`), portable executable (`inkdoc.exe`) and
   portable ZIP; macOS (Apple Silicon) bundle; Linux (x86_64) bundle.
 
-[Unreleased]: https://github.com/AbdoslamB/InkDoc/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/AbdoslamB/InkDoc/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/AbdoslamB/InkDoc/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/AbdoslamB/InkDoc/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/AbdoslamB/InkDoc/releases/tag/v1.0.0

@@ -1,6 +1,7 @@
-DOMPurify 3.1.6: HTML sanitiser for the preview, bundled at app/ui/vendor/purify.min.js.
+DOMPurify 3.4.16: HTML sanitiser for the preview, bundled at app/ui/vendor/purify.min.js.
 DOMPurify is offered under Apache-2.0 or MPL-2.0, at the recipient's choice.
-Source: https://github.com/cure53/DOMPurify/blob/3.1.6/LICENSE (fetched 2026-10-01)
+Source: https://github.com/cure53/DOMPurify/blob/3.4.16/LICENSE and LICENSE-MPL
+(the npm package's licence field is "(MPL-2.0 OR Apache-2.0)"; texts unchanged since 3.1.6)
 ------------------------------------------------------------------------------
 
 DOMPurify

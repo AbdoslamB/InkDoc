@@ -35,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - If the save folder's location can't be checked, files are saved to
   Downloads instead.
 - Release notes are shown as plain text if the HTML sanitiser is unavailable.
+- The preview's HTML sanitiser, DOMPurify, is updated from 3.1.6 to 3.4.16,
+  picking up the upstream security fixes released since.
 
 ### Added
 - **Save folder** setting (Settings → General): choose where auto-save

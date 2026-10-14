@@ -155,3 +155,65 @@ def test_width_and_text_size_are_independent():
     html = client.get("/InkDoc").text
     assert _page_width(html) == "full"
     assert _page_text_size(html) == "90"
+
+
+# ─── Math formulas (built-in add-on) ─────────────────────────────────────────
+# render_math: on unless explicitly switched off; set on <html> before first
+# paint so a preview can never be parsed with the wrong setting.
+
+def _page_render_math(html: str) -> str | None:
+    match = re.search(r"document\.documentElement\.dataset\.renderMath = '(on|off)';", html)
+    return match.group(1) if match else None
+
+
+def test_render_math_is_on_by_default():
+    assert DEFAULT_SETTINGS["render_math"] is True
+    assert client.get("/settings").json()["render_math"] is True
+    assert _page_render_math(client.get("/InkDoc").text) == "on"
+
+
+def test_render_math_off_and_on_again():
+    mgr = EngineManager.get_instance()
+    for value, page in [(False, "off"), (True, "on")]:
+        resp = client.post("/settings", json={"render_math": value}, headers=TOKEN)
+        assert resp.status_code == 200
+        assert client.get("/settings").json()["render_math"] is value
+        assert _page_render_math(client.get("/InkDoc").text) == page
+        stored = json.loads(mgr.get_settings_file_path().read_text(encoding="utf-8"))
+        assert stored["render_math"] is value
+
+
+def test_render_math_refuses_non_booleans():
+    for bad in ["maybe", 2, [True], {"on": True}, "off'; alert(1); '"]:
+        resp = client.post("/settings", json={"render_math": bad}, headers=TOKEN)
+        assert resp.status_code == 422, bad
+    assert EngineManager.get_instance().get_settings()["render_math"] is True
+
+
+def test_render_math_needs_the_session_token():
+    assert client.post("/settings", json={"render_math": False}).status_code == 403
+    assert EngineManager.get_instance().get_settings()["render_math"] is True
+
+
+def test_hand_edited_render_math_is_on_unless_false():
+    """Only an explicit false turns it off; nothing stored is ever written into the page."""
+    mgr = EngineManager.get_instance()
+    for stored, page in [(None, "on"), ("false", "on"), (0, "on"), ("off'; alert(1); '", "on"), (False, "off")]:
+        mgr.update_settings({"render_math": stored})
+        html = client.get("/InkDoc").text
+        assert _page_render_math(html) == page, stored
+        assert "alert(1)" not in html
+
+
+def test_page_policy_unchanged_by_math():
+    """KaTeX comes from /static under the existing policy: no eval, no other origins."""
+    csp = client.get("/InkDoc").headers["content-security-policy"]
+    assert "script-src 'self' 'nonce-" in csp and "unsafe-eval" not in csp
+    assert "font-src 'self' https://fonts.gstatic.com data:;" in csp
+    assert "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;" in csp
+
+
+def test_katex_is_served_from_static():
+    for path in ["/static/vendor/katex/katex.min.js", "/static/vendor/katex/katex.min.css",
+                 "/static/vendor/katex/fonts/KaTeX_Main-Regular.woff2"]:
+        assert client.get(path).status_code == 200, path

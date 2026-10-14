@@ -771,6 +771,42 @@ html[data-layout-width="full"] {
   outline-offset: -2px;
 }
 
+/* Add-ons: one card per add-on, styled like the engine cards. */
+.addons-intro {
+  margin-top: 0;
+  margin-bottom: 12px;
+}
+
+.addon-card {
+  padding: 12px 14px;
+  background-color: var(--sunken);
+  border: 1px solid var(--rule-subtle);
+  border-radius: 8px;
+}
+
+.addon-card + .addon-card {
+  margin-top: 8px;
+}
+
+.addon-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.addon-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.addon-card-meta {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--faint);
+}
+
 /* Preview text size (Display): A- and A+ only, with a live sample below. */
 .text-size {
   margin-top: 14px;
@@ -2672,6 +2708,38 @@ html[data-layout-width="full"] {
 /* Markdown puts a picture inside a paragraph; that paragraph is not text. */
 .markdown-rendered > p:has(> img) {
   max-width: none;
+}
+
+/* Math formulas (Settings → Add-ons). Until KaTeX has drawn it, or if it
+   can't, a formula shows its exact LaTeX in the code font. KaTeX sizes
+   itself in em, so drawn formulas follow the preview text size. */
+.markdown-rendered .math-tex {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  color: var(--muted);
+}
+
+.markdown-rendered .math-tex.math-done {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+.markdown-rendered .math-block {
+  display: block;
+  margin: 1em 0;
+  text-align: center;
+  white-space: pre-wrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.markdown-rendered .math-block.math-done {
+  white-space: normal;
+}
+
+.markdown-rendered .math-block .katex-display {
+  margin: 0;
 }
 
 .markdown-rendered th,

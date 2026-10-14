@@ -159,6 +159,7 @@ node tests/theme_toggle_ui.test.js
 node tests/settings_drawer_ui.test.js
 node tests/layout_width_ui.test.js
 node tests/text_size_ui.test.js
+node tests/math_render_ui.test.js
 
 # 5. Verify code style with ruff
 ruff check .

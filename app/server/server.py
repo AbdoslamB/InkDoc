@@ -771,6 +771,13 @@ class SettingsPayload(BaseModel):
             "110, 120, 135 or 150. Applied from the next page load on."
         ),
     )
+    render_math: bool | None = Field(
+        default=None,
+        description=(
+            r"Draw LaTeX math ($...$, $$...$$, \(...\), \[...\]) in the preview with the "
+            "bundled KaTeX (default true). Never changes saved files or API output."
+        ),
+    )
 
 
 # Resource and DoS protection limits
@@ -886,6 +893,15 @@ def _initial_preview_text_size() -> int:
     return int(value)
 
 
+def _initial_render_math() -> str:
+    """'off' only when math rendering was switched off; anything else is 'on'."""
+    try:
+        value = EngineManager.get_instance().get_settings().get("render_math")
+    except Exception:
+        return "on"
+    return "off" if value is False else "on"
+
+
 def _serve_bench_html() -> HTMLResponse:
     index_file = UI_DIR / "index.html"
     if index_file.exists():
@@ -911,6 +927,7 @@ def _serve_bench_html() -> HTMLResponse:
         # render at the defaults and then jump.
         layout_width = _initial_layout_width()
         text_size = _initial_preview_text_size()
+        render_math = _initial_render_math()
         token_injection = (
             f'<script id="inkdoc-session-token" nonce="{nonce}">'
             f'window.__INKDOC_SESSION_TOKEN__ = "{SESSION_TOKEN}";'
@@ -918,6 +935,7 @@ def _serve_bench_html() -> HTMLResponse:
             f'{titlebar_class}'
             f"document.documentElement.dataset.layoutWidth = '{layout_width}';"
             f"document.documentElement.dataset.textSize = '{text_size}';"
+            f"document.documentElement.dataset.renderMath = '{render_math}';"
             f'</script>'
         )
         if "<head>" in html_content:

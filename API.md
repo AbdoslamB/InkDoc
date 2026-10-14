@@ -281,10 +281,11 @@ Query or update application engine preferences.
     "quality_check_enabled": true,
     "glm_ocr_download_source": "auto",
     "layout_width": "standard",
-    "preview_text_size": 100
+    "preview_text_size": 100,
+    "render_math": true
   }
   ```
-  `quality_check_enabled` (default `true`) turns the missing-text check on or off for requests that do not pass `check_quality`. `glm_ocr_download_source` is `auto` (official source first, InkDoc mirror as fallback) or `mirror_only`. `layout_width` (default `standard`) is how much of a wide window the UI uses: `standard` (up to 1400px), `wide` (up to 1920px) or `full`; any other value is refused with `422`. The UI applies it from the next page load. `preview_text_size` (default `100`) is the document preview's text size in percent: `85`, `90`, `100`, `110`, `120`, `135` or `150`; anything else is refused with `422`.
+  `quality_check_enabled` (default `true`) turns the missing-text check on or off for requests that do not pass `check_quality`. `glm_ocr_download_source` is `auto` (official source first, InkDoc mirror as fallback) or `mirror_only`. `layout_width` (default `standard`) is how much of a wide window the UI uses: `standard` (up to 1400px), `wide` (up to 1920px) or `full`; any other value is refused with `422`. The UI applies it from the next page load. `preview_text_size` (default `100`) is the document preview's text size in percent: `85`, `90`, `100`, `110`, `120`, `135` or `150`; anything else is refused with `422`. `render_math` (default `true`) draws LaTeX math in the UI preview with the bundled KaTeX; it never changes conversion output, saved files or API responses.
 * **Save folder** (`GET` only): the response includes `save_folder`, for example
   `{"path": "C:\\Users\\you\\Downloads", "chosen": "D:\\Notes", "custom": true, "problem": "This folder was not found. Files are saved to Downloads until it is back."}`.
   `path` is where auto-save writes now; `chosen` is the folder picked in Settings (`""` for Downloads). The save folder can only be changed in the desktop app's folder dialog: `POST /settings` ignores `save_dir`, and no other request can set it.

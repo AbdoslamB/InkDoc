@@ -105,6 +105,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # Text size of the document preview (Rendered and Raw tabs), in percent.
     # Only the interface's own steps are accepted; 100 is the size used before.
     "preview_text_size": 100,
+    # Built-in add-on (Settings → Add-ons): draw LaTeX math in the preview with
+    # the bundled KaTeX. Off means the preview is parsed exactly as before.
+    "render_math": True,
 }
 
 LAYOUT_WIDTHS = ("standard", "wide", "full")

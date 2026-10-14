@@ -1933,6 +1933,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         if (s.layout_width !== undefined) syncLayoutWidth(s.layout_width);
         if (s.preview_text_size !== undefined) syncTextSize(s.preview_text_size);
+        if (s.render_math !== undefined) syncRenderMath(s.render_math);
         // Last, so nothing in the save folder row can stop the toggles above.
         renderSaveFolder(s.save_folder);
       }
@@ -3565,6 +3566,348 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   // ─── End table scroll boxes ──────────────────────────────────────────────
 
+  // ─── Math formulas (built-in add-on: KaTeX) ──────────────────────────────
+  // LaTeX from Docling's formula recognition and GLM-OCR ($…$, $$…$$, \(…\),
+  // \[…\]) is drawn with KaTeX in the Rendered tab. Switched off in Settings →
+  // Add-ons, or for a document with no delimiter at all, the Markdown goes
+  // through the global parser exactly as before. KaTeX is bundled and loaded
+  // only the first time a document has math; formulas on screen are drawn
+  // first and the rest in short slices, so the window never blocks. Saved
+  // files, Copy, Download and the Raw tab always use the Markdown itself.
+  const KATEX_JS  = "/static/vendor/katex/katex.min.js";
+  const KATEX_CSS = "/static/vendor/katex/katex.min.css";
+  const MATH_HINT = /\$|\\\(|\\\[/;
+  const MATH_INLINE_MAX = 1000;   // characters in one inline formula
+  const MATH_MAX = 5000;          // a display formula longer than this stays text
+  const MATH_LOOKAHEAD = 512;     // one search for an inline formula reads no further
+  const MATH_DOC_MAX = 2000000;   // larger documents are parsed exactly as before
+  const MATH_SLICE_MS = 6;        // KaTeX work per slice…
+  const MATH_SLICE_MAX = 8;       // …and formulas per slice: the browser lays
+                                  // out what was inserted after each slice
+  const MATH_CACHE_MAX = 500;
+  const KATEX_OPTIONS = { throwOnError: true, trust: false, strict: "ignore", maxSize: 20, maxExpand: 500, output: "htmlAndMathml" };
+  // KaTeX's <annotation> holds the LaTeX again; DOMPurify drops the element but
+  // would keep its text inside <math>, so drop the text too.
+  const MATH_SANITIZE = { ADD_FORBID_CONTENTS: ["annotation"] };
+  // Placeholders carry this per-session value and only they are drawn, so
+  // look-alike HTML written into a document (class="math-tex") never is.
+  const MATH_MARK = mathMark();
+  const mathToggle = document.getElementById("mathToggle");
+  let renderMath = document.documentElement.dataset.renderMath !== "off";
+  let mathParser = null;
+  let katexLoader = null;
+  let mathRun = 0;                // every render bumps it; older work stops
+  let mathObserver = null;
+  let mathSaves = 0;
+  const mathCache = new Map();    // "D"/"I" + LaTeX → sanitised KaTeX HTML, or null if it failed
+
+  function mathMark() {
+    const bytes = new Uint8Array(8);
+    if (window.crypto && typeof window.crypto.getRandomValues === "function") {
+      window.crypto.getRandomValues(bytes);
+    } else {
+      for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+    }
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+
+  function mathPlaceholder(tex, display) {
+    const tag = display ? "div" : "span";
+    const cls = display ? "math-tex math-block" : "math-tex";
+    return `<${tag} class="${cls}" data-math="${MATH_MARK}" data-display="${display ? 1 : 0}">${escapeHtml(tex)}</${tag}>`;
+  }
+
+  // $$…$$ or \[…\] starting a line, on one line (Docling) or across lines
+  // (GLM-OCR). A blank line inside means it isn't a formula, so a stray $$
+  // can never swallow the rest of the document. Every search here is
+  // bounded (the paragraph, or MATH_MAX), so parsing stays linear: marked
+  // asks again before every block, and unbounded searches made a large
+  // document with one $ take tens of seconds (security review, 1.2.0).
+  const MATH_BLOCK = {
+    name: "mathBlock",
+    level: "block",
+    // marked passes the rest of the current block from its second character
+    // on, so only the following lines can start a formula, and a blank line
+    // ends the paragraph it would cut, so nothing past it matters here.
+    start(src) {
+      let i = src.indexOf("\n");
+      while (i !== -1) {
+        i++;
+        let j = i;
+        while (j < src.length && (src[j] === " " || src[j] === "\t")) j++;
+        if (j >= src.length || src[j] === "\n") return undefined;
+        if (j - i <= 3 && (src.startsWith("$$", j) || src.startsWith("\\[", j))) return i;
+        i = src.indexOf("\n", j);
+      }
+      return undefined;
+    },
+    tokenizer(src) {
+      const m = /^[ \t]{0,3}(\$\$|\\\[)/.exec(src);
+      if (!m) return undefined;
+      const close = m[1] === "$$" ? "$$" : "\\]";
+      const from = m[0].length;
+      const end = src.slice(from, from + MATH_MAX + close.length).indexOf(close);
+      if (end < 0) return undefined;
+      const body = src.slice(from, from + end);
+      const tex = body.trim();
+      if (!tex || /\n[ \t]*\n/.test(body)) return undefined;
+      let after = from + end + close.length;
+      while (src[after] === " " || src[after] === "\t") after++;
+      if (after < src.length && src[after] !== "\n") return undefined;
+      if (src[after] === "\n") after++;
+      return { type: "mathBlock", raw: src.slice(0, after), text: tex };
+    },
+    renderer(token) { return mathPlaceholder(token.text, true) + "\n"; },
+  };
+
+  // \(…\), $…$ and $$…$$ inside a line. For $, Pandoc's rule, which keeps
+  // prices out: the opening $ is not followed by a space, the closing $ is
+  // not preceded by a space nor followed by a digit; here the formula also
+  // stays on one line and never runs into a backtick, so a price can't pair
+  // with a $ inside inline code. \$ is always a literal dollar. Code spans
+  // and code blocks are read by marked before this rule can see them.
+  const MATH_INLINE = {
+    name: "mathInline",
+    level: "inline",
+    // Looks at most MATH_LOOKAHEAD characters ahead. When no formula can start
+    // there, it hands marked a point to cut the text at (a space if there is
+    // one, so links aren't split) and is asked again from there: each call
+    // costs the same, however long the paragraph.
+    start(src) {
+      const limit = Math.min(src.length, MATH_LOOKAHEAD);
+      let cut = -1;
+      for (let i = 0; i < limit; i++) {
+        const c = src[i];
+        if (c === "$") return i;
+        if (c === "\\") {
+          if (src[i + 1] === "(") return i;
+          i++; // skip whatever is escaped, \$ included
+          continue;
+        }
+        if (c === " " || c === "\n" || c === "\t") cut = i;
+      }
+      if (limit === src.length) return undefined;
+      return cut > 0 ? cut : limit - 1;
+    },
+    tokenizer(src) {
+      if (src.startsWith("\\(")) {
+        const end = src.slice(2, 2 + MATH_INLINE_MAX + 2).indexOf("\\)");
+        const tex = end > 0 ? src.slice(2, 2 + end) : "";
+        if (!tex.trim() || tex.includes("\n\n")) return undefined;
+        return { type: "mathInline", raw: src.slice(0, end + 4), text: tex.trim(), display: false };
+      }
+      if (src[0] !== "$") return undefined;
+      const display = src[1] === "$";
+      const open = display ? 2 : 1;
+      const first = src[open];
+      if (!first || first === "$" || /\s/.test(first)) return undefined;
+      let i = open;
+      while (i < src.length && i - open <= MATH_INLINE_MAX) {
+        const c = src[i];
+        if (c === "\\") { i += 2; continue; }
+        if (c === "\n" || c === "`") return undefined;
+        if (c === "$") break;
+        i++;
+      }
+      if (src[i] !== "$" || i - open > MATH_INLINE_MAX) return undefined;
+      if (display && src[i + 1] !== "$") return undefined;
+      const tex = src.slice(open, i);
+      if (/\s$/.test(tex)) return undefined;
+      const close = i + (display ? 2 : 1);
+      if (/\d/.test(src[close] || "")) return undefined;
+      return { type: "mathInline", raw: src.slice(0, close), text: tex, display };
+    },
+    renderer(token) { return mathPlaceholder(token.text, token.display); },
+  };
+
+  // The one place the preview's Markdown becomes HTML.
+  function markdownToHtml(md) {
+    if (!renderMath || md.length > MATH_DOC_MAX || !MATH_HINT.test(md) || typeof window.marked.Marked !== "function") {
+      return window.marked.parse(md);
+    }
+    if (!mathParser) {
+      mathParser = new window.marked.Marked({ gfm: true, breaks: true });
+      mathParser.use({ extensions: [MATH_BLOCK, MATH_INLINE] });
+    }
+    return mathParser.parse(md);
+  }
+
+  // Script and stylesheet together: KaTeX's HTML is unreadable without its
+  // CSS, so if either fails the formulas simply stay as LaTeX text. If the
+  // script ran but didn't register window.katex (a document can shadow the
+  // globals its loader checks, e.g. <a id="exports">), the next document may
+  // try again; a missing file is not retried.
+  function loadKatex() {
+    if (katexLoader) return katexLoader;
+    katexLoader = new Promise((resolve) => {
+      const done = (ok) => {
+        const k = window.katex;
+        const usable = ok && k && typeof k.renderToString === "function";
+        if (ok && !usable) katexLoader = null;
+        resolve(usable ? k : null);
+      };
+      const css = document.createElement("link");
+      css.rel = "stylesheet";
+      css.href = KATEX_CSS;
+      const cssLoaded = new Promise((r) => { css.onload = () => r(true); css.onerror = () => r(false); });
+      const js = document.createElement("script");
+      js.src = KATEX_JS;
+      js.async = true;
+      const jsLoaded = new Promise((r) => { js.onload = () => r(true); js.onerror = () => r(false); });
+      document.head.appendChild(css);
+      document.head.appendChild(js);
+      Promise.all([cssLoaded, jsLoaded]).then(([a, b]) => {
+        if (!a || !b) console.warn("Math formulas: KaTeX could not be loaded; showing LaTeX as text.");
+        done(a && b);
+      });
+    });
+    return katexLoader;
+  }
+
+  function typesetOne(node, katex) {
+    const tex = node.textContent;
+    const display = node.dataset.display === "1";
+    // The parser already keeps to these limits; checked again here because
+    // KaTeX's output grows with its input and one formula is drawn at once.
+    if (tex.length > (display ? MATH_MAX : MATH_INLINE_MAX)) {
+      node.classList.add("math-error");
+      node.title = "Too long to render as a formula";
+      return;
+    }
+    const key = (display ? "D" : "I") + tex;
+    let html = mathCache.get(key);
+    if (html === undefined) {
+      try {
+        html = window.DOMPurify.sanitize(katex.renderToString(tex, { ...KATEX_OPTIONS, displayMode: display }), MATH_SANITIZE);
+      } catch (_) {
+        html = null;
+      }
+      if (mathCache.size >= MATH_CACHE_MAX) mathCache.delete(mathCache.keys().next().value);
+      mathCache.set(key, html);
+    }
+    if (html === null) {
+      node.classList.add("math-error");
+      node.title = "Couldn't render this formula";
+      return;
+    }
+    node.innerHTML = html;
+    node.classList.add("math-done");
+  }
+
+  function cancelMath() {
+    mathRun++;
+    if (mathObserver) {
+      mathObserver.disconnect();
+      mathObserver = null;
+    }
+  }
+
+  // Formulas on screen (or within 600px of it) first, then the rest in
+  // document order, in slices of MATH_SLICE_MS. setTimeout rather than
+  // requestIdleCallback, which WebKit (macOS, Linux) doesn't have.
+  function typesetMath(root) {
+    cancelMath();
+    const run = mathRun;
+    if (!renderMath || !window.DOMPurify) return;
+    const nodes = Array.from(root.querySelectorAll(`.math-tex[data-math="${MATH_MARK}"]`));
+    if (nodes.length === 0) return;
+    loadKatex().then((katex) => {
+      if (!katex || run !== mathRun) return;
+      const left = new Set(nodes);
+      const soon = [];
+      let next = 0;
+      let queued = false;
+      // Only the first report matters: it says which formulas are on screen
+      // now. After that the rest go in document order anyway, and keeping
+      // hundreds of targets observed would cost a check on every frame.
+      if (typeof window.IntersectionObserver === "function") {
+        mathObserver = new window.IntersectionObserver((entries) => {
+          entries.forEach((e) => { if (e.isIntersecting && left.has(e.target)) soon.push(e.target); });
+          if (mathObserver) mathObserver.disconnect();
+          mathObserver = null;
+          kick();
+        }, { root: root.closest(".tab-content"), rootMargin: "600px 0px" });
+        nodes.forEach((n) => mathObserver.observe(n));
+      }
+      function take() {
+        while (soon.length) {
+          const n = soon.shift();
+          if (left.has(n)) return n;
+        }
+        while (next < nodes.length) {
+          const n = nodes[next++];
+          if (left.has(n)) return n;
+        }
+        return null;
+      }
+      function kick() {
+        if (queued) return;
+        queued = true;
+        setTimeout(step, 0);
+      }
+      function step() {
+        queued = false;
+        if (run !== mathRun) return;
+        const until = performance.now() + MATH_SLICE_MS;
+        let count = 0;
+        do {
+          const n = take();
+          if (!n) {
+            if (mathObserver) mathObserver.disconnect();
+            mathObserver = null;
+            return;
+          }
+          left.delete(n);
+          typesetOne(n, katex);
+        } while (++count < MATH_SLICE_MAX && performance.now() < until);
+        kick();
+      }
+      kick();
+    });
+  }
+
+  // The switch: off means the preview is parsed exactly as before and KaTeX
+  // is never loaded. Applies at once (the open document is drawn again) and
+  // is kept in settings.json; the server puts it on <html> before first paint.
+  function applyRenderMath(on) {
+    renderMath = on;
+    document.documentElement.dataset.renderMath = on ? "on" : "off";
+    if (mathToggle) mathToggle.checked = on;
+    if (activeItemId) selectItem(activeItemId);
+  }
+
+  // From GET /settings, each time Settings opens; never over a pending save.
+  function syncRenderMath(value) {
+    const on = value !== false;
+    if (mathSaves === 0 && on !== renderMath) applyRenderMath(on);
+  }
+
+  if (mathToggle) {
+    mathToggle.checked = renderMath;
+    mathToggle.addEventListener("change", async () => {
+      const on = mathToggle.checked;
+      const before = renderMath;
+      applyRenderMath(on);
+      const save = ++mathSaves;
+      let saved = false;
+      try {
+        const resp = await fetchWithToken(`${apiBase}/settings`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ render_math: on }),
+        });
+        saved = resp.ok;
+      } catch (_) {}
+      if (save !== mathSaves) return; // a newer change decides
+      mathSaves = 0;
+      if (!saved) {
+        applyRenderMath(before);
+        showToast("Couldn't save the math setting.", "error");
+      }
+    });
+  }
+  // ─── End math formulas ───────────────────────────────────────────────────
+
   // ─── Select & Display Item ───────────────────────────────────────────────
   const EMPTY_HINT_SVG = `<svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line></svg>`;
 
@@ -3643,6 +3986,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function selectItem(id) {
+    cancelMath(); // formulas still being drawn belong to the previous preview
     activeItemId = id;
     const item = queue.find((i) => i.id === id);
     if (!item) return;
@@ -3793,7 +4137,7 @@ document.addEventListener("DOMContentLoaded", () => {
           window.marked.use({ gfm: true, breaks: true });
         }
       } catch (_) {}
-      const rawHtml = window.marked.parse(md);
+      const rawHtml = markdownToHtml(md);
       if (window.DOMPurify) {
         renderedOutput.innerHTML = window.DOMPurify.sanitize(rawHtml);
       } else {
@@ -3804,6 +4148,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     wrapTables(renderedOutput);
     highlightCodeBlocks(renderedOutput);
+    typesetMath(renderedOutput);
 
     renderQueue();
   }

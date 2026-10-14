@@ -73,6 +73,7 @@
               <nav class="settings-nav" id="settingsNav" aria-label="Settings sections">
                 <button type="button" class="settings-nav-item" id="settingsNavGeneral" data-settings-section="general" aria-controls="settingsPaneGeneral" aria-current="page">General</button>
                 <button type="button" class="settings-nav-item" id="settingsNavEngines" data-settings-section="engines" aria-controls="settingsPaneEngines">Engines</button>
+                <button type="button" class="settings-nav-item" id="settingsNavAddons" data-settings-section="addons" aria-controls="settingsPaneAddons">Add-ons</button>
                 <button type="button" class="settings-nav-item" id="settingsNavUpdates" data-settings-section="updates" aria-controls="settingsPaneUpdates">Updates<span class="settings-nav-dot" id="settingsUpdateDot" title="Update available" hidden></span></button>
                 <button type="button" class="settings-nav-item" id="settingsNavAbout" data-settings-section="about" aria-controls="settingsPaneAbout">About</button>
               </nav>
@@ -417,6 +418,29 @@
                       </div>
                     </div>
                   </details>
+                </div>
+              </section>
+
+              <section class="settings-pane" id="settingsPaneAddons" data-settings-pane="addons" aria-labelledby="settingsNavAddons" hidden>
+                <div class="settings-section">
+                  <p class="settings-section-title">Add-ons</p>
+                  <p class="settings-caption addons-intro">Optional features. Built-in add-ons are part of InkDoc: nothing is downloaded, and they work offline.</p>
+
+                  <!-- Built-in add-on: math formulas (bundled KaTeX, loaded only for
+                       documents that contain math). The switch is render_math. -->
+                  <div class="addon-card" id="mathAddonCard">
+                    <div class="addon-card-head">
+                      <div>
+                        <p class="addon-card-title" id="mathAddonTitle">Math formulas</p>
+                        <p class="addon-card-meta">Built in · KaTeX</p>
+                      </div>
+                      <label class="toggle-switch" title="Draw LaTeX math as formulas in the preview">
+                        <input type="checkbox" id="mathToggle" checked aria-labelledby="mathAddonTitle">
+                        <span class="toggle-slider"></span>
+                      </label>
+                    </div>
+                    <p class="settings-caption">Shows LaTeX, such as the formulas Docling and GLM-OCR read from PDFs, as formulas in the preview. Turn it off if ordinary text with $ signs is shown as math. Saved files are never changed.</p>
+                  </div>
                 </div>
               </section>
 

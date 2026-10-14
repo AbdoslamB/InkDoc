@@ -162,7 +162,7 @@ gh attestation verify inkdoc-setup.exe --repo AbdoslamB/inkdoc
       <br />
       <b>Single Source of Truth Interface</b>
       <br />
-      The native desktop executable (Edge WebView2 on Windows, WebKit on macOS/Linux) and the local web workbench (<code>http://127.0.0.1:13118/InkDoc</code>) run the <b>exact same user interface</b> without code divergence. On large screens, <b>Settings → General → Layout width</b> (Standard, Wide or Full) gives tables, code and images more room, and <b>A− / A+</b> set the preview's text size.
+      The native desktop executable (Edge WebView2 on Windows, WebKit on macOS/Linux) and the local web workbench (<code>http://127.0.0.1:13118/InkDoc</code>) run the <b>exact same user interface</b> without code divergence. On large screens, <b>Settings → General → Layout width</b> (Standard, Wide or Full) gives tables, code and images more room, and <b>A− / A+</b> set the preview's text size. LaTeX formulas from Docling and GLM-OCR are drawn as real math (bundled KaTeX, works offline; switch it off in <b>Settings → Add-ons</b>).
     </td>
   </tr>
   <tr>
@@ -410,6 +410,7 @@ node tests/theme_toggle_ui.test.js
 node tests/settings_drawer_ui.test.js
 node tests/layout_width_ui.test.js
 node tests/text_size_ui.test.js
+node tests/math_render_ui.test.js
 
 # 4. Verify code style and formatting with Ruff
 ruff check .

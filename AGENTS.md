@@ -42,7 +42,7 @@ python -c "import urllib.request, time; time.sleep(2); res = urllib.request.urlo
 
 # Test suite (CI runs exactly this) and the UI unit tests (Node, no npm)
 python -m pytest tests/ -q
-node tests/auto_engine_ui.test.js && node tests/preview_word_count.test.js && node tests/glm_ocr_ui.test.js && node tests/desktop_download_ui.test.js && node tests/save_folder_ui.test.js && node tests/preview_links_ui.test.js && node tests/theme_toggle_ui.test.js && node tests/settings_drawer_ui.test.js && node tests/layout_width_ui.test.js && node tests/text_size_ui.test.js
+node tests/auto_engine_ui.test.js && node tests/preview_word_count.test.js && node tests/glm_ocr_ui.test.js && node tests/desktop_download_ui.test.js && node tests/save_folder_ui.test.js && node tests/preview_links_ui.test.js && node tests/theme_toggle_ui.test.js && node tests/settings_drawer_ui.test.js && node tests/layout_width_ui.test.js && node tests/text_size_ui.test.js && node tests/math_render_ui.test.js
 
 # Lint (also run in CI)
 pip install ruff
@@ -84,9 +84,11 @@ afterward — nothing test-related should be left in the user's actual folders.
 - `app/server/` — Embedded REST API backend:
   - `server.py` — FastAPI REST API endpoints (`/convert/file`, `/convert/url`, `/convert/batch`, `/convert/progress/{job_id}`, `/convert/cancel/{job_id}`, `/health`, `/extensions`), dual-mounts `/static` and `/ui`. Lanes: Docling (1), GLM-OCR (1), default (2) and a probe lane (1) for pdfium work, all acquired in async code before `asyncio.to_thread`. `/engines/{name}/…` dispatches `glm_ocr` to `GlmOcrManager`; `/convert/estimate` gives GLM-OCR's page count and time estimate. Explicit engines convert → auto-save → check; Auto probes → converts → checks → (maybe re-converts) → auto-saves once. Response metadata is built in one place, `_conversion_payload`.
 - `app/ui/` — **The single shared web & desktop UI**:
-  - `index.html` — Application DOM structure, dropzone, engine pills, live preview pane, Settings drawer (General / Engines / Updates / About; it sits below the header so the title bar stays usable, and every engine prompt opens it on Engines).
+  - `index.html` — Application DOM structure, dropzone, engine pills, live preview pane, Settings drawer (General / Engines / Add-ons / Updates / About; it sits below the header so the title bar stays usable, and every engine prompt opens it on Engines).
   - `style.css` — Inkbench design system: obsidian dark & light themes, glowing engine selector pills, responsive layout.
-  - `app.js` — Client-side logic: drag-and-drop, API conversion, live markdown preview (`marked.js`), auto-save toggle, engine switching.
+  - `app.js` — Client-side logic: drag-and-drop, API conversion, live markdown preview (`marked.js`), auto-save toggle, engine switching. Every preview parse goes through `markdownToHtml`: with `render_math` off, or no `$`, `\(` or `\[` in the document, it is the global `marked.parse`, unchanged; otherwise a separate `marked.Marked` instance with the math rules. `typesetMath` lazy-loads KaTeX and draws formulas in slices.
+  - `vendor/` — Bundled third-party JS/CSS/fonts (marked, DOMPurify, highlight.js, KaTeX). Never fetched at runtime; every file pinned by SHA-256 in `vendor/VENDOR.json` (`tests/test_vendor_manifest.py`); never line-ending converted (`.gitattributes`).
+  - **Add-ons** (Settings section): built-in add-ons are bundled code switched by a setting (math formulas → `render_math`). Downloadable add-ons may only ever be data (models, fonts, dictionaries) through the signed `AddonManager` catalogue, never JavaScript that runs in the page. The existing `addon*` element ids, `/addons/*` routes and `AddonManager` belong to the Docling recognition model, not to this section.
   - `logo.svg`, `favicon.svg` — Brand assets.
 - `app/desktop/runner.py` — Desktop application runner:
   - Finds an available local loopback port (`13118` or ephemeral).

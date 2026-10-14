@@ -186,7 +186,7 @@ function setup({ initial, respond = () => ({ ok: true }) } = {}) {
     // Wiring in app.js: tables are wrapped on every render, before highlighting;
     // Settings re-reads the width (guarded, so the add-on test's slice still runs).
     {
-        const render = source.indexOf("      const rawHtml = window.marked.parse(md);");
+        const render = source.indexOf("      const rawHtml = markdownToHtml(md);");
         const wrap = source.indexOf("    wrapTables(renderedOutput);", render);
         const highlight = source.indexOf("    highlightCodeBlocks(renderedOutput);", render);
         assert.ok(render > 0 && wrap > render && highlight > wrap, "wrapTables runs after sanitising, before highlighting");

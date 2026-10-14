@@ -103,6 +103,10 @@ jobs:
         if: runner.os == 'Linux'
         run: node tests/text_size_ui.test.js
 
+      - name: Test math formulas UI
+        if: runner.os == 'Linux'
+        run: node tests/math_render_ui.test.js
+
       # installer.iss is otherwise only compiled by release.yml, after the tag is
       # pushed, so a mistake in its Pascal [Code] cost a version number. Compile
       # it here against a stand-in bundle (only the script is being checked).

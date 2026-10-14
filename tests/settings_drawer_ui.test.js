@@ -359,17 +359,21 @@ function setup() {
     callers.forEach((call) => assert.ok(call.includes('"engines"'), `${call} should open the Engines section`));
 }
 
-// Markup: one nav item and one pane per section, General shown first, the
-// daily update toggle under Updates, and the drawer wired to the gear.
+// Markup: one nav item and one pane per section (the stubs above use four;
+// the page also has Add-ons), General shown first, the daily update toggle
+// under Updates, and the drawer wired to the gear.
 {
-    SECTIONS.forEach((s) => {
+    const PAGE_SECTIONS = ["general", "engines", "addons", "updates", "about"];
+    const navOrder = [...html.matchAll(/data-settings-section="(\w+)"/g)].map((m) => m[1]);
+    assert.deepStrictEqual(navOrder, PAGE_SECTIONS, "sidebar order");
+    PAGE_SECTIONS.forEach((s) => {
         assert.strictEqual((html.match(new RegExp(`data-settings-section="${s}"`, "g")) || []).length, 1, `nav item ${s}`);
         assert.strictEqual((html.match(new RegExp(`data-settings-pane="${s}"`, "g")) || []).length, 1, `pane ${s}`);
     });
     const paneTag = (s) => html.match(new RegExp(`<section[^>]*data-settings-pane="${s}"[^>]*>`))[0];
     assert.ok(!/\shidden[\s>]/.test(paneTag("general")), "General is shown first");
     assert.ok(/data-settings-section="general"[^>]*aria-current="page"/.test(html), "and marked current");
-    ["engines", "updates", "about"].forEach((s) => assert.ok(/\shidden[\s>]/.test(paneTag(s)), `${s} starts hidden`));
+    ["engines", "addons", "updates", "about"].forEach((s) => assert.ok(/\shidden[\s>]/.test(paneTag(s)), `${s} starts hidden`));
 
     const paneBody = (s) => {
         const from = html.indexOf(paneTag(s));

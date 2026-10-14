@@ -62,6 +62,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exactly the size used before. It is remembered between launches like the
   layout width; `GET`/`POST /settings` use `preview_text_size` (85, 90, 100,
   110, 120, 135 or 150).
+- **Math formulas** in the preview, and a new **Settings → Add-ons** section
+  where it can be switched off. LaTeX from Docling's formula recognition and
+  GLM-OCR (`$…$`, `$$…$$`, `\(…\)`, `\[…\]`) is drawn as real formulas
+  with KaTeX instead of showing as mangled text. KaTeX is bundled, works
+  offline and is loaded only for documents that contain math, so other
+  documents, startup and saved files are unchanged. Prices such as $5 and
+  code are left alone; if ordinary text with $ signs is ever shown as math,
+  turn **Math formulas** off. `GET`/`POST /settings` use `render_math`.
 
 ### Fixed
 - A wide table in the preview now scrolls sideways on its own instead of

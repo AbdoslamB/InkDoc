@@ -1204,6 +1204,7 @@ html[data-layout-width="full"] {
 
 /* Toggle Switch */
 .toggle-switch {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1213,8 +1214,41 @@ html[data-layout-width="full"] {
   color: var(--muted);
 }
 
+/* Hidden visually but still a real checkbox, so Tab reaches every switch
+   and Space flips it (display: none took switches out of the keyboard). */
 .toggle-switch input {
-  display: none;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.toggle-switch input:focus-visible + .toggle-slider {
+  outline: 2px solid var(--mark);
+  outline-offset: 2px;
+}
+
+/* Settings used from the keyboard (.keyboard-nav, set by app.js): show the
+   focus ring on :focus. WebKit doesn't treat the drawer's own Tab handling
+   as keyboard focus after a mouse click, so :focus-visible alone would leave
+   macOS and Linux keyboard users without a ring. Same rings as above. */
+.settings-drawer.keyboard-nav :focus {
+  outline: 2px solid var(--mark);
+  outline-offset: 2px;
+}
+
+.settings-drawer.keyboard-nav .settings-nav-item:focus,
+.settings-drawer.keyboard-nav .text-size-btn:focus,
+.settings-drawer.keyboard-nav .segmented-option input:focus + span {
+  outline: 2px solid var(--mark);
+  outline-offset: -2px;
+}
+
+.settings-drawer.keyboard-nav .toggle-switch input:focus + .toggle-slider {
+  outline: 2px solid var(--mark);
+  outline-offset: 2px;
 }
 
 .toggle-slider {

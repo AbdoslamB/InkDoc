@@ -876,7 +876,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // dragged a file in): focus then stays where they put it.
   function closeSettings({ restoreFocus = true } = {}) {
     if (!isSettingsOpen()) return;
-    settingsPopover.classList.remove("open");
+    settingsPopover.classList.remove("open", "keyboard-nav");
     document.documentElement.classList.remove("settings-open");
     settingsScrim.hidden = true;
     settingsBtn.setAttribute("aria-expanded", "false");
@@ -928,9 +928,17 @@ document.addEventListener("DOMContentLoaded", () => {
       const next = e.shiftKey
         ? (idx <= 0 ? last : idx - 1)
         : (idx < 0 || idx === last ? 0 : idx + 1);
+      settingsPopover.classList.add("keyboard-nav");
       focusables[next].focus();
     }
   });
+
+  // WebKit shows :focus-visible for focus moved by script only if the
+  // previous focus showed it too, so after a mouse click the Tab handling
+  // above would never show a focus ring on macOS or Linux. While the drawer
+  // is used from the keyboard it carries .keyboard-nav, and the CSS shows the
+  // ring on :focus; a click or tap takes it away again.
+  settingsPopover.addEventListener("pointerdown", () => settingsPopover.classList.remove("keyboard-nav"));
 
   // Focused on click too: WebKit on macOS doesn't focus clicked buttons, and
   // the arrow keys below start from the focused item.
@@ -954,6 +962,7 @@ document.addEventListener("DOMContentLoaded", () => {
     else if (e.key === "ArrowRight" || e.key === "ArrowDown") idx = (idx + 1) % settingsNavItems.length;
     else idx = (idx - 1 + settingsNavItems.length) % settingsNavItems.length;
     showSettingsSection(settingsNavItems[idx].dataset.settingsSection);
+    settingsPopover.classList.add("keyboard-nav");
     settingsNavItems[idx].focus();
   });
 

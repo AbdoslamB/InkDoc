@@ -74,6 +74,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - A wide table in the preview now scrolls sideways on its own instead of
   moving the whole document, and large pictures shrink to fit the preview.
+- Every switch in Settings can now be reached with Tab and flipped with
+  Space, and keyboard focus in Settings is visible on macOS and Linux too.
 
 ## [1.1.1] - 2026-10-14
 

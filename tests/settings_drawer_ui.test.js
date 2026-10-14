@@ -30,7 +30,7 @@ function setup() {
         const node = {
             name, parent, hidden: false, disabled: false, dataset: {}, isConnected: true,
             classList: {
-                add: (c) => classes.add(c), remove: (c) => classes.delete(c),
+                add: (...c) => c.forEach((x) => classes.add(x)), remove: (...c) => c.forEach((x) => classes.delete(x)),
                 contains: (c) => classes.has(c),
             },
             setAttribute: (k, v) => { attrs[k] = String(v); },
@@ -256,6 +256,23 @@ function setup() {
     t.pill.focus();
     assert.ok(t.key("Tab", { shiftKey: true }));
     assert.strictEqual(t.doc.activeElement, t.controls[0], "…at the end for Shift+Tab");
+}
+
+// Keyboard use marks the drawer (.keyboard-nav) so focus rings show even in
+// WebKit; a pointer press or closing takes the mark away.
+{
+    const t = setup();
+    t.click(t.gear);
+    assert.ok(!t.drawer.classList.contains("keyboard-nav"), "not marked when opened with the mouse");
+    t.key("Tab");
+    assert.ok(t.drawer.classList.contains("keyboard-nav"), "Tab marks it");
+    t.drawer.fire("pointerdown", {});
+    assert.ok(!t.drawer.classList.contains("keyboard-nav"), "a click or tap clears it");
+    t.navItems[0].focus();
+    t.nav.fire("keydown", { key: "ArrowDown", preventDefault() {} });
+    assert.ok(t.drawer.classList.contains("keyboard-nav"), "arrow keys mark it too");
+    t.key("Escape");
+    assert.ok(!t.drawer.classList.contains("keyboard-nav") && !t.drawer.classList.contains("open"), "closing clears it");
 }
 
 // A radio group is one Tab stop, on its selected option (Layout width).

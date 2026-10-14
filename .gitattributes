@@ -1,1 +1,6 @@
 *.sh text eol=lf
+
+# Bundled third-party files are kept byte-for-byte as upstream ships them:
+# no line-ending conversion on any OS, so app/ui/vendor/VENDOR.json's SHA-256
+# values match every checkout (tests/test_vendor_manifest.py).
+app/ui/vendor/** -text

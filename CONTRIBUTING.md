@@ -189,6 +189,17 @@ Any pull request that adds or upgrades a dependency, a model, or a bundled or do
 
 Dependabot pull requests need the same check before merging.
 
+### Bundled UI libraries (`app/ui/vendor/`)
+
+The page's JavaScript, CSS and fonts (marked, DOMPurify, highlight.js, KaTeX) are bundled, never fetched at runtime, and pinned by SHA-256 in [`app/ui/vendor/VENDOR.json`](app/ui/vendor/VENDOR.json). Dependabot does not see them. To update one:
+
+1. Download the exact version (`npm pack <name>@<version>`) into an empty folder and check that the tarball's sha512 matches `npm view <name>@<version> dist.integrity`. Prefer a release that has been out for at least two weeks.
+2. Copy only the files `VENDOR.json` lists for that library, unchanged.
+3. Update the library's `version`, `upstream_integrity` and file hashes in `VENDOR.json`, its row in `THIRD_PARTY_NOTICES.md`, and its file in `LICENSES/` (see above).
+4. Run `python -m pytest tests/test_vendor_manifest.py`, then the UI tests and a manual look at the preview.
+
+Files in `app/ui/vendor/` are never line-ending converted (see `.gitattributes`), so their hashes match on every OS.
+
 ---
 
 ## 7. Security Policy

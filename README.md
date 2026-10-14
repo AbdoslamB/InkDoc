@@ -448,6 +448,7 @@ InkDoc is built on excellent open-source work. Code and model weights are listed
 | Local REST API | [`fastapi`](https://github.com/fastapi/fastapi) | Code | Sebastián Ramírez | MIT |
 | Desktop window | [`pywebview`](https://github.com/r0x0r/pywebview) | Code | Roman Sirokov | BSD-3-Clause |
 | Markdown preview | [`marked`](https://github.com/markedjs/marked) | Code | MarkedJS, Christopher Jeffrey | MIT |
+| Math formulas in the preview | [`KaTeX`](https://github.com/KaTeX/KaTeX) | Code and fonts | Khan Academy and other contributors | MIT |
 | Prototype foundation | Early open-source concept | — | Andres Torres | MIT |
 
 EasyOCR is not included: InkDoc's Docling pack uses RapidOCR. The full list of components, including all bundled Python packages, is in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

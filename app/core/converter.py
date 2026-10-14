@@ -156,6 +156,9 @@ def unique_download_path(directory: Path, base_name: str) -> Path:
     return candidate
 
 
+_MAX_CREATE_ATTEMPTS = 100
+
+
 def auto_save_markdown(item: QueueItem, markdown_text: str, downloads_dir: Path | None = None) -> Path:
     """Write `markdown_text` to the Downloads folder using a name derived from
     the item's source, avoiding collisions and symlinks. Returns the path written to."""
@@ -164,9 +167,28 @@ def auto_save_markdown(item: QueueItem, markdown_text: str, downloads_dir: Path 
         raise ValueError("Security violation: Downloads directory cannot be a symbolic link.")
 
     base_name = sanitize_filename(default_basename(item))
-    path = unique_download_path(directory, base_name)
-    path.write_text(markdown_text, encoding="utf-8")
-    return path
+    # O_EXCL creates the file only if nothing is at that name, a link included,
+    # so a file or link that appears after unique_download_path() looked is
+    # never written through or overwritten: the next free name is used instead.
+    # O_BINARY leaves line endings to the text layer, as write_text() did.
+    flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL
+             | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0))
+    for _ in range(_MAX_CREATE_ATTEMPTS):
+        path = unique_download_path(directory, base_name)
+        try:
+            fd = os.open(path, flags, 0o666)
+        except FileExistsError:
+            continue
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(markdown_text)
+        except Exception:
+            # Only our own new file: disk full, drive unplugged, text that
+            # cannot be encoded.
+            path.unlink(missing_ok=True)
+            raise
+        return path
+    raise FileExistsError(f"Could not find a free name for {base_name}.md")
 
 # Extensions markitdown's built-in converters recognize (used to filter
 # recursive folder scans). PlainTextConverter/HtmlConverter also catch many
@@ -240,6 +262,9 @@ class ConversionOptions:
     # and was cut short, the GPU falling back to the CPU). Replaced, never
     # mutated in place, since dataclasses.replace shares the list.
     engine_warnings: list[str] = field(default_factory=list)
+    # Set when auto-save could not use the chosen save folder and wrote to
+    # Downloads instead (app/core/save_location.py); the sentence says why.
+    save_fallback: str | None = None
 
     # Progress/cancel handle (app/core/jobs.JobHandle) for engines that report
     # per page. Not a result: set by the server, read by the engine.

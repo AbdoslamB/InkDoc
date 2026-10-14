@@ -40,7 +40,7 @@ Convert an uploaded document to Markdown.
     - `'markit'`: Broad-format specialist (EPUB, YAML, Jupyter Notebooks).
     - `'glm_ocr'` (also `'glm-ocr'`): the downloadable [GLM-OCR](#glm-ocr) model, for PDFs and images only. `409 engine_not_installed` until it is downloaded in Settings.
     - `'auto'`: InkDoc picks the engine per file (see [Auto engine](#auto-engine)) and reports its choice in `auto`.
-  - `save_to_downloads` *(bool, optional, default: `false`)*: Automatically save `.md` output directly to `~/Downloads` with collision-safe naming. The file is named after the uploaded file (`report.pdf` → `report.md`).
+  - `save_to_downloads` *(bool, optional, default: `false`)*: Automatically save `.md` output to the save folder with collision-safe naming. The save folder is `~/Downloads` unless another folder was chosen in the desktop app's Settings; a request cannot choose it. If the chosen folder is missing or can't be written to, the file is saved to `~/Downloads` and `save_fallback` says why. The file is named after the uploaded file (`report.pdf` → `report.md`).
   - `response_format` *(string, optional, `'text'` | `'json'`, default: `'text'`)*.
   - `enable_plugins` *(bool, optional, default: `false`)*: Enable MarkItDown plugins.
   - `keep_data_uris` *(bool, optional, default: `false`)*: Retain base64 data URIs for images.
@@ -84,9 +84,10 @@ curl -F "file=@dataset.xlsx" "http://localhost:13118/convert/file?response_forma
                 "Page 1 is a full-page image; any text inside it wasn't extracted."],
     "engine": "docling", "output_tokens": 5120
   },
-  "warnings": [],                         // notes that are not failures (GLM-OCR: a page cut short, GPU fallback)
+  "warnings": [],                         // notes that are not failures (GLM-OCR: a page cut short, GPU fallback, save_fallback)
   "markdown": "…",
-  "saved_to_downloads": "C:\\Users\\you\\Downloads\\report.md"
+  "saved_to_downloads": "C:\\Users\\you\\Downloads\\report.md",  // where the file was saved (any save folder), or null
+  "save_fallback": null                   // e.g. "Saved to Downloads because the save folder D:\\Notes was not found."
 }
 ```
 
@@ -133,7 +134,7 @@ Convert multiple files in a single HTTP request.
   - `check_quality` *(bool, optional)*
   - `job_id` *(string, optional)*: each file reports progress under `<job_id>-<index>` (0-based).
 
-Each entry in `results` carries the same `engine_*`, `fallback*`, `auto` and `quality` fields as a single conversion.
+Each entry in `results` carries the same `engine_*`, `fallback*`, `auto`, `quality` and `save_fallback` fields as a single conversion.
 
 **cURL Example**:
 ```bash
@@ -278,10 +279,15 @@ Query or update application engine preferences.
   {
     "fallback_to_markitdown": true,
     "quality_check_enabled": true,
-    "glm_ocr_download_source": "auto"
+    "glm_ocr_download_source": "auto",
+    "layout_width": "standard",
+    "preview_text_size": 100
   }
   ```
-  `quality_check_enabled` (default `true`) turns the missing-text check on or off for requests that do not pass `check_quality`. `glm_ocr_download_source` is `auto` (official source first, InkDoc mirror as fallback) or `mirror_only`.
+  `quality_check_enabled` (default `true`) turns the missing-text check on or off for requests that do not pass `check_quality`. `glm_ocr_download_source` is `auto` (official source first, InkDoc mirror as fallback) or `mirror_only`. `layout_width` (default `standard`) is how much of a wide window the UI uses: `standard` (up to 1400px), `wide` (up to 1920px) or `full`; any other value is refused with `422`. The UI applies it from the next page load. `preview_text_size` (default `100`) is the document preview's text size in percent: `85`, `90`, `100`, `110`, `120`, `135` or `150`; anything else is refused with `422`.
+* **Save folder** (`GET` only): the response includes `save_folder`, for example
+  `{"path": "C:\\Users\\you\\Downloads", "chosen": "D:\\Notes", "custom": true, "problem": "This folder was not found. Files are saved to Downloads until it is back."}`.
+  `path` is where auto-save writes now; `chosen` is the folder picked in Settings (`""` for Downloads). The save folder can only be changed in the desktop app's folder dialog: `POST /settings` ignores `save_dir`, and no other request can set it.
 
 ---
 
@@ -354,6 +360,7 @@ Conversion responses include engine diagnostic headers:
 - `X-Quality-Warning`: `true` or `false` when a PDF was checked for missing text.
 - `X-Quality-Missing-Pct`: Estimated share of the PDF's text missing from the output, when measured.
 - `X-Engine-Warnings`: Notes that are not failures (`warnings` in JSON), joined with ` | `.
+- `X-Save-Fallback`: Present when auto-save could not use the chosen save folder and saved to `~/Downloads` instead (`save_fallback` in JSON). Like the other text headers it is limited to 200 characters and non-Latin-1 characters become `?`; use `response_format=json` for the exact text.
 
 Reasons are reduced to one line of at most 200 characters.
 

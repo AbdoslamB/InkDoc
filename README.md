@@ -35,7 +35,7 @@ A unified desktop workbench and local REST API that bridges **Microsoft MarkItDo
 
 <img src="assets/demo.gif" alt="InkDoc desktop workbench demonstration" width="100%" />
 
-<sub>Drop a file, directory, or URL → conversion starts instantly → clean Markdown is auto-saved to <code>~/Downloads</code> with collision-safe naming.</sub>
+<sub>Drop a file, directory, or URL → conversion starts instantly → clean Markdown is auto-saved to <code>~/Downloads</code> (or a folder you choose) with collision-safe naming.</sub>
 
 </div>
 
@@ -83,7 +83,7 @@ Optional engines are downloaded by the app, not installed with it, and live in t
 | macOS | `~/Library/Application Support/InkDoc/engines` |
 | Linux | `~/.local/share/inkdoc/engines` (or `$XDG_DATA_HOME/inkdoc/engines`) |
 
-The Windows uninstaller asks whether to remove them (Docling and GLM-OCR, with their size) and keeps them by default, so a reinstall finds them ready. On macOS and Linux, delete the folder above by hand, or remove an engine first from **Settings → Processing Engines → Remove**.
+The Windows uninstaller asks whether to remove them (Docling and GLM-OCR, with their size) and keeps them by default, so a reinstall finds them ready. On macOS and Linux, delete the folder above by hand, or remove an engine first from **Settings → Engines → Remove**.
 
 </details>
 
@@ -162,7 +162,7 @@ gh attestation verify inkdoc-setup.exe --repo AbdoslamB/inkdoc
       <br />
       <b>Single Source of Truth Interface</b>
       <br />
-      The native desktop executable (Edge WebView2 on Windows, WebKit on macOS/Linux) and the local web workbench (<code>http://127.0.0.1:13118/InkDoc</code>) run the <b>exact same user interface</b> without code divergence.
+      The native desktop executable (Edge WebView2 on Windows, WebKit on macOS/Linux) and the local web workbench (<code>http://127.0.0.1:13118/InkDoc</code>) run the <b>exact same user interface</b> without code divergence. On large screens, <b>Settings → General → Layout width</b> (Standard, Wide or Full) gives tables, code and images more room, and <b>A− / A+</b> set the preview's text size.
     </td>
   </tr>
   <tr>
@@ -171,7 +171,7 @@ gh attestation verify inkdoc-setup.exe --repo AbdoslamB/inkdoc
       <br />
       <b>Zero-Friction Auto-Save</b>
       <br />
-      Documents convert asynchronously and are <b>automatically saved to <code>~/Downloads</code></b> the moment they finish, with collision-safe numbered suffixes (e.g., <code>report (1).md</code>). No manual export required.
+      Documents convert asynchronously and are <b>automatically saved to <code>~/Downloads</code></b>, or to a folder you pick in Settings, the moment they finish, with collision-safe numbered suffixes (e.g., <code>report (1).md</code>). No manual export required. If the chosen folder is missing or read-only, the file goes to Downloads and InkDoc tells you.
     </td>
     <td width="50%" valign="top">
       <img src="assets/readme/feature-api.svg" width="44" alt="" />
@@ -200,7 +200,7 @@ flowchart LR
     DL --> OUT
     MK --> OUT
     GL --> OUT
-    OUT --> SAVE[("💾 ~/Downloads<br/>collision-safe naming")]
+    OUT --> SAVE[("💾 Save folder (~/Downloads by default)<br/>collision-safe naming")]
 
     classDef engine stroke:#10b981,stroke-width:2px;
     class MD,DL,MK,GL engine;
@@ -225,7 +225,7 @@ flowchart LR
 
 [GLM-OCR](https://huggingface.co/zai-org/GLM-OCR) (zai-org, 0.9B parameters, MIT license) is a small vision-language model built for OCR. InkDoc runs it locally through [llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server` in a separate process, so it works on a normal laptop with no Python ML stack.
 
-- **One click, after a clear warning.** Settings → Processing Engines → GLM-OCR → **Download** first shows the download size (~1.45 GB) and that processing is much slower than the other engines, and only downloads after you confirm.
+- **One click, after a clear warning.** Settings → Engines → GLM-OCR → **Download** first shows the download size (~1.45 GB) and that processing is much slower than the other engines, and only downloads after you confirm.
 - **Official source first, mirror fallback.** The model comes from Hugging Face and the runtime from the llama.cpp releases. If either fails for any reason (blocked, down, rate limited, or a wrong hash), the same files come from InkDoc's own GitHub release. Every file is checked against SHA-256 hashes pinned in InkDoc, and the runtime files are re-hashed before every launch.
 - **Tested before use.** The install is only complete when the model reads a known test image on your computer, which also measures its speed there.
 - **Speed.** On a laptop CPU (Ryzen 9 4900HS) expect roughly 15–40 seconds per page; with **GPU acceleration** (Settings, Vulkan on Windows/Linux for NVIDIA, AMD and Intel graphics, Metal on Apple Silicon) about 4–7 seconds per page on the same laptop's integrated Radeon. Long jobs show *"Page 7 / 30 · ~8 min left"* with a **Cancel** button, and InkDoc asks before starting a job longer than 5 minutes.
@@ -313,7 +313,7 @@ InkDoc ships with an embedded REST API for automated pipelines, agents, and deve
 
 | Endpoint | What it does |
 | :--- | :--- |
-| `POST /convert/file` | Upload a file (multipart). Choose an engine with `?engine=` (`markitdown`, `docling`, `markit`, `glm_ocr` or `auto`) and auto-save with `?save_to_downloads=true`. JSON responses include the missing-text check (`quality`) and Auto's choice (`auto`). |
+| `POST /convert/file` | Upload a file (multipart). Choose an engine with `?engine=` (`markitdown`, `docling`, `markit`, `glm_ocr` or `auto`) and auto-save with `?save_to_downloads=true` (into the save folder chosen in Settings, `~/Downloads` by default). JSON responses include the missing-text check (`quality`) and Auto's choice (`auto`). |
 | `POST /convert/url` | Convert a web page from a JSON body: `{"url": "...", "save_to_downloads": true}`. |
 | `GET /convert/progress/{job_id}` | Live phase of a conversion started with `?job_id=`; `POST /convert/cancel/{job_id}` stops it. |
 | `GET /docs` | Interactive OpenAPI (Swagger) UI. |
@@ -403,6 +403,13 @@ node tests/docs_release_selector.test.js
 node tests/enrichment_addon_ui.test.js
 node tests/glm_ocr_ui.test.js
 node tests/preview_word_count.test.js
+node tests/desktop_download_ui.test.js
+node tests/save_folder_ui.test.js
+node tests/preview_links_ui.test.js
+node tests/theme_toggle_ui.test.js
+node tests/settings_drawer_ui.test.js
+node tests/layout_width_ui.test.js
+node tests/text_size_ui.test.js
 
 # 4. Verify code style and formatting with Ruff
 ruff check .

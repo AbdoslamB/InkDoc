@@ -66,7 +66,8 @@ The codebase follows a domain-driven structure:
 inkdoc/
 ├── app/
 │   ├── core/                  # Conversion business logic & engine adapters
-│   │   ├── converter.py       # MarkItDown wrapper, option mapping & Downloads auto-save
+│   │   ├── converter.py       # MarkItDown wrapper, option mapping & collision-safe auto-save
+│   │   ├── save_location.py   # Save folder setting (Downloads by default) & its fallback
 │   │   ├── queue_model.py     # EngineKind enum, QueueItem data definitions
 │   │   └── engines/           # IBM Docling, Markit & GLM-OCR engine adapters
 │   ├── server/                # Embedded FastAPI backend
@@ -151,6 +152,13 @@ node tests/docs_release_selector.test.js
 node tests/enrichment_addon_ui.test.js
 node tests/glm_ocr_ui.test.js
 node tests/preview_word_count.test.js
+node tests/desktop_download_ui.test.js
+node tests/save_folder_ui.test.js
+node tests/preview_links_ui.test.js
+node tests/theme_toggle_ui.test.js
+node tests/settings_drawer_ui.test.js
+node tests/layout_width_ui.test.js
+node tests/text_size_ui.test.js
 
 # 5. Verify code style with ruff
 ruff check .

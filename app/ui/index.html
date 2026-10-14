@@ -48,381 +48,474 @@
           </svg>
         </button>
 
-        <!-- Settings button + popover -->
+        <!-- Settings button + drawer. The drawer and its scrim are fixed below the
+             header, so the title bar (drag strip, window buttons) and this button
+             stay usable while it is open. -->
         <div class="settings-wrapper">
-          <button id="settingsBtn" class="btn btn-icon" title="Settings">
+          <button id="settingsBtn" class="btn btn-icon" title="Settings" aria-label="Settings" aria-expanded="false" aria-controls="settingsPopover">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="12" cy="12" r="3"></circle>
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
             </svg>
           </button>
-          <div class="settings-popover" id="settingsPopover">
-            <div class="settings-section">
-              <p class="settings-section-title">Preferences</p>
-              <label class="toggle-switch" title="Also save converted .md files to ~/Downloads">
-                <input type="checkbox" id="autoSaveToggle">
-                <span class="toggle-slider"></span>
-                <span class="toggle-label">Auto-save to Downloads</span>
-              </label>
-
-              <label class="toggle-switch" style="margin-top: 10px;" title="Automatically retry with MarkItDown if Docling conversion fails">
-                <input type="checkbox" id="doclingFallbackToggle">
-                <span class="toggle-slider"></span>
-                <span class="toggle-label">Fall back to MarkItDown if Docling fails</span>
-              </label>
-              <p class="settings-caption">If Docling encounters an error, automatically re-run using MarkItDown. The preview will explicitly indicate when fallback occurred.</p>
-
-              <label class="toggle-switch" style="margin-top: 10px;" title="Warn when a PDF conversion is missing part of the PDF's text">
-                <input type="checkbox" id="qualityCheckToggle" checked>
-                <span class="toggle-slider"></span>
-                <span class="toggle-label">Check PDFs for missing text</span>
-              </label>
-              <p class="settings-caption">Compares the result with the PDF's embedded text and warns if part of it was lost. Read-only; never changes the saved file.</p>
-
-              <label class="toggle-switch" style="margin-top: 10px;" title="Check for application updates daily on launch">
-                <input type="checkbox" id="dailyUpdateToggle">
-                <span class="toggle-slider"></span>
-                <span class="toggle-label">Check for updates daily</span>
-              </label>
-              <p class="settings-caption">Automatically checks GitHub Releases for new signed updates on startup (desktop only).</p>
+          <div class="settings-scrim" id="settingsScrim" hidden></div>
+          <div class="settings-drawer" id="settingsPopover" role="dialog" aria-modal="true" aria-labelledby="settingsDrawerTitle" tabindex="-1">
+            <div class="settings-drawer-header">
+              <h2 class="settings-drawer-title" id="settingsDrawerTitle">Settings</h2>
+              <button type="button" class="btn btn-icon settings-close" id="settingsCloseBtn" title="Close settings" aria-label="Close settings">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+              </button>
             </div>
-            <div class="settings-divider"></div>
+            <div class="settings-drawer-body">
+              <nav class="settings-nav" id="settingsNav" aria-label="Settings sections">
+                <button type="button" class="settings-nav-item" id="settingsNavGeneral" data-settings-section="general" aria-controls="settingsPaneGeneral" aria-current="page">General</button>
+                <button type="button" class="settings-nav-item" id="settingsNavEngines" data-settings-section="engines" aria-controls="settingsPaneEngines">Engines</button>
+                <button type="button" class="settings-nav-item" id="settingsNavUpdates" data-settings-section="updates" aria-controls="settingsPaneUpdates">Updates<span class="settings-nav-dot" id="settingsUpdateDot" title="Update available" hidden></span></button>
+                <button type="button" class="settings-nav-item" id="settingsNavAbout" data-settings-section="about" aria-controls="settingsPaneAbout">About</button>
+              </nav>
 
-            <!-- Engine info & management cards -->
-            <div class="settings-section settings-engines">
-              <p class="settings-section-title">Processing Engines</p>
+              <section class="settings-pane" id="settingsPaneGeneral" data-settings-pane="general" aria-labelledby="settingsNavGeneral">
+                <div class="settings-section">
+                  <p class="settings-section-title">Preferences</p>
+                  <!-- Unrelated groups (saving, Docling fallback, PDF check) are
+                       separated by a thin line; see .settings-group. -->
+                  <div class="settings-group">
+                    <label class="toggle-switch" title="Also save converted .md files to your save folder">
+                      <input type="checkbox" id="autoSaveToggle">
+                      <span class="toggle-slider"></span>
+                      <span class="toggle-label">Auto-save</span>
+                    </label>
 
-              <!-- MarkItDown (Bundled) -->
-              <details class="engine-card" id="engineCardMarkitdown">
-                <summary class="engine-card-summary">
-                  <span class="engine-card-icon markitdown-icon">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
-                    </svg>
-                  </span>
-                  <span class="engine-card-name">MarkItDown</span>
-                  <span class="engine-badge engine-badge-builtin">Built-in</span>
-                  <span class="engine-card-version" id="versionMarkitdown">—</span>
-                  <svg class="engine-card-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="6 9 12 15 18 9"></polyline>
-                  </svg>
-                </summary>
-                <div class="engine-card-content">
-                  <p class="engine-card-desc">Fast, zero-config converter for everyday documents: PDF, Word, Excel, PowerPoint, images, audio transcription, HTML &amp; CSV.</p>
-                </div>
-              </details>
-
-              <!-- Markit (Bundled) -->
-              <details class="engine-card" id="engineCardMarkit">
-                <summary class="engine-card-summary">
-                  <span class="engine-card-icon markit-icon">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                      <circle cx="12" cy="12" r="10"></circle>
-                      <line x1="2" y1="12" x2="22" y2="12"></line>
-                      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
-                    </svg>
-                  </span>
-                  <span class="engine-card-name">Markit</span>
-                  <span class="engine-badge engine-badge-builtin">Built-in</span>
-                  <span class="engine-card-version" id="versionMarkit">—</span>
-                  <svg class="engine-card-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="6 9 12 15 18 9"></polyline>
-                  </svg>
-                </summary>
-                <div class="engine-card-content">
-                  <p class="engine-card-desc">Broad format specialist. Use for EPUB ebooks, YAML configs, Jupyter Notebooks (.ipynb), XML &amp; other formats not covered by MarkItDown.</p>
-                </div>
-              </details>
-
-              <!-- Docling (Optional Engine Pack) -->
-              <details class="engine-card optional-engine-card" id="engineCardDocling" open>
-                <summary class="engine-card-summary">
-                  <span class="engine-card-icon docling-icon">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M12 2a10 10 0 1 0 10 10"></path>
-                      <path d="M12 6a6 6 0 0 1 6 6"></path>
-                      <circle cx="12" cy="12" r="2"></circle>
-                    </svg>
-                  </span>
-                  <span class="engine-card-name">IBM Docling</span>
-                  <span class="engine-badge" id="doclingStatusBadge">Checking…</span>
-                  <svg class="engine-card-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="6 9 12 15 18 9"></polyline>
-                  </svg>
-                </summary>
-                <div class="engine-card-content">
-                  <p class="engine-card-desc">IBM AI deep document parser. Best for complex multi-column layouts, scanned pages &amp; table structure extraction.</p>
-                  
-                  <div class="engine-meta-grid">
-                    <div class="engine-meta-item">
-                      <span class="engine-meta-label">Pack Size:</span>
-                      <span class="engine-meta-value" id="doclingSizeInfo">~650 MB</span>
-                    </div>
-                    <div class="engine-meta-item">
-                      <span class="engine-meta-label">Version:</span>
-                      <span class="engine-meta-value" id="doclingVersionInfo">—</span>
-                    </div>
-                    <div class="engine-meta-item">
-                      <span class="engine-meta-label">Source:</span>
-                      <span class="engine-meta-value" id="doclingSourceInfo">GitHub Release Asset (SHA-256)</span>
-                    </div>
-                    <div class="engine-meta-item full-width" id="doclingPlatformsRow">
-                      <span class="engine-meta-label">Supported Builds:</span>
-                      <span class="engine-meta-value" id="doclingPlatformsInfo">—</span>
-                    </div>
-                    <div class="engine-meta-item full-width" id="doclingPathRow" style="display: none;">
-                      <span class="engine-meta-label">Location:</span>
-                      <span class="engine-meta-value settings-path-text" id="doclingPathInfo">—</span>
-                    </div>
-                  </div>
-
-                  <!-- Progress Indicator -->
-                  <div class="engine-progress-wrapper" id="doclingProgressContainer" style="display: none;">
-                    <div class="engine-progress-bar">
-                      <div class="engine-progress-fill" id="doclingProgressFill" style="width: 0%;"></div>
-                    </div>
-                    <div class="engine-progress-text" id="doclingProgressText">Preparing…</div>
-                  </div>
-
-                  <!-- Engine Actions -->
-                  <div class="engine-actions">
-                    <button type="button" class="btn btn-sm btn-primary" id="btnDoclingInstall">Install Docling</button>
-                    <button type="button" class="btn btn-sm btn-secondary" id="btnDoclingVerify" style="display: none;">Verify Integrity</button>
-                    <button type="button" class="btn btn-sm btn-danger" id="btnDoclingRemove" style="display: none;">Remove Pack</button>
-                    <button type="button" class="btn btn-sm btn-ghost" id="btnDoclingCancel" style="display: none;">Cancel</button>
-                  </div>
-
-                  <!-- Enrichment options. Both toggles stay disabled until the
-                       optional recognition model add-on reports usable=true
-                       from /addons/code_enrichment; the add-on card below is
-                       what installs it. -->
-                  <div class="engine-enrichment" id="doclingEnrichment">
-                    <p class="engine-enrichment-title">Enrichment</p>
-
-                    <div class="engine-enrichment-addon">
-                      <div class="engine-enrichment-addon-head">
-                        <span class="engine-enrichment-addon-title" id="addonTitle">Code &amp; Formula Recognition</span>
-                        <span class="engine-badge engine-badge-not-installed" id="addonStatusBadge">Not Installed</span>
+                    <div class="save-folder">
+                      <div class="save-folder-head">
+                        <span class="save-folder-label">Save folder</span>
+                        <span class="save-folder-actions">
+                          <button type="button" class="btn btn-sm btn-secondary" id="btnChangeSaveFolder" style="display: none;">Change…</button>
+                          <button type="button" class="btn btn-sm btn-ghost" id="btnResetSaveFolder" style="display: none;">Use Downloads</button>
+                        </span>
                       </div>
-                      <p class="engine-enrichment-addon-reason" id="addonReason">Checking availability…</p>
+                      <p class="save-folder-path" id="saveFolderPath"></p>
+                      <p class="save-folder-problem" id="saveFolderProblem" role="status" style="display: none;"></p>
+                      <p class="settings-caption" id="saveFolderHint" style="display: none;">Change it in the InkDoc desktop app.</p>
+                    </div>
+                  </div>
 
-                      <div class="engine-progress-wrapper" id="addonProgressContainer" style="display: none;">
-                        <div class="engine-progress-bar">
-                          <div class="engine-progress-fill" id="addonProgressFill" style="width: 0%;"></div>
+                  <div class="settings-group">
+                    <label class="toggle-switch" title="Automatically retry with MarkItDown if Docling conversion fails">
+                      <input type="checkbox" id="doclingFallbackToggle">
+                      <span class="toggle-slider"></span>
+                      <span class="toggle-label">Fall back to MarkItDown if Docling fails</span>
+                    </label>
+                    <p class="settings-caption">If Docling encounters an error, automatically re-run using MarkItDown. The preview will explicitly indicate when fallback occurred.</p>
+                  </div>
+
+                  <div class="settings-group">
+                    <label class="toggle-switch" title="Warn when a PDF conversion is missing part of the PDF's text">
+                      <input type="checkbox" id="qualityCheckToggle" checked>
+                      <span class="toggle-slider"></span>
+                      <span class="toggle-label">Check PDFs for missing text</span>
+                    </label>
+                    <p class="settings-caption">Compares the result with the PDF's embedded text and warns if part of it was lost. Read-only; never changes the saved file.</p>
+                  </div>
+                </div>
+
+                <div class="settings-section settings-display">
+                  <p class="settings-section-title">Display</p>
+                  <div class="layout-width-row">
+                    <span class="layout-width-label" id="layoutWidthLabel">Layout width</span>
+                    <div class="segmented" id="layoutWidthGroup" role="radiogroup" aria-labelledby="layoutWidthLabel">
+                      <label class="segmented-option" title="Up to 1,400 px wide, as before">
+                        <input type="radio" class="sr-only" name="layoutWidth" value="standard" checked>
+                        <span>Standard</span>
+                      </label>
+                      <label class="segmented-option" title="Up to 1,920 px wide">
+                        <input type="radio" class="sr-only" name="layoutWidth" value="wide">
+                        <span>Wide</span>
+                      </label>
+                      <label class="segmented-option" title="The whole window">
+                        <input type="radio" class="sr-only" name="layoutWidth" value="full">
+                        <span>Full</span>
+                      </label>
+                    </div>
+                  </div>
+                  <p class="settings-caption">Gives tables, code and images more room on large screens; text keeps a readable line length. Changes nothing in windows narrower than 1,400 px.</p>
+
+                  <div class="text-size">
+                    <div class="text-size-row">
+                      <span class="layout-width-label" id="textSizeLabel">Preview text size</span>
+                      <div class="text-size-buttons" role="group" aria-labelledby="textSizeLabel">
+                        <button type="button" class="text-size-btn" id="btnTextSmaller" title="Smaller text" aria-label="Smaller text">
+                          <span class="text-size-glyph" aria-hidden="true">A−</span>
+                        </button>
+                        <button type="button" class="text-size-btn" id="btnTextLarger" title="Larger text" aria-label="Larger text">
+                          <span class="text-size-glyph" aria-hidden="true">A+</span>
+                        </button>
+                      </div>
+                    </div>
+                    <!-- Live sample, drawn with the preview's own styles so it
+                         follows the same setting. Static text: nothing to load. -->
+                    <div class="markdown-rendered text-size-sample" aria-hidden="true">
+                      <h3>Heading</h3>
+                      <p>Converted text looks like this, with <code>inline code</code>.</p>
+                    </div>
+                    <p class="sr-only" id="textSizeStatus" role="status" aria-live="polite"></p>
+                  </div>
+                </div>
+              </section>
+
+              <section class="settings-pane" id="settingsPaneEngines" data-settings-pane="engines" aria-labelledby="settingsNavEngines" hidden>
+                <!-- Engine info & management cards -->
+                <div class="settings-section settings-engines">
+                  <p class="settings-section-title">Processing Engines</p>
+
+                  <!-- MarkItDown (Bundled) -->
+                  <details class="engine-card" id="engineCardMarkitdown">
+                    <summary class="engine-card-summary">
+                      <span class="engine-card-icon markitdown-icon">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                        </svg>
+                      </span>
+                      <span class="engine-card-name">MarkItDown</span>
+                      <span class="engine-badge engine-badge-builtin">Built-in</span>
+                      <span class="engine-card-version" id="versionMarkitdown">—</span>
+                      <svg class="engine-card-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="6 9 12 15 18 9"></polyline>
+                      </svg>
+                    </summary>
+                    <div class="engine-card-content">
+                      <p class="engine-card-desc">Fast, zero-config converter for everyday documents: PDF, Word, Excel, PowerPoint, images, audio transcription, HTML &amp; CSV.</p>
+                    </div>
+                  </details>
+
+                  <!-- Markit (Bundled) -->
+                  <details class="engine-card" id="engineCardMarkit">
+                    <summary class="engine-card-summary">
+                      <span class="engine-card-icon markit-icon">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                          <circle cx="12" cy="12" r="10"></circle>
+                          <line x1="2" y1="12" x2="22" y2="12"></line>
+                          <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                        </svg>
+                      </span>
+                      <span class="engine-card-name">Markit</span>
+                      <span class="engine-badge engine-badge-builtin">Built-in</span>
+                      <span class="engine-card-version" id="versionMarkit">—</span>
+                      <svg class="engine-card-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="6 9 12 15 18 9"></polyline>
+                      </svg>
+                    </summary>
+                    <div class="engine-card-content">
+                      <p class="engine-card-desc">Broad format specialist. Use for EPUB ebooks, YAML configs, Jupyter Notebooks (.ipynb), XML &amp; other formats not covered by MarkItDown.</p>
+                    </div>
+                  </details>
+
+                  <!-- Docling (Optional Engine Pack) -->
+                  <details class="engine-card optional-engine-card" id="engineCardDocling" open>
+                    <summary class="engine-card-summary">
+                      <span class="engine-card-icon docling-icon">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M12 2a10 10 0 1 0 10 10"></path>
+                          <path d="M12 6a6 6 0 0 1 6 6"></path>
+                          <circle cx="12" cy="12" r="2"></circle>
+                        </svg>
+                      </span>
+                      <span class="engine-card-name">IBM Docling</span>
+                      <span class="engine-badge" id="doclingStatusBadge">Checking…</span>
+                      <svg class="engine-card-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="6 9 12 15 18 9"></polyline>
+                      </svg>
+                    </summary>
+                    <div class="engine-card-content">
+                      <p class="engine-card-desc">IBM AI deep document parser. Best for complex multi-column layouts, scanned pages &amp; table structure extraction.</p>
+                  
+                      <div class="engine-meta-grid">
+                        <div class="engine-meta-item">
+                          <span class="engine-meta-label">Pack Size:</span>
+                          <span class="engine-meta-value" id="doclingSizeInfo">~650 MB</span>
                         </div>
-                        <div class="engine-progress-text" id="addonProgressText">Preparing…</div>
+                        <div class="engine-meta-item">
+                          <span class="engine-meta-label">Version:</span>
+                          <span class="engine-meta-value" id="doclingVersionInfo">—</span>
+                        </div>
+                        <div class="engine-meta-item">
+                          <span class="engine-meta-label">Source:</span>
+                          <span class="engine-meta-value" id="doclingSourceInfo">GitHub Release Asset (SHA-256)</span>
+                        </div>
+                        <div class="engine-meta-item full-width" id="doclingPlatformsRow">
+                          <span class="engine-meta-label">Supported Builds:</span>
+                          <span class="engine-meta-value" id="doclingPlatformsInfo">—</span>
+                        </div>
+                        <div class="engine-meta-item full-width" id="doclingPathRow" style="display: none;">
+                          <span class="engine-meta-label">Location:</span>
+                          <span class="engine-meta-value settings-path-text" id="doclingPathInfo">—</span>
+                        </div>
+                      </div>
+
+                      <!-- Progress Indicator -->
+                      <div class="engine-progress-wrapper" id="doclingProgressContainer" style="display: none;">
+                        <div class="engine-progress-bar">
+                          <div class="engine-progress-fill" id="doclingProgressFill" style="width: 0%;"></div>
+                        </div>
+                        <div class="engine-progress-text" id="doclingProgressText">Preparing…</div>
+                      </div>
+
+                      <!-- Engine Actions -->
+                      <div class="engine-actions">
+                        <button type="button" class="btn btn-sm btn-primary" id="btnDoclingInstall">Install Docling</button>
+                        <button type="button" class="btn btn-sm btn-secondary" id="btnDoclingVerify" style="display: none;">Verify Integrity</button>
+                        <button type="button" class="btn btn-sm btn-danger" id="btnDoclingRemove" style="display: none;">Remove Pack</button>
+                        <button type="button" class="btn btn-sm btn-ghost" id="btnDoclingCancel" style="display: none;">Cancel</button>
+                      </div>
+
+                      <!-- Enrichment options. Both toggles stay disabled until the
+                           optional recognition model add-on reports usable=true
+                           from /addons/code_enrichment; the add-on card below is
+                           what installs it. -->
+                      <div class="engine-enrichment" id="doclingEnrichment">
+                        <p class="engine-enrichment-title">Enrichment</p>
+
+                        <div class="engine-enrichment-addon">
+                          <div class="engine-enrichment-addon-head">
+                            <span class="engine-enrichment-addon-title" id="addonTitle">Code &amp; Formula Recognition</span>
+                            <span class="engine-badge engine-badge-not-installed" id="addonStatusBadge">Not Installed</span>
+                          </div>
+                          <p class="engine-enrichment-addon-reason" id="addonReason">Checking availability…</p>
+
+                          <div class="engine-progress-wrapper" id="addonProgressContainer" style="display: none;">
+                            <div class="engine-progress-bar">
+                              <div class="engine-progress-fill" id="addonProgressFill" style="width: 0%;"></div>
+                            </div>
+                            <div class="engine-progress-text" id="addonProgressText">Preparing…</div>
+                          </div>
+
+                          <div class="engine-actions">
+                            <button type="button" class="btn btn-sm btn-primary" id="btnAddonInstall">Install Model</button>
+                            <button type="button" class="btn btn-sm btn-secondary" id="btnAddonVerify" style="display: none;">Verify Integrity</button>
+                            <button type="button" class="btn btn-sm btn-danger" id="btnAddonRemove" style="display: none;">Remove Model</button>
+                            <button type="button" class="btn btn-sm btn-ghost" id="btnAddonCancel" style="display: none;">Cancel</button>
+                          </div>
+                        </div>
+
+                        <label class="toggle-switch" title="Transcribe code blocks with the recognition model and label their programming language">
+                          <input type="checkbox" id="doclingCodeEnrichmentToggle" disabled>
+                          <span class="toggle-slider"></span>
+                          <span class="toggle-label">Code Enrichment</span>
+                        </label>
+                        <label class="toggle-switch" style="margin-top: 8px;" title="Recognise mathematical formulas and convert them to LaTeX">
+                          <input type="checkbox" id="doclingFormulaEnrichmentToggle" disabled>
+                          <span class="toggle-slider"></span>
+                          <span class="toggle-label">Formula Enrichment</span>
+                        </label>
+                        <p class="settings-caption" id="doclingEnrichmentCaption">
+                          Requires the optional recognition model. Both options share the same model, so turning on either one loads it for <em>every</em> Docling conversion, not only documents that contain code or formulas.
+                        </p>
+                      </div>
+                    </div>
+                  </details>
+
+                  <!-- GLM-OCR (Optional downloadable OCR model). Hidden until the
+                       bundled catalogue is published; shown as "Coming soon" while
+                       it is unreleased. -->
+                  <details class="engine-card optional-engine-card" id="engineCardGlmOcr" style="display: none;">
+                    <summary class="engine-card-summary">
+                      <span class="engine-card-icon glm-ocr-icon">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M3 7V5a2 2 0 0 1 2-2h2"></path><path d="M17 3h2a2 2 0 0 1 2 2v2"></path><path d="M21 17v2a2 2 0 0 1-2 2h-2"></path><path d="M7 21H5a2 2 0 0 1-2-2v-2"></path><line x1="7" y1="9" x2="17" y2="9"></line><line x1="7" y1="12" x2="17" y2="12"></line><line x1="7" y1="15" x2="13" y2="15"></line>
+                        </svg>
+                      </span>
+                      <span class="engine-card-name">GLM-OCR</span>
+                      <span class="engine-badge" id="glmStatusBadge">Checking…</span>
+                      <svg class="engine-card-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="6 9 12 15 18 9"></polyline>
+                      </svg>
+                    </summary>
+                    <div class="engine-card-content">
+                      <p class="engine-card-desc">Best-in-class OCR for scans, photos of documents, math and complex tables. Runs locally. <span id="glmSizeDesc">~1.45 GB download.</span></p>
+                      <p class="settings-caption glm-privacy">Downloads come from Hugging Face or GitHub. Your documents are processed on this computer and never uploaded.</p>
+                      <p class="settings-caption" id="glmRequirement">Needs about 3 GB of free memory while converting. Slower than other engines on a CPU: expect several seconds to a minute per page.</p>
+
+                      <div class="engine-meta-grid">
+                        <div class="engine-meta-item">
+                          <span class="engine-meta-label">Model:</span>
+                          <span class="engine-meta-value" id="glmModelVersion">—</span>
+                        </div>
+                        <div class="engine-meta-item">
+                          <span class="engine-meta-label">Runtime:</span>
+                          <span class="engine-meta-value" id="glmRuntimeVersion">—</span>
+                        </div>
+                        <div class="engine-meta-item">
+                          <span class="engine-meta-label">Download:</span>
+                          <span class="engine-meta-value" id="glmSizeInfo">—</span>
+                        </div>
+                        <div class="engine-meta-item">
+                          <span class="engine-meta-label">License:</span>
+                          <span class="engine-meta-value" id="glmLicenseInfo">MIT</span>
+                        </div>
+                        <div class="engine-meta-item">
+                          <span class="engine-meta-label">Acceleration:</span>
+                          <span class="engine-meta-value" id="glmAccelInfo">CPU</span>
+                        </div>
+                        <div class="engine-meta-item">
+                          <span class="engine-meta-label">Speed:</span>
+                          <span class="engine-meta-value" id="glmSpeedInfo">—</span>
+                        </div>
+                        <div class="engine-meta-item full-width">
+                          <span class="engine-meta-label">Source:</span>
+                          <span class="engine-meta-value" id="glmSourceInfo">Hugging Face, InkDoc mirror as fallback (SHA-256 verified)</span>
+                        </div>
+                        <div class="engine-meta-item full-width" id="glmPathRow" style="display: none;">
+                          <span class="engine-meta-label">Location:</span>
+                          <span class="engine-meta-value settings-path-text" id="glmPathInfo">—</span>
+                        </div>
+                      </div>
+
+                      <p class="engine-enrichment-addon-reason" id="glmReason" hidden></p>
+
+                      <div class="engine-progress-wrapper" id="glmProgressContainer" style="display: none;">
+                        <div class="engine-progress-bar">
+                          <div class="engine-progress-fill" id="glmProgressFill" style="width: 0%;"></div>
+                        </div>
+                        <div class="engine-progress-text" id="glmProgressText" role="status" aria-live="polite">Preparing…</div>
                       </div>
 
                       <div class="engine-actions">
-                        <button type="button" class="btn btn-sm btn-primary" id="btnAddonInstall">Install Model</button>
-                        <button type="button" class="btn btn-sm btn-secondary" id="btnAddonVerify" style="display: none;">Verify Integrity</button>
-                        <button type="button" class="btn btn-sm btn-danger" id="btnAddonRemove" style="display: none;">Remove Model</button>
-                        <button type="button" class="btn btn-sm btn-ghost" id="btnAddonCancel" style="display: none;">Cancel</button>
+                        <button type="button" class="btn btn-sm btn-primary" id="btnGlmInstall">Download GLM-OCR</button>
+                        <button type="button" class="btn btn-sm btn-primary" id="btnGlmUpdate" style="display: none;">Update available</button>
+                        <button type="button" class="btn btn-sm btn-secondary" id="btnGlmVerify" style="display: none;">Verify</button>
+                        <button type="button" class="btn btn-sm btn-danger" id="btnGlmRemove" style="display: none;">Remove</button>
+                        <button type="button" class="btn btn-sm btn-ghost" id="btnGlmCancel" style="display: none;">Cancel</button>
+                      </div>
+
+                      <div class="engine-enrichment" id="glmOptions" style="display: none;">
+                        <label class="toggle-switch" title="Use the graphics card to read pages faster">
+                          <input type="checkbox" id="glmGpuToggle">
+                          <span class="toggle-slider"></span>
+                          <span class="toggle-label" id="glmGpuLabel">Use GPU acceleration</span>
+                        </label>
+                        <p class="settings-caption" id="glmGpuCaption">Downloads a GPU runtime (Vulkan, ~33 MB) on first use and tests it. Works with NVIDIA, AMD and Intel graphics; no CUDA needed.</p>
+
+                        <details class="glm-advanced" id="glmAdvanced">
+                          <summary>Advanced</summary>
+                          <label class="glm-field">
+                            <span>Download source</span>
+                            <select id="glmSourceSelect">
+                              <option value="auto">Automatic (official source first)</option>
+                              <option value="mirror_only">InkDoc mirror only</option>
+                            </select>
+                          </label>
+                          <label class="glm-field">
+                            <span>Precision</span>
+                            <select id="glmVariantSelect"></select>
+                          </label>
+                          <button type="button" class="btn btn-sm btn-secondary" id="btnGlmSelftest">Self-test again</button>
+                          <p class="settings-caption" id="glmCatalogueInfo"></p>
+                        </details>
                       </div>
                     </div>
-
-                    <label class="toggle-switch" title="Transcribe code blocks with the recognition model and label their programming language">
-                      <input type="checkbox" id="doclingCodeEnrichmentToggle" disabled>
-                      <span class="toggle-slider"></span>
-                      <span class="toggle-label">Code Enrichment</span>
-                    </label>
-                    <label class="toggle-switch" style="margin-top: 8px;" title="Recognise mathematical formulas and convert them to LaTeX">
-                      <input type="checkbox" id="doclingFormulaEnrichmentToggle" disabled>
-                      <span class="toggle-slider"></span>
-                      <span class="toggle-label">Formula Enrichment</span>
-                    </label>
-                    <p class="settings-caption" id="doclingEnrichmentCaption">
-                      Requires the optional recognition model. Both options share the same model, so turning on either one loads it for <em>every</em> Docling conversion, not only documents that contain code or formulas.
-                    </p>
-                  </div>
-                </div>
-              </details>
-
-              <!-- GLM-OCR (Optional downloadable OCR model). Hidden until the
-                   bundled catalogue is published; shown as "Coming soon" while
-                   it is unreleased. -->
-              <details class="engine-card optional-engine-card" id="engineCardGlmOcr" style="display: none;">
-                <summary class="engine-card-summary">
-                  <span class="engine-card-icon glm-ocr-icon">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M3 7V5a2 2 0 0 1 2-2h2"></path><path d="M17 3h2a2 2 0 0 1 2 2v2"></path><path d="M21 17v2a2 2 0 0 1-2 2h-2"></path><path d="M7 21H5a2 2 0 0 1-2-2v-2"></path><line x1="7" y1="9" x2="17" y2="9"></line><line x1="7" y1="12" x2="17" y2="12"></line><line x1="7" y1="15" x2="13" y2="15"></line>
-                    </svg>
-                  </span>
-                  <span class="engine-card-name">GLM-OCR</span>
-                  <span class="engine-badge" id="glmStatusBadge">Checking…</span>
-                  <svg class="engine-card-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="6 9 12 15 18 9"></polyline>
-                  </svg>
-                </summary>
-                <div class="engine-card-content">
-                  <p class="engine-card-desc">Best-in-class OCR for scans, photos of documents, math and complex tables. Runs locally. <span id="glmSizeDesc">~1.45 GB download.</span></p>
-                  <p class="settings-caption glm-privacy">Downloads come from Hugging Face or GitHub. Your documents are processed on this computer and never uploaded.</p>
-                  <p class="settings-caption" id="glmRequirement">Needs about 3 GB of free memory while converting. Slower than other engines on a CPU: expect several seconds to a minute per page.</p>
-
-                  <div class="engine-meta-grid">
-                    <div class="engine-meta-item">
-                      <span class="engine-meta-label">Model:</span>
-                      <span class="engine-meta-value" id="glmModelVersion">—</span>
-                    </div>
-                    <div class="engine-meta-item">
-                      <span class="engine-meta-label">Runtime:</span>
-                      <span class="engine-meta-value" id="glmRuntimeVersion">—</span>
-                    </div>
-                    <div class="engine-meta-item">
-                      <span class="engine-meta-label">Download:</span>
-                      <span class="engine-meta-value" id="glmSizeInfo">—</span>
-                    </div>
-                    <div class="engine-meta-item">
-                      <span class="engine-meta-label">License:</span>
-                      <span class="engine-meta-value" id="glmLicenseInfo">MIT</span>
-                    </div>
-                    <div class="engine-meta-item">
-                      <span class="engine-meta-label">Acceleration:</span>
-                      <span class="engine-meta-value" id="glmAccelInfo">CPU</span>
-                    </div>
-                    <div class="engine-meta-item">
-                      <span class="engine-meta-label">Speed:</span>
-                      <span class="engine-meta-value" id="glmSpeedInfo">—</span>
-                    </div>
-                    <div class="engine-meta-item full-width">
-                      <span class="engine-meta-label">Source:</span>
-                      <span class="engine-meta-value" id="glmSourceInfo">Hugging Face, InkDoc mirror as fallback (SHA-256 verified)</span>
-                    </div>
-                    <div class="engine-meta-item full-width" id="glmPathRow" style="display: none;">
-                      <span class="engine-meta-label">Location:</span>
-                      <span class="engine-meta-value settings-path-text" id="glmPathInfo">—</span>
-                    </div>
-                  </div>
-
-                  <p class="engine-enrichment-addon-reason" id="glmReason" hidden></p>
-
-                  <div class="engine-progress-wrapper" id="glmProgressContainer" style="display: none;">
-                    <div class="engine-progress-bar">
-                      <div class="engine-progress-fill" id="glmProgressFill" style="width: 0%;"></div>
-                    </div>
-                    <div class="engine-progress-text" id="glmProgressText" role="status" aria-live="polite">Preparing…</div>
-                  </div>
-
-                  <div class="engine-actions">
-                    <button type="button" class="btn btn-sm btn-primary" id="btnGlmInstall">Download GLM-OCR</button>
-                    <button type="button" class="btn btn-sm btn-primary" id="btnGlmUpdate" style="display: none;">Update available</button>
-                    <button type="button" class="btn btn-sm btn-secondary" id="btnGlmVerify" style="display: none;">Verify</button>
-                    <button type="button" class="btn btn-sm btn-danger" id="btnGlmRemove" style="display: none;">Remove</button>
-                    <button type="button" class="btn btn-sm btn-ghost" id="btnGlmCancel" style="display: none;">Cancel</button>
-                  </div>
-
-                  <div class="engine-enrichment" id="glmOptions" style="display: none;">
-                    <label class="toggle-switch" title="Use the graphics card to read pages faster">
-                      <input type="checkbox" id="glmGpuToggle">
-                      <span class="toggle-slider"></span>
-                      <span class="toggle-label" id="glmGpuLabel">Use GPU acceleration</span>
-                    </label>
-                    <p class="settings-caption" id="glmGpuCaption">Downloads a GPU runtime (Vulkan, ~33 MB) on first use and tests it. Works with NVIDIA, AMD and Intel graphics; no CUDA needed.</p>
-
-                    <details class="glm-advanced" id="glmAdvanced">
-                      <summary>Advanced</summary>
-                      <label class="glm-field">
-                        <span>Download source</span>
-                        <select id="glmSourceSelect">
-                          <option value="auto">Automatic (official source first)</option>
-                          <option value="mirror_only">InkDoc mirror only</option>
-                        </select>
-                      </label>
-                      <label class="glm-field">
-                        <span>Precision</span>
-                        <select id="glmVariantSelect"></select>
-                      </label>
-                      <button type="button" class="btn btn-sm btn-secondary" id="btnGlmSelftest">Self-test again</button>
-                      <p class="settings-caption" id="glmCatalogueInfo"></p>
-                    </details>
-                  </div>
-                </div>
-              </details>
-            </div>
-
-            <div class="settings-divider"></div>
-
-            <!-- Software Updates section -->
-            <div class="settings-section settings-updates" id="settingsUpdatesSection">
-              <div class="updates-header-row">
-                <p class="settings-section-title" style="margin-bottom: 0;">Software Updates</p>
-                <span class="update-version-badge" id="appCurrentVersionBadge">v—</span>
-              </div>
-
-              <div class="update-card" id="updateCard">
-                <div class="update-status-row">
-                  <div class="update-status-info">
-                    <span class="update-status-title" id="updateStatusTitle">InkDoc is up to date</span>
-                    <span class="update-status-subtitle" id="updateStatusSubtitle">Last checked: Never</span>
-                  </div>
-                  <button type="button" class="btn btn-sm btn-secondary" id="btnCheckUpdates">
-                    <svg class="spin-icon" id="iconCheckUpdatesSpin" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="display: none;">
-                      <line x1="12" y1="2" x2="12" y2="6"></line>
-                      <line x1="12" y1="18" x2="12" y2="22"></line>
-                      <line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line>
-                      <line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line>
-                      <line x1="2" y1="12" x2="6" y2="12"></line>
-                      <line x1="18" y1="12" x2="22" y2="12"></line>
-                      <line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line>
-                      <line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line>
-                    </svg>
-                    <span id="btnCheckUpdatesText">Check for updates</span>
-                  </button>
-                </div>
-
-                <!-- Update Available / Download Details -->
-                <div class="update-details" id="updateDetails" style="display: none;">
-                  <div class="update-release-meta">
-                    <span class="update-new-version" id="updateNewVersion">v— available</span>
-                    <span class="update-asset-size" id="updateAssetSize">—</span>
-                  </div>
-
-                  <!-- Release notes collapsible -->
-                  <details class="update-notes-accordion" id="updateNotesAccordion" style="display: none;">
-                    <summary class="update-notes-summary">Release Notes</summary>
-                    <div class="update-notes-content" id="updateNotesContent"></div>
                   </details>
+                </div>
+              </section>
 
-                  <!-- Download progress -->
-                  <div class="engine-progress-wrapper" id="updateProgressWrapper" style="display: none;">
-                    <div class="engine-progress-bar">
-                      <div class="engine-progress-fill" id="updateProgressFill" style="width: 0%;"></div>
+              <section class="settings-pane" id="settingsPaneUpdates" data-settings-pane="updates" aria-labelledby="settingsNavUpdates" hidden>
+                <!-- Software Updates section -->
+                <div class="settings-section settings-updates" id="settingsUpdatesSection">
+                  <div class="updates-header-row">
+                    <p class="settings-section-title" style="margin-bottom: 0;">Software Updates</p>
+                    <span class="update-version-badge" id="appCurrentVersionBadge">v—</span>
+                  </div>
+
+                  <div class="update-card" id="updateCard">
+                    <div class="update-status-row">
+                      <div class="update-status-info">
+                        <span class="update-status-title" id="updateStatusTitle">InkDoc is up to date</span>
+                        <span class="update-status-subtitle" id="updateStatusSubtitle">Last checked: Never</span>
+                      </div>
+                      <button type="button" class="btn btn-sm btn-secondary" id="btnCheckUpdates">
+                        <svg class="spin-icon" id="iconCheckUpdatesSpin" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="display: none;">
+                          <line x1="12" y1="2" x2="12" y2="6"></line>
+                          <line x1="12" y1="18" x2="12" y2="22"></line>
+                          <line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line>
+                          <line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line>
+                          <line x1="2" y1="12" x2="6" y2="12"></line>
+                          <line x1="18" y1="12" x2="22" y2="12"></line>
+                          <line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line>
+                          <line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line>
+                        </svg>
+                        <span id="btnCheckUpdatesText">Check for updates</span>
+                      </button>
                     </div>
-                    <div class="engine-progress-text" id="updateProgressText">Downloading… 0%</div>
+
+                    <!-- Update Available / Download Details -->
+                    <div class="update-details" id="updateDetails" style="display: none;">
+                      <div class="update-release-meta">
+                        <span class="update-new-version" id="updateNewVersion">v— available</span>
+                        <span class="update-asset-size" id="updateAssetSize">—</span>
+                      </div>
+
+                      <!-- Release notes collapsible -->
+                      <details class="update-notes-accordion" id="updateNotesAccordion" style="display: none;">
+                        <summary class="update-notes-summary">Release Notes</summary>
+                        <div class="update-notes-content" id="updateNotesContent"></div>
+                      </details>
+
+                      <!-- Download progress -->
+                      <div class="engine-progress-wrapper" id="updateProgressWrapper" style="display: none;">
+                        <div class="engine-progress-bar">
+                          <div class="engine-progress-fill" id="updateProgressFill" style="width: 0%;"></div>
+                        </div>
+                        <div class="engine-progress-text" id="updateProgressText">Downloading… 0%</div>
+                      </div>
+
+                      <!-- Update Action Buttons -->
+                      <div class="update-actions" id="updateActions">
+                        <button type="button" class="btn btn-sm btn-primary" id="btnDownloadUpdate">Download Update</button>
+                        <button type="button" class="btn btn-sm btn-primary" id="btnApplyUpdate" style="display: none;">Install &amp; Restart</button>
+                        <button type="button" class="btn btn-sm btn-primary" id="btnRevealUpdate" style="display: none;">Reveal in Downloads</button>
+                        <button type="button" class="btn btn-sm btn-ghost" id="btnCancelUpdate" style="display: none;">Cancel</button>
+                      </div>
+                      <p class="settings-caption" id="updateActionHelp" style="display: none;"></p>
+                    </div>
+
+                    <!-- Error Box -->
+                    <div class="update-error-box" id="updateErrorBox" style="display: none;">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="8" x2="12" y2="12"></line>
+                        <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                      </svg>
+                      <span id="updateErrorMsg"></span>
+                    </div>
                   </div>
 
-                  <!-- Update Action Buttons -->
-                  <div class="update-actions" id="updateActions">
-                    <button type="button" class="btn btn-sm btn-primary" id="btnDownloadUpdate">Download Update</button>
-                    <button type="button" class="btn btn-sm btn-primary" id="btnApplyUpdate" style="display: none;">Install &amp; Restart</button>
-                    <button type="button" class="btn btn-sm btn-primary" id="btnRevealUpdate" style="display: none;">Reveal in Downloads</button>
-                    <button type="button" class="btn btn-sm btn-ghost" id="btnCancelUpdate" style="display: none;">Cancel</button>
+                  <label class="toggle-switch" style="margin-top: 14px;" title="Check for application updates daily on launch">
+                    <input type="checkbox" id="dailyUpdateToggle">
+                    <span class="toggle-slider"></span>
+                    <span class="toggle-label">Check for updates daily</span>
+                  </label>
+                  <p class="settings-caption">Automatically checks GitHub Releases for new signed updates on startup (desktop only).</p>
+                </div>
+              </section>
+
+              <section class="settings-pane" id="settingsPaneAbout" data-settings-pane="about" aria-labelledby="settingsNavAbout" hidden>
+                <div class="settings-section about-section">
+                  <div class="about-head">
+                    <img src="/static/logo.svg" alt="" width="40" height="40" class="about-logo">
+                    <div>
+                      <p class="about-name">InkDoc</p>
+                      <p class="about-version" id="aboutVersion">Version —</p>
+                    </div>
                   </div>
-                  <p class="settings-caption" id="updateActionHelp" style="display: none;"></p>
+                  <p class="about-text">
+                    InkDoc turns documents, web pages and scans into clean Markdown on your computer,
+                    and saves each result the moment it's ready.
+                    <a href="https://abdoslamb.github.io/InkDoc/" target="_blank" rel="noopener noreferrer" class="about-read-more" id="aboutUsLink">Read more</a>
+                  </p>
                 </div>
-
-                <!-- Error Box -->
-                <div class="update-error-box" id="updateErrorBox" style="display: none;">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <circle cx="12" cy="12" r="10"></circle>
-                    <line x1="12" y1="8" x2="12" y2="12"></line>
-                    <line x1="12" y1="16" x2="12.01" y2="16"></line>
-                  </svg>
-                  <span id="updateErrorMsg"></span>
-                </div>
-              </div>
-            </div>
-
-            <div class="settings-divider"></div>
-            <div class="settings-section">
-              <a href="https://abdoslamb.github.io/InkDoc/" target="_blank" rel="noopener noreferrer" class="settings-link" id="aboutUsLink">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
-                  <polyline points="15 3 21 3 21 9"></polyline>
-                  <line x1="10" y1="14" x2="21" y2="3"></line>
-                </svg>
-                About Us
-              </a>
+              </section>
             </div>
           </div>
         </div>

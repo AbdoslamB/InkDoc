@@ -50,7 +50,7 @@ def _sandboxed_save_dir(tmp_path, monkeypatch):
 
 def _save(window, filename="report.pdf", content=CONTENT):
     controls = WindowControls()
-    controls.attach(window, APP_URL)
+    controls._attach(window, APP_URL)
     return controls.save_markdown(filename, content)
 
 
@@ -207,7 +207,7 @@ def test_only_inkdoc_page_may_save(url):
 def test_unknown_app_origin_refuses():
     controls = WindowControls()
     window = FakeWindow(("unused.md",))
-    controls.attach(window)
+    controls._attach(window)
     assert controls.save_markdown("a.pdf", CONTENT)["status"] == "error"
     assert window.dialog_calls == []
 
@@ -216,10 +216,153 @@ def test_no_window_attached():
     assert WindowControls().save_markdown("a.pdf", CONTENT)["status"] == "error"
 
 
-def test_default_save_dir_is_downloads(monkeypatch, tmp_path):
-    monkeypatch.undo()
-    monkeypatch.setattr(runner, "get_downloads_dir", lambda: tmp_path / "Downloads")
-    assert runner._default_save_dir() == tmp_path / "Downloads"
+# ─── Save folder (choose_save_folder / reset_save_folder) ─────────────────────
+
+
+@pytest.fixture
+def settings(tmp_path, monkeypatch):
+    """Real _default_save_dir() over an isolated settings.json and Downloads."""
+    from app.core import converter
+    from app.core.engine_manager import EngineManager
+
+    monkeypatch.undo()  # drop the autouse _default_save_dir patch
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    mgr = EngineManager.get_instance()
+    monkeypatch.setattr(mgr, "get_settings_file_path", lambda: tmp_path / "settings.json")
+    monkeypatch.setattr(mgr, "_settings_cache", None)
+    monkeypatch.setattr(converter, "get_downloads_dir", lambda: downloads)
+    return mgr, downloads
+
+
+def _controls(window):
+    controls = WindowControls()
+    controls._attach(window, APP_URL)
+    return controls
+
+
+def test_default_save_dir_follows_the_setting(settings, tmp_path):
+    mgr, downloads = settings
+    assert runner._default_save_dir() == downloads
+    folder = tmp_path / "Notes"
+    folder.mkdir()
+    mgr.update_settings({"save_dir": str(folder)})
+    assert runner._default_save_dir() == folder
+    # The Download button's Save dialog opens there.
+    window = FakeWindow(None)
+    _save(window)
+    assert window.dialog_calls[0][1]["directory"] == str(folder)
+
+
+def test_choose_save_folder_stores_the_resolved_path(settings, tmp_path):
+    import webview
+
+    mgr, downloads = settings
+    folder = tmp_path / "Notes"
+    folder.mkdir()
+    window = FakeWindow((str(folder / "." / ".." / "Notes"),))
+
+    res = _controls(window).choose_save_folder()
+
+    [(dialog_type, kwargs)] = window.dialog_calls
+    assert dialog_type == webview.FileDialog.FOLDER
+    assert kwargs["directory"] == str(downloads)
+    assert res["status"] == "saved" and "warning" not in res
+    assert res["folder"] == {"path": str(folder.resolve()), "chosen": str(folder.resolve()),
+                             "custom": True, "problem": ""}
+    assert mgr.get_settings()["save_dir"] == str(folder.resolve())
+
+
+def test_choose_save_folder_stores_a_links_target(settings, tmp_path):
+    mgr, _ = settings
+    target = tmp_path / "Real"
+    target.mkdir()
+    link = tmp_path / "Shortcut"
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available")
+
+    res = _controls(FakeWindow((str(link),))).choose_save_folder()
+
+    assert res["status"] == "saved"
+    assert mgr.get_settings()["save_dir"] == str(target.resolve())
+    assert res["folder"]["problem"] == ""
+
+
+@pytest.mark.parametrize("result", [None, (), ("",)], ids=["none", "empty-tuple", "qt-cancel"])
+def test_choose_save_folder_cancel_changes_nothing(settings, result):
+    mgr, _ = settings
+    assert _controls(FakeWindow(result)).choose_save_folder() == {"status": "cancelled"}
+    assert mgr.get_settings()["save_dir"] == ""
+
+
+def test_choose_save_folder_refuses_unusable(settings, tmp_path, monkeypatch):
+    mgr, _ = settings
+    folder = tmp_path / "Locked"
+    folder.mkdir()
+    monkeypatch.setattr(runner, "check_usable", lambda path: "InkDoc can't write to that folder.")
+
+    res = _controls(FakeWindow((str(folder),))).choose_save_folder()
+
+    assert res == {"status": "error", "message": "InkDoc can't write to that folder."}
+    assert mgr.get_settings()["save_dir"] == ""
+
+
+def test_choose_save_folder_warns_when_not_kept(settings, tmp_path, monkeypatch):
+    folder = tmp_path / "Notes"
+    folder.mkdir()
+    monkeypatch.setattr(runner, "store_save_dir", lambda value: False)
+    res = _controls(FakeWindow((str(folder),))).choose_save_folder()
+    assert res["status"] == "saved" and "couldn't be saved for next time" in res["warning"]
+
+
+@pytest.mark.parametrize("method", ["choose_save_folder", "reset_save_folder"])
+def test_save_folder_methods_refuse_foreign_pages(settings, method):
+    mgr, _ = settings
+    mgr.update_settings({"save_dir": "/kept"})
+    window = FakeWindow(("/elsewhere",), url="https://evil.example/")
+
+    res = getattr(_controls(window), method)()
+
+    assert res["status"] == "error"
+    assert window.dialog_calls == []
+    assert mgr.get_settings()["save_dir"] == "/kept"
+
+
+def test_reset_save_folder(settings, tmp_path):
+    mgr, downloads = settings
+    mgr.update_settings({"save_dir": str(tmp_path)})
+    res = _controls(FakeWindow(None)).reset_save_folder()
+    assert res["status"] == "saved"
+    assert res["folder"]["path"] == str(downloads) and res["folder"]["custom"] is False
+    assert mgr.get_settings()["save_dir"] == ""
+
+
+@pytest.mark.parametrize("method", ["choose_save_folder", "reset_save_folder"])
+def test_save_folder_refused_when_attached_to_another_instance(settings, method):
+    # A second window that joined a running InkDoc would store a folder the
+    # serving process never reads.
+    mgr, _ = settings
+    window = FakeWindow(("/elsewhere",))
+    controls = WindowControls()
+    controls._attach(window, APP_URL, owns_server=False)
+
+    res = getattr(controls, method)()
+
+    assert res["status"] == "error" and "another window" in res["message"]
+    assert window.dialog_calls == []
+    assert mgr.get_settings()["save_dir"] == ""
+
+
+def test_attach_is_not_exposed_to_the_page():
+    # pywebview exposes public methods to JavaScript; _attach holds the trusted origin.
+    assert not hasattr(WindowControls, "attach")
+
+
+def test_save_folder_methods_without_window():
+    assert WindowControls().choose_save_folder()["status"] == "error"
+    assert WindowControls().reset_save_folder()["status"] == "error"
 
 
 def test_runner_import_does_not_load_webview():
@@ -236,3 +379,96 @@ def test_runner_import_does_not_load_webview():
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip().splitlines()[-1] == "False"
+
+
+# ─── What the page can call ──────────────────────────────────────────────────
+
+PAGE_NAMES = {
+    "open_external_link", "toggle_maximize_window", "set_titlebar_button_rect",
+    "set_titlebar_colors", "minimize_window", "close_window", "save_markdown",
+    "choose_save_folder", "reset_save_folder",
+}
+
+
+class _Recorder:
+    """Stands in for WindowControls and records every method that is reached."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __getattr__(self, name):
+        def record(*args):
+            self.calls.append(name)
+            return True
+        return record
+
+
+def test_page_functions_are_exactly_what_app_js_uses():
+    source = (REPO_ROOT / "app" / "ui" / "app.js").read_text(encoding="utf-8")
+    import re
+
+    used = set(re.findall(r"api\.(\w+)\(", source))
+    used |= set(re.findall(r'changeSaveFolder\("(\w+)"\)', source))
+    exposed = {f.__name__ for f in runner._page_functions(_Recorder())}
+    assert exposed == used == PAGE_NAMES
+
+
+def test_window_uses_expose_not_js_api():
+    source = (REPO_ROOT / "app" / "desktop" / "runner.py").read_text(encoding="utf-8")
+    assert "js_api=" not in source
+    assert "window.expose(*_page_functions(window_controls))" in source
+
+
+def _dispatch(names):
+    """Send each name through pywebview's real bridge dispatcher, as page script would."""
+    import time
+
+    from webview.util import js_bridge_call
+
+    recorder = _Recorder()
+    bridge = type("Bridge", (), {})()
+    bridge._functions = {f.__name__: f for f in runner._page_functions(recorder)}
+    bridge._js_api = None  # as in run_desktop(): nothing is passed as js_api
+    bridge._callbacks = {}
+    bridge.replies = []
+    bridge.evaluate_js = bridge.replies.append
+    for name in names:
+        js_bridge_call(bridge, name, [], "id")
+    time.sleep(0.5)  # pywebview runs each call on its own thread
+    return recorder.calls, bridge.replies
+
+
+def test_public_names_still_reach_the_controls():
+    calls, replies = _dispatch(["minimize_window", "choose_save_folder"])
+    assert calls == ["minimize_window", "choose_save_folder"]
+    assert len(replies) == 2
+
+
+@pytest.mark.parametrize("name", [
+    "_stored", "_attach", "attach_chrome", "_save_folder_refusal", "_on_app_page",
+    "save_markdown.__self__", "save_markdown.__closure__", "minimize_window.__globals__",
+    "nonexistent",
+])
+def test_other_names_reach_nothing(name):
+    calls, replies = _dispatch([name])
+    assert calls == [] and replies == []
+
+
+def test_builtin_names_reach_no_inkdoc_code():
+    # With no js_api, pywebview's fallback lookup runs on None, so a name such
+    # as "__class__" resolves to Python's own NoneType; nothing of InkDoc's runs.
+    calls, _ = _dispatch(["__class__", "__init_subclass__"])
+    assert calls == []
+
+
+def test_real_pywebview_window_gets_only_the_exposed_functions():
+    # A Window object opens nothing until webview.start(), so this needs no GUI.
+    import webview
+
+    window = webview.create_window("test", url="http://127.0.0.1:1/InkDoc")
+    try:
+        window.expose(*runner._page_functions(runner.WindowControls()))
+        assert window._js_api is None
+        assert set(window._functions) == PAGE_NAMES
+    finally:
+        webview.windows.remove(window)

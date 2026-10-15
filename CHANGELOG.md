@@ -7,11 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.2.0] - TBD
+## [1.2.0] - 2026-10-14
 
 ### Changed
-- **Settings** now opens as a wider panel on the right with four sections:
-  **General**, **Engines**, **Updates** and **About**. "Check for updates
+- **Settings** now opens as a wider panel on the right with five sections:
+  **General**, **Engines**, **Add-ons**, **Updates** and **About**. "Check for updates
   daily" has moved to Updates, and About has a short description of InkDoc.
   The panel closes from the gear, the **X**, **Esc** or a click outside it.
   The title bar stays usable while it is open, and dragging a file onto the
@@ -67,8 +67,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GLM-OCR (`$…$`, `$$…$$`, `\(…\)`, `\[…\]`) is drawn as real formulas
   with KaTeX instead of showing as mangled text. KaTeX is bundled, works
   offline and is loaded only for documents that contain math, so other
-  documents, startup and saved files are unchanged. Prices such as $5 and
-  code are left alone; if ordinary text with $ signs is ever shown as math,
+  documents, startup and saved files are unchanged. Prices such as `$5` and
+  code are left alone; if ordinary text with `$` signs is ever shown as math,
   turn **Math formulas** off. `GET`/`POST /settings` use `render_math`.
 
 ### Fixed

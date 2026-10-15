@@ -1,0 +1,68 @@
+[1mdiff --git a/CHANGELOG.md b/CHANGELOG.md[m
+[1mindex dff7fd6..75d3b9f 100644[m
+[1m--- a/CHANGELOG.md[m
+[1m+++ b/CHANGELOG.md[m
+[36m@@ -7,11 +7,11 @@[m [mand this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0[m
+ [m
+ ## [Unreleased][m
+ [m
+[31m-## [1.2.0] - TBD[m
+[32m+[m[32m## [1.2.0] - 2026-10-14[m
+ [m
+ ### Changed[m
+[31m-- **Settings** now opens as a wider panel on the right with four sections:[m
+[31m-  **General**, **Engines**, **Updates** and **About**. "Check for updates[m
+[32m+[m[32m- **Settings** now opens as a wider panel on the right with five sections:[m
+[32m+[m[32m  **General**, **Engines**, **Add-ons**, **Updates** and **About**. "Check for updates[m
+   daily" has moved to Updates, and About has a short description of InkDoc.[m
+   The panel closes from the gear, the **X**, **Esc** or a click outside it.[m
+   The title bar stays usable while it is open, and dragging a file onto the[m
+[36m@@ -67,8 +67,8 @@[m [mand this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0[m
+   GLM-OCR (`$…$`, `$$…$$`, `\(…\)`, `\[…\]`) is drawn as real formulas[m
+   with KaTeX instead of showing as mangled text. KaTeX is bundled, works[m
+   offline and is loaded only for documents that contain math, so other[m
+[31m-  documents, startup and saved files are unchanged. Prices such as $5 and[m
+[31m-  code are left alone; if ordinary text with $ signs is ever shown as math,[m
+[32m+[m[32m  documents, startup and saved files are unchanged. Prices such as `$5` and[m
+[32m+[m[32m  code are left alone; if ordinary text with `$` signs is ever shown as math,[m
+   turn **Math formulas** off. `GET`/`POST /settings` use `render_math`.[m
+ [m
+ ### Fixed[m
+[1mdiff --git a/tests/conftest.py b/tests/conftest.py[m
+[1mindex abffbe5..c9d80c5 100644[m
+[1m--- a/tests/conftest.py[m
+[1m+++ b/tests/conftest.py[m
+[36m@@ -3,6 +3,13 @@[m
+ Every test gets its own empty settings.json. Without this, a test that saves or[m
+ changes a setting would read and write the developer's real one: with a save[m
+ folder chosen in the desktop app, auto-save tests would write into that folder.[m
+[32m+[m
+[32m+[m[32mThe PDF probe (2 s) and the missing-text check (1 s) stop when their time[m
+[32m+[m[32mbudget runs out. That keeps a huge document from stalling a conversion, but on[m
+[32m+[m[32ma CI runner that pauses for a moment it made results depend on timing: a probe[m
+[32m+[m[32mcut off before its first page sent a scanned PDF to MarkItDown instead of[m
+[32m+[m[32mDocling. Tests therefore get a generous default; tests of the cut-off itself[m
+[32m+[m[32mpass their own budget, which this does not touch.[m
+ """[m
+ from __future__ import annotations[m
+ [m
+[36m@@ -17,3 +24,19 @@[m [mdef _isolated_settings(tmp_path_factory, monkeypatch):[m
+     settings_file = tmp_path_factory.mktemp("settings") / "settings.json"[m
+     monkeypatch.setattr(mgr, "get_settings_file_path", lambda: settings_file)[m
+     monkeypatch.setattr(mgr, "_settings_cache", None)[m
+[32m+[m
+[32m+[m
+[32m+[m[32mTEST_TIME_BUDGET_S = 60.0[m
+[32m+[m
+[32m+[m
+[32m+[m[32m@pytest.fixture(autouse=True)[m
+[32m+[m[32mdef _no_time_budget_flakes(monkeypatch):[m
+[32m+[m[32m    # Patched on the function objects themselves (keyword-only defaults), so[m
+[32m+[m[32m    # every caller sees it, including modules that imported them by name.[m
+[32m+[m[32m    from app.core.pdf_probe import probe_pdf[m
+[32m+[m[32m    from app.core.quality_check import assess[m
+[32m+[m
+[32m+[m[32m    for fn in (probe_pdf, assess):[m
+[32m+[m[32m        defaults = dict(fn.__kwdefaults__)[m
+[32m+[m[32m        defaults["time_budget_s"] = TEST_TIME_BUDGET_S[m
+[32m+[m[32m        monkeypatch.setattr(fn, "__kwdefaults__", defaults)[m

@@ -95,6 +95,44 @@ def test_rotated_pages_are_skipped(tmp_path, monkeypatch):
     assert result["pages"] == [{"page": 1, "skipped": "rotated", "tables": []}]
 
 
+def test_a_huge_page_is_rendered_no_bigger_than_the_cap(tmp_path, monkeypatch):
+    import pypdfium2 as pdfium
+
+    session = _Session()
+    monkeypatch.setattr(lm, "_session", lambda model_dir, sha256: session)
+    doc = pdfium.PdfDocument.new()
+    doc.new_page(14400, 14400)           # 200 inches square: 30000 px at RENDER_DPI
+    doc.save(str(tmp_path / "huge.pdf"))
+    doc.close()
+    result = lm.detect_tables(str(tmp_path / "huge.pdf"), [1], str(tmp_path), "ab" * 32)
+    (width, height), = session.sizes
+    assert max(width, height) <= lm.MAX_RENDER_SIDE + 1
+    points = 14400 / lm.MAX_RENDER_SIDE   # the boxes still come back in the page's points
+    assert result["pages"][0]["tables"][0]["bbox"] == pytest.approx([150 * points, 300 * points, 750 * points, 600 * points], rel=1e-3)
+
+
+def test_the_model_is_loaded_once_from_the_bytes_that_were_checked(tmp_path, monkeypatch):
+    import hashlib
+
+    import onnxruntime as ort
+
+    data = b"a stand-in model"
+    (tmp_path / lm.MODEL_FILE).write_bytes(data)
+    loads = []
+
+    class _Session:
+        def __init__(self, model, options, providers):
+            loads.append(model)
+
+    monkeypatch.setattr(ort, "InferenceSession", _Session)
+    monkeypatch.setattr(lm, "_session_cache", {})
+    digest = hashlib.sha256(data).hexdigest()
+    first = lm._session(tmp_path, digest)
+    assert lm._session(tmp_path, digest) is first and loads == [data], "the checked bytes, once"
+    (tmp_path / lm.MODEL_FILE).write_bytes(b"swapped afterwards")
+    assert lm._session(tmp_path, digest) is first, "the loaded model is the checked one"
+
+
 def test_a_model_that_is_not_the_pinned_one_is_never_loaded(tmp_path):
     (tmp_path / lm.MODEL_FILE).write_bytes(b"not the model")
     result = lm.detect_tables("unused.pdf", [1], str(tmp_path), "0" * 64)

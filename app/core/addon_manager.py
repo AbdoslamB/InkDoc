@@ -157,6 +157,8 @@ def validate_addon_entry(addon: AddonInfo) -> tuple[CatalogueState, list[str]]:
         defects.append(f"target {addon.target!r} is not one of {', '.join(TARGETS)}")
     if addon.target == TARGET_DOCLING_PACK and not addon.min_pack_version:
         defects.append("min_pack_version is empty, so any pack would satisfy it")
+    if addon.target == TARGET_INKDOC and addon.model_dir and Path(addon.model_dir).name != addon.model_dir:
+        defects.append(f"model_dir {addon.model_dir!r} must be one folder name")
     defects.extend(_pack_copy_defects(addon))
 
     has_url = bool(addon.url.strip())
@@ -196,6 +198,12 @@ def validate_addon_entry(addon: AddonInfo) -> tuple[CatalogueState, list[str]]:
     if addon.uncompressed_size_bytes <= 0:
         defects.append("uncompressed_size_bytes must be positive for a published add-on")
 
+    pinned = (addon.pack_copy or {}).get("sha256_files") or {}
+    if pinned and any(addon.sha256_files.get(rel) != digest for rel, digest in pinned.items()):
+        defects.append(
+            "sha256_files does not pin the same files as pack_copy, so the download would not be "
+            "the model the Docling pack carries"
+        )
     if not addon.sha256_files:
         defects.append(
             "sha256_files is empty, so extracted files could not be verified after download"
@@ -223,6 +231,7 @@ def _pack_copy_defects(addon: AddonInfo) -> list[str]:
         return ["pack_copy is only meaningful for target 'inkdoc'"]
     folder = str(addon.pack_copy.get("dir", ""))
     digests = addon.pack_copy.get("sha256_files") or {}
+    sizes = addon.pack_copy.get("sizes") or {}
     defects = []
     if not folder or Path(folder).name != folder:
         defects.append(f"pack_copy dir {folder!r} must be one folder name")
@@ -230,6 +239,10 @@ def _pack_copy_defects(addon: AddonInfo) -> list[str]:
         defects.append("pack_copy has no sha256_files, so the Docling pack's copy could not be checked")
     elif not all(isinstance(d, str) and is_valid_sha256(d) for d in digests.values()):
         defects.append("pack_copy sha256_files has a malformed digest")
+    if any(not isinstance(rel, str) or not rel or Path(rel).name != rel for rel in digests):
+        defects.append("pack_copy sha256_files must name files directly in its folder")
+    if set(sizes) - set(digests) or not all(isinstance(n, int) and n > 0 for n in sizes.values()):
+        defects.append("pack_copy sizes must be positive sizes of files its sha256_files names")
     return defects
 
 
@@ -368,8 +381,8 @@ class AddonManager:
 
     def _pack_copy_path(self, addon: AddonInfo) -> Path | None:
         """The Docling pack's copy of an "inkdoc" add-on: its folder when the pack is
-        installed and holds every pinned file, else None. Existence only; whoever
-        loads the files hashes them."""
+        installed and holds every pinned file at its pinned size, else None. No
+        hashing here (the status path must stay fast); whoever loads the files does."""
         if not addon.pack_copy:
             return None
         from app.core.engine_manager import EngineManager
@@ -379,7 +392,12 @@ class AddonManager:
                 return None
             folder = self._models_dir() / str(addon.pack_copy["dir"])
             files = addon.pack_copy.get("sha256_files") or {}
-            if files and all((folder / rel).is_file() for rel in files):
+            sizes = addon.pack_copy.get("sizes") or {}
+            if (
+                files
+                and all((folder / rel).is_file() for rel in files)
+                and all((folder / rel).stat().st_size == size for rel, size in sizes.items())
+            ):
                 return folder
         except Exception as exc:
             logger.debug("Could not look for the Docling pack's copy of '%s': %s", addon.name, exc)
@@ -388,19 +406,25 @@ class AddonManager:
     def model_location(self, name: str) -> tuple[Path, dict[str, str]] | None:
         """Where a usable "inkdoc" add-on's files are, with the digests to check them against.
 
-        InkDoc's own install first, else the Docling pack's copy; None when
-        neither can be used. Hashing is left to whoever loads the files: this is
-        also on the status path, which must stay fast.
+        InkDoc's own install first (only while the catalogue pins its files),
+        else the Docling pack's copy; None when neither can be used. Hashing is
+        left to whoever loads the files: this is also on the status path, which
+        must stay fast.
         """
         addon = self.get_addon(name)
         if addon is None or addon.target != TARGET_INKDOC or not self.get_status(name)["usable"]:
             return None
-        if self.is_installed(name):
+        if self._own_install_counts(addon):
             return self._model_path(addon), dict(addon.sha256_files)
         folder = self._pack_copy_path(addon)
         if folder is None:
             return None
         return folder, dict(addon.pack_copy.get("sha256_files") or {})
+
+    def _own_install_counts(self, addon: AddonInfo) -> bool:
+        """InkDoc's own install of an "inkdoc" add-on, while the catalogue pins its files
+        (an install left by another version, unpinned here, gives way to the pack's copy)."""
+        return self.is_installed(addon.name) and self.catalogue_state(addon.name)[0] is CatalogueState.PUBLISHED
 
     def pack_docling_version(self) -> str:
         """Docling version inside the installed pack, read from its dist-info.
@@ -574,6 +598,7 @@ class AddonManager:
         from app._version import get_version
 
         installed = self.is_installed(addon.name)
+        own = self._own_install_counts(addon)
         in_pack = self._pack_copy_path(addon) is not None
         app_ok = version_at_least(get_version(), addon.min_app_version)
         state, defects = self.catalogue_state(addon.name)
@@ -583,7 +608,7 @@ class AddonManager:
             reason = "This add-on's catalogue entry is invalid; it cannot be installed."
         elif not app_ok:
             reason = f"Requires InkDoc {addon.min_app_version} or newer"
-        elif state is CatalogueState.UNRELEASED and not (installed or in_pack):
+        elif state is CatalogueState.UNRELEASED and not in_pack:
             reason = "This add-on has not been published yet." + (
                 " The Docling engine comes with it." if addon.pack_copy else ""
             )
@@ -602,7 +627,7 @@ class AddonManager:
             "pack_version": None,
             "min_pack_version": "",
             "size_bytes": addon.size_bytes,
-            "usable": app_ok and (installed or in_pack) and state is not CatalogueState.DEFECTIVE,
+            "usable": app_ok and (own or in_pack) and state is not CatalogueState.DEFECTIVE,
             "pack_drift": "",
             "worker_verified": False,
             # Nothing to download while the Docling pack provides the model.
@@ -611,7 +636,7 @@ class AddonManager:
             "progress": self.get_progress(addon.name),
             "target": addon.target,
             "license": addon.license,
-            "provided_by_pack": in_pack and not installed,
+            "provided_by_pack": in_pack and not own,
         }
 
     def _unknown_status(self, name: str) -> dict[str, Any]:
@@ -700,13 +725,11 @@ class AddonManager:
             raise SecurityError(progress.error_message)
 
         models_dir = self._root(addon)
-        models_dir.mkdir(parents=True, exist_ok=True)
         model_path = self._model_path(addon)
         # Everything lands beside the model directory so the final move is a
         # rename within one filesystem rather than a copy across devices.
         staging_dir = models_dir / f"{_META_PREFIX}{addon.name}.staging"
-        tmp_dir = Path(tempfile.mkdtemp(prefix=f"inkdoc_addon_{addon.name}_"))
-        archive = tmp_dir / f"{addon.name}.{addon.archive_format}"
+        tmp_dir: Path | None = None
 
         def on_progress(done: int, total: int) -> None:
             progress.bytes_downloaded = done
@@ -715,6 +738,11 @@ class AddonManager:
                 progress.percent = (done / progress.total_bytes) * 100.0
 
         try:
+            # Inside the try: a folder that can't be made ends the install as an
+            # error, never leaving it "downloading".
+            models_dir.mkdir(parents=True, exist_ok=True)
+            tmp_dir = Path(tempfile.mkdtemp(prefix=f"inkdoc_addon_{addon.name}_"))
+            archive = tmp_dir / f"{addon.name}.{addon.archive_format}"
             check_disk_space(
                 models_dir,
                 addon.size_bytes,
@@ -797,7 +825,8 @@ class AddonManager:
             logger.error("Add-on '%s' install failed: %s", addon.name, exc)
             raise
         finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+            if tmp_dir is not None:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
             shutil.rmtree(staging_dir, ignore_errors=True)
             self._cancel_events.pop(name, None)
 
@@ -849,9 +878,10 @@ class AddonManager:
     # ─── Verify and remove ───────────────────────────────────────────────────
 
     def _verify_tree(self, addon: AddonInfo, root: Path) -> None:
-        """Hash every file the catalogue names. Fails closed on a bad entry."""
+        """Hash every file the catalogue names. Fails closed on a bad entry, and when
+        there is nothing to check."""
         if not addon.sha256_files:
-            return
+            raise SecurityError("The catalogue pins no files to check this add-on against.")
         for rel_path, expected in addon.sha256_files.items():
             exp = (expected or "").lower().strip()
             if not is_valid_sha256(exp):

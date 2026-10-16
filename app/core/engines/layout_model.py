@@ -37,6 +37,7 @@ LABELS = (
 )
 INPUT_SIDE = 640
 RENDER_DPI = 150            # found 10 of 13 test tables; 100 DPI found 8
+MAX_RENDER_SIDE = 2000      # pixels: a page's size is the document's to choose, memory is not
 MIN_SCORE = 0.3             # 0.5 misses real tables (a rating grid scored 0.36)
 OVERLAP_IOU = 0.5           # boxes overlapping this much are the same table
 INSIDE_SHARE = 0.8          # a box this much inside another is part of it
@@ -47,7 +48,7 @@ MAX_PAGES = 60
 Box = list[float]  # (x0, top, x1, bottom)
 
 _session_lock = threading.Lock()
-_session_cache: dict[str, Any] = {}  # {"key": (path, size, mtime, sha256), "session": ...}: one model per process
+_session_cache: dict[str, Any] = {}  # {"key": (path, sha256), "session": ...}: one model per process
 
 
 # ─── Boxes (pure) ────────────────────────────────────────────────────────────
@@ -117,29 +118,22 @@ def reading_order(items: list[dict]) -> list[dict]:
 
 
 # ─── The model ───────────────────────────────────────────────────────────────
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _session(model_dir: Path, sha256: str) -> Any:
-    """The model, loaded once per process, after its file matched `sha256`."""
+    """The model, loaded once per process from the very bytes that matched `sha256`
+    (read once: the file can't change between the check and the load)."""
     model = model_dir / MODEL_FILE
-    stat = model.stat()
-    key = (str(model), stat.st_size, stat.st_mtime, sha256.lower())
+    key = (str(model), sha256.lower())
     with _session_lock:
         if _session_cache.get("key") == key:
             return _session_cache["session"]
-        if _sha256(model) != sha256.lower():
+        data = model.read_bytes()
+        if hashlib.sha256(data).hexdigest() != sha256.lower():
             raise ValueError("the layout model file does not match its pinned SHA-256")
         import onnxruntime as ort
 
         options = ort.SessionOptions()
         options.intra_op_num_threads = max(1, min(MAX_THREADS, os.cpu_count() or 1))
-        session = ort.InferenceSession(str(model), options, providers=["CPUExecutionProvider"])
+        session = ort.InferenceSession(data, options, providers=["CPUExecutionProvider"])
         _session_cache.update(key=key, session=session)
         return session
 
@@ -167,7 +161,11 @@ def _candidates(session: Any, image: Any) -> list[dict]:
 
 
 def _render(path: str, number: int) -> tuple[Any, float, str]:
-    """(RGB image at RENDER_DPI or None, points per pixel, why skipped). pdfium lock held."""
+    """(RGB image or None, points per pixel, why skipped). pdfium lock held.
+
+    RENDER_DPI, but never more than MAX_RENDER_SIDE pixels on the long side:
+    a document can declare any page size, and the model sees 640 x 640 anyway.
+    """
     import pypdfium2 as pdfium
 
     from app.core.pdf_probe import pdfium_lock
@@ -182,8 +180,10 @@ def _render(path: str, number: int) -> tuple[Any, float, str]:
             try:
                 if page.get_rotation() % 360:
                     return None, 1 / scale, "rotated"
+                scale = min(scale, MAX_RENDER_SIDE / max(1.0, *page.get_size()))
                 bitmap = page.render(scale=scale)
                 try:
+                    # convert() makes a copy that outlives the bitmap it is closed with.
                     return bitmap.to_pil().convert("RGB"), 1 / scale, ""
                 finally:
                     bitmap.close()

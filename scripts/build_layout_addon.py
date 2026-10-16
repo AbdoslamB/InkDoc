@@ -7,9 +7,9 @@ release tag, as scripts/build_addon.py does for the Docling add-on.
 
 The files come from the Hugging Face revision the catalogue pins
 (source_revision), or from a local copy (--model-dir, such as the one in an
-installed Docling engine pack). Either way model.onnx must hash to the digest
+installed Docling engine pack). Either way every file must hash to the digest
 the catalogue pins for the Docling pack's copy (pack_copy), so InkDoc's add-on
-and Docling's copy are one and the same file, and the build stops otherwise.
+and Docling's copy are the same files, and the build stops otherwise.
 The archive is reproducible: the same files always give the same SHA-256.
 
     python scripts/build_layout_addon.py --release-tag layout-addon-v1 --output-dir dist/addons
@@ -109,7 +109,7 @@ def build(
     check_load: bool = True,
 ) -> dict:
     entry = dict(catalogue_entry(catalogue))
-    pinned = entry["pack_copy"]["sha256_files"][MODEL_FILE]
+    pinned = entry["pack_copy"]["sha256_files"]
     output_dir.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory(prefix="inkdoc_layout_addon_") as td:
@@ -117,9 +117,10 @@ def build(
         missing = [name for name in UPSTREAM_FILES if not (source / name).is_file()]
         if missing:
             raise SystemExit(f"[FAIL] {source} lacks {', '.join(missing)}")
-        if _sha256(source / MODEL_FILE) != pinned:
-            raise SystemExit(f"[FAIL] {source / MODEL_FILE} is not the pinned model (sha256 {pinned}).")
-        print(f"[OK] {MODEL_FILE} is {entry['source_repo']}@{entry['source_revision'][:12]}")
+        for name in UPSTREAM_FILES:
+            if _sha256(source / name) != pinned.get(name):
+                raise SystemExit(f"[FAIL] {source / name} is not the pinned file (sha256 {pinned.get(name)}).")
+        print(f"[OK] the files are {entry['source_repo']}@{entry['source_revision'][:12]}")
         if check_load:
             check_loads(source / MODEL_FILE)
 
@@ -148,7 +149,7 @@ def build(
 
     from scripts.verify_addon_catalogue import verify
 
-    ok, messages = verify(out, require_published=False)
+    ok, messages = verify(out, require_published=True, names=[ADDON_NAME])
     for line in messages:
         print(f"     {line}")
     if not ok:

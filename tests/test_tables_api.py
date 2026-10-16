@@ -130,6 +130,31 @@ def test_a_step_switched_off_is_not_run():
     assert _convert("markitdown", level="balanced").json()["tables"] is None, "explicit engines skip it too"
 
 
+def test_url_and_batch_conversions_follow_the_steps_setting(tmp_path):
+    from unittest.mock import patch
+
+    from app.core.url_fetcher import FetchedUrlResult
+
+    assert _off(["table_check"]).status_code == 200
+    off = [{"name": "table_check", "ran": False, "changed": 0, "skipped": "switched off"}]
+    pdf, _ = _pair()
+    batch = client.post("/convert/batch?engine=auto&auto_quality=balanced",
+                        files=[("files", ("pair.pdf", pdf, "application/pdf"))]).json()
+    assert batch["results"]["pair.pdf"]["tables"]["passes"] == off
+
+    def fake_fetch(url, **_kwargs):
+        path = tmp_path / "fetched.bin"
+        path.write_bytes(pdf)
+        return FetchedUrlResult(final_url=url, temp_file_path=path, content_bytes=None,
+                                content_type="application/pdf", charset=None, filename="pair")
+
+    with patch.object(server_module, "validate_url_for_ssrf", side_effect=lambda u: u), \
+         patch("app.core.url_fetcher.fetch_url_safely", side_effect=fake_fetch):
+        data = client.post("/convert/url?response_format=json", json={
+            "url": "https://example.com/pair", "engine": "auto", "auto_quality": "balanced"}).json()
+    assert data["tables"]["passes"] == off
+
+
 def test_a_hand_edited_list_never_breaks_a_conversion():
     from app.core.engine_manager import EngineManager
 

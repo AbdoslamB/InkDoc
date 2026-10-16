@@ -12,16 +12,18 @@ words, only when all of these hold:
   least half its cells filled;
 - at least AGREE_SHARE of its words are in that place, so it is the same
   table read again, and it uses no script that place doesn't;
-- the readings that take that place hold at least AGREE_SHARE of its words,
-  so nothing GLM-OCR wrote there is lost;
-- it differs from a table GLM-OCR wrote there.
+- in a paragraph, only the lines made entirely of the readings' words are
+  replaced, and only when no other line sits between them: a note or a
+  source line next to the table stays as it is;
+- a table GLM-OCR wrote is replaced only when the readings hold at least
+  AGREE_SHARE of its words (the rest are the same cells read slightly
+  differently), and only when they differ from it.
 
 Words, not whole cells, because the structure is what may differ: a stacked
 header GLM-OCR shifted on the page comes back as "Revenue 2023" from the crop.
 A paragraph is a run of non-blank lines that are not headings, comments,
-code or table rows; nothing is ever added where GLM-OCR wrote other words.
-A paragraph with dot leaders is a contents list, never a table, as for the
-table finder on text pages.
+code or table rows. A paragraph with dot leaders is a contents list, never a
+table, as for the table finder on text pages.
 
 GLM-OCR's output has no page boundaries, so a reading is matched to its place
 by its words. Two tables side by side that GLM-OCR wrote as one are written
@@ -58,6 +60,8 @@ SOURCE = "glm_ocr"
 CHECKED = "layout,page-reading"
 ISSUE = "scanned"
 TEXT_PAGE_MIN_CHARS = 25    # a page with fewer characters has no usable text layer (table_stage)
+# Why the layout model skipped a page, as the detail line says it.
+UNREAD = {"rotated": "the page is rotated", "error": "the layout model failed on it"}
 
 # detect(path, pages, job) -> the layout model's JSON (app/core/engines/layout_model.py)
 Detector = Callable[[str, list[int], Any], dict]
@@ -84,6 +88,7 @@ class ScannedTables:
     areas: list[Area] = field(default_factory=list)
     skipped: str = ""           # why nothing was looked for or read
     truncated: bool = False
+    unread_pages: list[tuple[int, str]] = field(default_factory=list)  # (page, why) the model skipped
 
 
 def target_pages(probe: Any, read_by_glm: Collection[int]) -> list[int]:
@@ -103,18 +108,17 @@ def find_scanned_tables(path: str, pages: list[int], detect: Detector, *, job: A
     except ConversionCancelledError:
         raise
     except Exception as exc:
-        logger.warning("Finding tables on scanned pages failed: %s", exc)
-        result = {"error": str(exc)}
+        result = {"error": f"{type(exc).__name__}: {exc}"}
     if result.get("error"):
-        logger.warning("Layout model: %s", result["error"])
+        # The type only at WARNING: the message may hold the user's folder names.
+        logger.warning("The layout model failed (%s)", str(result["error"]).split(":", 1)[0])
+        logger.debug("Layout model: %s", result["error"])
         found.skipped = "the layout model failed"
         return found
     found.truncated = bool(result.get("truncated"))
-    found.areas = [
-        Area(page=int(p["page"]), bbox=[float(v) for v in t["bbox"]])
-        for p in result.get("pages", [])
-        for t in p.get("tables", [])
-    ]
+    pages = result.get("pages", [])
+    found.areas = [Area(page=int(p["page"]), bbox=[float(v) for v in t["bbox"]]) for p in pages for t in p.get("tables", [])]
+    found.unread_pages = [(int(p["page"]), p["skipped"]) for p in pages if p.get("skipped") in UNREAD]
     return found
 
 
@@ -172,8 +176,15 @@ def _share(part: Counter[str], whole: Counter[str]) -> float:
 
 
 def scripts(texts: list[str]) -> set[str]:
-    """The writing systems of the letters in `texts` ("LATIN", "CJK", "CYRILLIC", ...)."""
-    return {unicodedata.name(ch, "?").split(" ")[0] for text in texts for ch in text if ch.isalpha()}
+    """The writing systems of the letters in `texts` ("LATIN", "CJK", "CYRILLIC", ...).
+
+    NFKC first, so symbols that stand for letters (º, µ, the ohm and kelvin
+    signs) count as those letters, as they do for the words.
+    """
+    return {
+        unicodedata.name(ch, "?").split(" ")[0]
+        for text in texts for ch in unicodedata.normalize("NFKC", text) if ch.isalpha()
+    }
 
 
 def _cells(rows: list[list[str]]) -> list[str]:
@@ -233,45 +244,80 @@ def _places(lines: list[str]) -> list[_Place]:
     return places
 
 
+def _own_lines(lines: list[str], place: _Place, words: Counter[str]) -> tuple[int, int] | None:
+    """The lines of a paragraph made only of `words`, from the first to the last such line;
+    None when there are none, or when a line with other words sits between them."""
+    own = [all(w in words for w in line_tokens(lines[i])) for i in range(place.start, place.end)]
+    if True not in own:
+        return None
+    first, last = own.index(True), len(own) - 1 - own[::-1].index(True)
+    if not all(own[first:last + 1]):
+        return None
+    return place.start + first, place.start + last + 1
+
+
+def _match(area: Area, places: list[_Place], groups: dict[int, list[Area]]) -> int | None:
+    """The place holding the area's words: the best share, the earliest on a tie, never one
+    another page's reading has taken. None when no place holds AGREE_SHARE of them."""
+    words = _words(area.rows or [])
+    ranked = sorted((-_share(words, p.words), i) for i, p in enumerate(places))
+    for negative_share, index in ranked:
+        if -negative_share < AGREE_SHARE:
+            return None
+        if all(a.page == area.page for a in groups.get(index, [])):
+            return index
+    return None
+
+
+def _replacement(lines: list[str], place: _Place, areas: list[Area]) -> tuple[int, int] | str:
+    """The lines the areas' readings take the place of, or why they don't."""
+    words = sum((_words(a.rows or []) for a in areas), Counter())
+    if place.rows is None:
+        span = _own_lines(lines, place, words)
+        if span is None:
+            return "writing it would leave out part of what GLM-OCR wrote there"
+        start, end = span
+        if _share(words, Counter(w for line in lines[start:end] for w in line_tokens(line))) < AGREE_SHARE:
+            return "it doesn't match what GLM-OCR wrote for the page"
+        return start, end
+    if _share(place.words, words) < AGREE_SHARE:
+        return "writing it would leave out part of what GLM-OCR wrote there"
+    if len(areas) == 1 and _same(areas[0].rows or [], place.rows):
+        return "GLM-OCR's table was already right"
+    return place.start, place.end
+
+
 def write_scanned_tables(markdown: str, found: ScannedTables) -> tuple[str, list[dict], list[str]]:
     """(Markdown, tables written per page, detail lines). Pure."""
     lines = markdown.split("\n")
-    places = _places(lines)
+    readings = [a for a in found.areas if a.rows is not None]
+    places = _places(lines) if readings else []
     groups: dict[int, list[Area]] = {}
-    for area in found.areas:
-        if area.rows is None:
-            continue
+    for area in readings:
         if not is_grid(area.rows):
             area.note = "GLM-OCR's reading of it is not a full grid"
             continue
-        words = _words(area.rows)
-        share, best = max(((_share(words, p.words), i) for i, p in enumerate(places)), default=(0.0, -1))
-        if share < AGREE_SHARE:
+        index = _match(area, places, groups)
+        if index is None:
             area.note = "it doesn't match what GLM-OCR wrote for the page"
-        elif not scripts(_cells(area.rows)) <= places[best].scripts:
+        elif not scripts(_cells(area.rows)) <= places[index].scripts:
             area.note = "GLM-OCR read it in another script on its own"
         else:
-            groups.setdefault(best, []).append(area)
+            groups.setdefault(index, []).append(area)
 
     replacements: list[tuple[int, int, list[str]]] = []
     for index, areas in groups.items():
-        place = places[index]
-        if len({a.page for a in areas}) > 1:
-            note = "it matches a table on another page too"
-        elif _share(place.words, sum((_words(a.rows) for a in areas), Counter())) < AGREE_SHARE:
-            note = "writing it would leave out part of what GLM-OCR wrote there"
-        elif place.rows is not None and len(areas) == 1 and _same(areas[0].rows, place.rows):
-            note = "GLM-OCR's table was already right"
-        else:
-            new: list[str] = []
+        target = _replacement(lines, places[index], areas)
+        if isinstance(target, str):
             for area in areas:
-                table = {"rows": area.rows, "source": SOURCE, "checked": CHECKED}
-                new += [*table_lines(table, area.page), ""]
-                area.written = True
-            replacements.append((place.start, place.end, new[:-1]))
+                area.note = target
             continue
+        new: list[str] = []
         for area in areas:
-            area.note = note
+            table = {"rows": area.rows, "source": SOURCE, "checked": CHECKED}
+            new += [*table_lines(table, area.page), ""]
+            area.written = True
+        replacements.append((*target, new[:-1]))
     for start, end, new in sorted(replacements, reverse=True):
         lines[start:end] = new
 
@@ -284,6 +330,7 @@ def write_scanned_tables(markdown: str, found: ScannedTables) -> tuple[str, list
     ]
     left = sorted({(a.page, a.note) for a in found.areas if a.note})
     details += [f"Page {page}: a table was left as GLM-OCR wrote it: {note}." for page, note in left]
+    details += [f"Page {page}: not looked at for tables: {UNREAD[why]}." for page, why in found.unread_pages]
     if found.truncated:
-        details.append("Some scanned pages were not looked at: the layout model reached its time limit.")
+        details.append("Some scanned pages were not looked at: the layout model reached its page or time limit.")
     return "\n".join(lines), report, details

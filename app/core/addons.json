@@ -32,8 +32,9 @@
     "layout_model has target 'inkdoc': it installs into InkDoc's own add-on folder",
     "and InkDoc loads it (app/core/engines/layout_model.py). Its url, sha256, sizes",
     "and sha256_files are written by scripts/build_layout_addon.py. pack_copy pins",
-    "the identical file the Docling engine pack ships, which is used instead when",
-    "present, so Docling users download nothing."
+    "the identical files the Docling engine pack ships (upstream revision",
+    "source_revision), which are used instead when present, so Docling users download",
+    "nothing; a published entry must pin the same digests."
   ],
   "addons": {
     "code_enrichment": {
@@ -112,7 +113,16 @@
       "pack_copy": {
         "dir": "docling-project--docling-layout-heron-onnx",
         "sha256_files": {
-          "model.onnx": "59c81a3a2923042d85034ffc487f8f47e4854117e879aef89b2b9f728fb4922a"
+          "model.onnx": "59c81a3a2923042d85034ffc487f8f47e4854117e879aef89b2b9f728fb4922a",
+          "config.json": "c6e67b6cdf64fa245779d0409bb994aa96e8c1790e15ec07a65843628e232180",
+          "preprocessor_config.json": "54d086cf0d7d371f7fac36e5d3a0dae31e211298affc816106cc376506799d58",
+          "README.md": "48de0f07390f6823a225ce8aab348e7b57408534b56b71f1433ed6280456597f"
+        },
+        "sizes": {
+          "model.onnx": 171220471,
+          "config.json": 878,
+          "preprocessor_config.json": 445,
+          "README.md": 294
         }
       },
       "sha256_files": {}

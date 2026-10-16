@@ -2722,7 +2722,8 @@
             </svg></div>
           <h3 data-i18n="feat.3.t">Missing-text check</h3>
           <p data-i18n="feat.3.b">For PDFs, InkDoc compares the result with the PDF's own text and tables, tells you
-            when something went missing, and can rebuild tables that came out wrong (Settings → Auto quality).</p>
+            when something went missing, and can rebuild tables that came out wrong, on scanned pages too (Settings →
+            Auto quality, where each step can be switched off).</p>
         </article>
         <article class="card rv" style="--d:.08s">
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -3014,7 +3015,7 @@ python3 -m pip install -r requirements.txt
           "feat.1.t": "Saves itself", "feat.1.b": "The moment a conversion finishes, the <code>.md</code> file is in Downloads, or in another folder you pick in Settings. No save dialog, no export button. An existing file is never overwritten.",
           "feat.1.folder": "Downloads", "feat.1.new": "new",
           "feat.2.t": "Preview and edit", "feat.2.b": "Read the rendered result or the raw Markdown, fix anything, then copy it.",
-          "feat.3.t": "Missing-text check", "feat.3.b": "For PDFs, InkDoc compares the result with the PDF's own text and tables, tells you when something went missing, and can rebuild tables that came out wrong (Settings → Auto quality).",
+          "feat.3.t": "Missing-text check", "feat.3.b": "For PDFs, InkDoc compares the result with the PDF's own text and tables, tells you when something went missing, and can rebuild tables that came out wrong, on scanned pages too (Settings → Auto quality, where each step can be switched off).",
           "feat.4.t": "OCR for scans, when you need it", "feat.4.b": "Add GLM-OCR (1.45 GB) or Docling in Settings to read scans and photos. Runs on your computer, faster with a GPU.",
           "feat.5.t": "Private by default", "feat.5.b": "Most conversions never leave your computer. No account, no telemetry. Audio, web pages and YouTube links use the internet: " + a(PRIV, "see exactly what is sent") + ".",
           "fmt.kicker": "Formats", "fmt.title": "Works with the files you already have", "fmt.lead": "Documents, spreadsheets, slides, images, audio, archives and the web.",
@@ -3057,7 +3058,7 @@ python3 -m pip install -r requirements.txt
           "feat.1.t": "Se guarda solo", "feat.1.b": "En cuanto termina la conversión, el archivo <code>.md</code> está en Descargas, o en otra carpeta que elijas en Ajustes. Sin cuadro de guardar ni botón de exportar. Nunca sobrescribe un archivo existente.",
           "feat.1.folder": "Descargas", "feat.1.new": "nuevo",
           "feat.2.t": "Vista previa y edición", "feat.2.b": "Lee el resultado formateado o el Markdown sin procesar, corrige lo que quieras y cópialo.",
-          "feat.3.t": "Detecta texto que falta", "feat.3.b": "En los PDF, InkDoc compara el resultado con el texto y las tablas del propio PDF, te avisa si falta algo y puede reconstruir las tablas que salieron mal (Settings → Auto quality).",
+          "feat.3.t": "Detecta texto que falta", "feat.3.b": "En los PDF, InkDoc compara el resultado con el texto y las tablas del propio PDF, te avisa si falta algo y puede reconstruir las tablas que salieron mal, también en páginas escaneadas (Settings → Auto quality, donde cada paso se puede desactivar).",
           "feat.4.t": "OCR para escaneos, si lo necesitas", "feat.4.b": "Añade GLM-OCR (1,45 GB) o Docling desde Ajustes para leer escaneos y fotos. Funciona en tu equipo y va más rápido con GPU.",
           "feat.5.t": "Privado por defecto", "feat.5.b": "La mayoría de las conversiones nunca salen de tu equipo. Sin cuenta ni telemetría. El audio, las páginas web y los enlaces de YouTube usan internet: " + a(PRIV, "mira exactamente qué se envía") + ".",
           "fmt.kicker": "Formatos", "fmt.title": "Funciona con los archivos que ya tienes", "fmt.lead": "Documentos, hojas de cálculo, presentaciones, imágenes, audio, archivos comprimidos y la web.",
@@ -3100,7 +3101,7 @@ python3 -m pip install -r requirements.txt
           "feat.1.t": "يُحفظ تلقائياً", "feat.1.b": "بمجرد انتهاء التحويل يصبح ملف <code>.md</code> في التنزيلات، أو في مجلد آخر تختاره من الإعدادات. بلا نافذة حفظ ولا زر تصدير، ولا يكتب فوق أي ملف موجود.",
           "feat.1.folder": "التنزيلات", "feat.1.new": "جديد",
           "feat.2.t": "معاينة وتحرير", "feat.2.b": "اقرأ النتيجة المنسّقة أو نص Markdown الخام، وصحّح ما تريد، ثم انسخه.",
-          "feat.3.t": "كشف النص المفقود", "feat.3.b": "في ملفات PDF يقارن InkDoc النتيجة بنص الملف وجداوله، وينبّهك إذا سقط شيء، ويمكنه إعادة بناء الجداول التي خرجت خاطئة (Settings → Auto quality).",
+          "feat.3.t": "كشف النص المفقود", "feat.3.b": "في ملفات PDF يقارن InkDoc النتيجة بنص الملف وجداوله، وينبّهك إذا سقط شيء، ويمكنه إعادة بناء الجداول التي خرجت خاطئة، حتى في الصفحات الممسوحة ضوئيًا (Settings → Auto quality، حيث يمكن إيقاف كل خطوة على حدة).",
           "feat.4.t": "OCR للمستندات الممسوحة عند الحاجة", "feat.4.b": "أضف GLM-OCR (1.45 جيجابايت) أو Docling من الإعدادات لقراءة المستندات الممسوحة والصور. يعمل على جهازك، وأسرع مع بطاقة رسوميات.",
           "feat.5.t": "الخصوصية أولاً", "feat.5.b": "معظم التحويلات لا تغادر جهازك. بلا حساب وبلا تتبّع. أما الصوت وصفحات الويب وروابط YouTube فتستخدم الإنترنت: " + a(PRIV, "اطّلع على ما يُرسل بالضبط") + ".",
           "fmt.kicker": "الصيغ", "fmt.title": "يعمل مع ملفاتك الحالية", "fmt.lead": "المستندات وجداول البيانات والعروض التقديمية والصور والصوت والملفات المضغوطة والويب.",
@@ -3169,7 +3170,7 @@ python3 -m pip install -r requirements.txt
           "feat.2.t": "Vorschau und Bearbeitung",
           "feat.2.b": "Lies das formatierte Ergebnis oder das rohe Markdown, korrigiere, was du willst, und kopiere es.",
           "feat.3.t": "Prüfung auf fehlenden Text",
-          "feat.3.b": "Bei PDFs vergleicht InkDoc das Ergebnis mit Text und Tabellen der PDF, meldet, wenn etwas fehlt, und kann falsch erkannte Tabellen neu aufbauen (Settings → Auto quality).",
+          "feat.3.b": "Bei PDFs vergleicht InkDoc das Ergebnis mit Text und Tabellen der PDF, meldet, wenn etwas fehlt, und kann falsch erkannte Tabellen neu aufbauen, auch auf gescannten Seiten (Settings → Auto quality; jeder Schritt lässt sich einzeln abschalten).",
           "feat.4.t": "OCR für Scans, wenn du es brauchst",
           "feat.4.b": "Füge GLM-OCR (1,45 GB) oder Docling in den Einstellungen hinzu, um Scans und Fotos zu lesen. Läuft auf deinem Computer, mit GPU schneller.",
           "feat.5.t": "Standardmäßig privat",
@@ -3260,7 +3261,7 @@ python3 -m pip install -r requirements.txt
           "feat.2.t": "Aperçu et modification",
           "feat.2.b": "Lisez le résultat mis en forme ou le Markdown brut, corrigez ce que vous voulez, puis copiez-le.",
           "feat.3.t": "Détection du texte manquant",
-          "feat.3.b": "Pour les PDF, InkDoc compare le résultat au texte et aux tableaux du PDF, vous prévient s’il manque quelque chose et peut reconstruire les tableaux mal convertis (Settings → Auto quality).",
+          "feat.3.b": "Pour les PDF, InkDoc compare le résultat au texte et aux tableaux du PDF, vous prévient s’il manque quelque chose et peut reconstruire les tableaux mal convertis, y compris sur les pages numérisées (Settings → Auto quality, où chaque étape peut être désactivée).",
           "feat.4.t": "L’OCR pour les numérisations, si besoin",
           "feat.4.b": "Ajoutez GLM-OCR (1,45 Go) ou Docling dans les Paramètres pour lire les numérisations et les photos. Fonctionne sur votre ordinateur, plus vite avec un GPU.",
           "feat.5.t": "Confidentiel par défaut",
@@ -3351,7 +3352,7 @@ python3 -m pip install -r requirements.txt
           "feat.2.t": "Pratinjau dan edit",
           "feat.2.b": "Baca hasil yang sudah dirender atau Markdown mentahnya, perbaiki apa saja, lalu salin.",
           "feat.3.t": "Pemeriksaan teks yang hilang",
-          "feat.3.b": "Untuk PDF, InkDoc membandingkan hasilnya dengan teks dan tabel asli PDF, memberi tahu Anda jika ada yang hilang, dan dapat menyusun ulang tabel yang salah (Settings → Auto quality).",
+          "feat.3.b": "Untuk PDF, InkDoc membandingkan hasilnya dengan teks dan tabel asli PDF, memberi tahu Anda jika ada yang hilang, dan dapat menyusun ulang tabel yang salah, juga pada halaman hasil pindaian (Settings → Auto quality, tempat setiap langkah bisa dimatikan).",
           "feat.4.t": "OCR untuk pindaian, saat diperlukan",
           "feat.4.b": "Tambahkan GLM-OCR (1,45 GB) atau Docling di Pengaturan untuk membaca pindaian dan foto. Berjalan di komputer Anda, lebih cepat dengan GPU.",
           "feat.5.t": "Privat secara bawaan",
@@ -3442,7 +3443,7 @@ python3 -m pip install -r requirements.txt
           "feat.2.t": "Önizleme ve düzenleme",
           "feat.2.b": "İşlenmiş sonucu veya ham Markdown’ı okuyun, istediğinizi düzeltin, sonra kopyalayın.",
           "feat.3.t": "Eksik metin denetimi",
-          "feat.3.b": "PDF’lerde InkDoc sonucu PDF’nin kendi metni ve tablolarıyla karşılaştırır, eksik bir şey olduğunda sizi uyarır ve hatalı çıkan tabloları yeniden oluşturabilir (Settings → Auto quality).",
+          "feat.3.b": "PDF’lerde InkDoc sonucu PDF’nin kendi metni ve tablolarıyla karşılaştırır, eksik bir şey olduğunda sizi uyarır ve hatalı çıkan tabloları taranmış sayfalarda da yeniden oluşturabilir (Settings → Auto quality; her adım ayrı ayrı kapatılabilir).",
           "feat.4.t": "Gerektiğinde taramalar için OCR",
           "feat.4.b": "Taramaları ve fotoğrafları okumak için Ayarlar’dan GLM-OCR (1,45 GB) veya Docling ekleyin. Bilgisayarınızda çalışır, GPU ile daha hızlıdır.",
           "feat.5.t": "Varsayılan olarak gizli",
@@ -3533,7 +3534,7 @@ python3 -m pip install -r requirements.txt
           "feat.2.t": "プレビューと編集",
           "feat.2.b": "整形された結果か Markdown の原文を表示し、必要な箇所を直してからコピーできます。",
           "feat.3.t": "テキスト欠落チェック",
-          "feat.3.b": "PDF の場合、InkDoc は変換結果を PDF 自体のテキストや表と比較し、欠落があればお知らせします。誤って変換された表を再構築することもできます（Settings → Auto quality）。",
+          "feat.3.b": "PDF の場合、InkDoc は変換結果を PDF 自体のテキストや表と比較し、欠落があればお知らせします。誤って変換された表は、スキャンしたページでも再構築できます（Settings → Auto quality。各ステップは個別にオフにできます）。",
           "feat.4.t": "必要なときはスキャンも OCR で",
           "feat.4.b": "設定から GLM-OCR（1.45 GB）または Docling を追加すると、スキャンや写真を読み取れます。お使いのコンピューター上で動作し、GPU があればさらに高速です。",
           "feat.5.t": "プライバシーを標準で保護",
@@ -3624,7 +3625,7 @@ python3 -m pip install -r requirements.txt
           "feat.2.t": "预览和编辑",
           "feat.2.b": "查看渲染后的结果或原始 Markdown，随意修改，然后复制。",
           "feat.3.t": "缺失文本检查",
-          "feat.3.b": "对于 PDF，InkDoc 会将结果与 PDF 自带的文本和表格比对，在内容缺失时提醒你，并可重建转换错误的表格（Settings → Auto quality）。",
+          "feat.3.b": "对于 PDF，InkDoc 会将结果与 PDF 自带的文本和表格比对，在内容缺失时提醒你，并可重建转换错误的表格，扫描页面也不例外（Settings → Auto quality，每个步骤都可以单独关闭）。",
           "feat.4.t": "需要时为扫描件启用 OCR",
           "feat.4.b": "在“设置”中添加 GLM-OCR（1.45 GB）或 Docling，即可读取扫描件和照片。在你的电脑上运行，有 GPU 时更快。",
           "feat.5.t": "默认保护隐私",

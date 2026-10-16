@@ -115,7 +115,11 @@ document.addEventListener("DOMContentLoaded", () => {
         toast: "but a table may not match the PDF",
       };
     }
-    const rebuilt = (tables.repaired || []).reduce((n, r) => n + (Number(r.tables) || 0), 0);
+    const count = (rows) => rows.reduce((n, r) => n + (Number(r.tables) || 0), 0);
+    const rebuilt = count(tables.repaired || []);
+    // Tables on scanned pages come from GLM-OCR's second reading, not the PDF's text.
+    const scanned = count((tables.repaired || []).filter((r) => r.source === "glm_ocr"));
+    const fromPdf = rebuilt - scanned;
     const figures = Number(tables.figures_filled) || 0;
     const paragraphs = Number(tables.paragraphs_restored) || 0;
     if (!rebuilt && !figures && !paragraphs) return null;
@@ -124,11 +128,15 @@ document.addEventListener("DOMContentLoaded", () => {
     const paras = paragraphs === 1 ? "1 paragraph" : `${paragraphs} paragraphs`;
     const sentences = [];
     const parts = [];
-    if (rebuilt) {
-      sentences.push(`The engine got ${rebuilt === 1 ? "a table" : `${rebuilt} tables`} wrong, so InkDoc rebuilt ` +
-        `${rebuilt === 1 ? "it" : "them"} from the PDF itself and checked the result against the PDF's text.`);
-      parts.push(`${what} rebuilt`);
+    if (fromPdf) {
+      sentences.push(`The engine got ${fromPdf === 1 ? "a table" : `${fromPdf} tables`} wrong, so InkDoc rebuilt ` +
+        `${fromPdf === 1 ? "it" : "them"} from the PDF itself and checked the result against the PDF's text.`);
     }
+    if (scanned) {
+      sentences.push(`On scanned pages, GLM-OCR read ${scanned === 1 ? "a table" : `${scanned} tables`} again on ` +
+        `${scanned === 1 ? "its" : "their"} own; InkDoc used that reading where it held the same words.`);
+    }
+    if (rebuilt) parts.push(`${what} rebuilt`);
     if (figures) {
       sentences.push(`The engine left out the text inside ${pics}; InkDoc added it from the PDF ` +
         "(chart labels and values, as a table where the chart has them).");
@@ -139,8 +147,10 @@ document.addEventListener("DOMContentLoaded", () => {
       parts.push(`${paras} restored`);
     }
     sentences.push("Each addition is marked with a comment in the saved file.");
-    let title = "Improved from the PDF";
-    if (parts.length === 1 && rebuilt) title = rebuilt === 1 ? "Table rebuilt from the PDF" : "Tables rebuilt from the PDF";
+    let title = scanned ? "Improved" : "Improved from the PDF";
+    if (parts.length === 1 && rebuilt && !scanned) title = rebuilt === 1 ? "Table rebuilt from the PDF" : "Tables rebuilt from the PDF";
+    else if (parts.length === 1 && rebuilt && !fromPdf) title = rebuilt === 1 ? "Table read again" : "Tables read again";
+    else if (parts.length === 1 && rebuilt) title = "Tables rebuilt";
     else if (parts.length === 1 && figures) title = "Figure text added from the PDF";
     else if (parts.length === 1) title = "Text restored from the PDF";
     return {
@@ -148,7 +158,7 @@ document.addEventListener("DOMContentLoaded", () => {
       short: parts.join(" · "),
       title,
       long: sentences.join(" "),
-      toast: `${parts.join(", ")} from the PDF`,
+      toast: scanned ? parts.join(", ") : `${parts.join(", ")} from the PDF`,
     };
   }
 
@@ -1522,7 +1532,9 @@ document.addEventListener("DOMContentLoaded", () => {
       // The add-on's installability is derived from pack state, so it has to be
       // re-read whenever that changes. refreshEngines returns early on several
       // paths, so this belongs in finally rather than at the end of the body.
+      // The layout model add-on too: the Docling pack may carry it.
       refreshAddonStatus();
+      refreshLayoutAddon();
     }
   }
 

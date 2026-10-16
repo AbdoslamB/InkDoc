@@ -82,6 +82,14 @@ def test_an_inkdoc_add_on_needs_no_pack_version():
     ({"pack_copy": {"dir": "../models", "sha256_files": {"model.onnx": PIN}}}, "must be one folder name"),
     ({"pack_copy": {"dir": PACK_DIR, "sha256_files": {}}}, "pack_copy has no sha256_files"),
     ({"pack_copy": {"dir": PACK_DIR, "sha256_files": {"model.onnx": "abc"}}}, "malformed digest"),
+    ({"pack_copy": {"dir": PACK_DIR, "sha256_files": {"sub/model.onnx": PIN}}}, "name files directly in its folder"),
+    ({"pack_copy": {"dir": PACK_DIR, "sha256_files": {"model.onnx": PIN}, "sizes": {"other.bin": 5}}},
+     "sizes must be positive sizes of files"),
+    ({"model_dir": "models/heron"}, "must be one folder name"),
+    # Published, but the download would not be the model the Docling pack carries.
+    ({"url": "https://github.com/example/InkDoc/releases/download/layout-addon-v1/a.tar.gz", "sha256": PIN,
+      "size_bytes": 10, "uncompressed_size_bytes": 10, "sha256_files": {"model.onnx": "0" * 64}},
+     "does not pin the same files as pack_copy"),
 ])
 def test_a_wrong_target_or_pack_copy_is_a_defect(overrides, fragment):
     state, defects = validate_addon_entry(AddonInfo(name="layout_model", **_entry(**overrides)))
@@ -117,6 +125,44 @@ def test_the_docling_packs_copy_means_nothing_to_download(env):
     assert mgr.verify("layout_model")["valid"]
     # The same keys as every other add-on status, so the page needs no special case.
     assert set(status) == set(AddonManager().get_status("code_enrichment"))
+
+
+def test_a_pack_copy_of_another_size_is_not_offered_as_ready(env):
+    mgr = env["manager"](_entry(pack_copy={"dir": PACK_DIR, "sha256_files": {"model.onnx": PIN},
+                                           "sizes": {"model.onnx": len(MODEL)}}))
+    env["install_pack"](MODEL + b" and more")
+    status = mgr.get_status("layout_model")
+    assert not status["usable"] and not status["provided_by_pack"]
+    env["install_pack"](MODEL)
+    assert mgr.get_status("layout_model")["provided_by_pack"]
+
+
+def test_an_unpinned_install_gives_way_to_the_packs_copy(env):
+    # Left by another version, say, while this catalogue has the add-on unreleased.
+    own = env["root"] / "addons" / "docling-layout-heron-onnx"
+    own.mkdir(parents=True)
+    (own / "model.onnx").write_bytes(b"whatever is there")
+    (env["root"] / "addons" / ".inkdoc-addon-layout_model.json").write_text("{}", encoding="utf-8")
+    mgr = env["manager"](_entry())
+    assert mgr.is_installed("layout_model") and not mgr.get_status("layout_model")["usable"]
+    result = mgr.verify("layout_model")
+    assert not result["valid"] and "pins no files" in result["reason"], "nothing to check is not a pass"
+    env["install_pack"]()
+    assert mgr.get_status("layout_model")["provided_by_pack"]
+    assert mgr.model_location("layout_model")[0].name == PACK_DIR
+
+
+def test_an_install_that_cant_make_its_folder_ends_as_an_error(env, tmp_path, monkeypatch):
+    entry, _archive = _published(tmp_path)
+    mgr = env["manager"](entry)
+    blocker = tmp_path / "not-a-folder"
+    blocker.write_text("a file where the add-on folder would go", encoding="utf-8")
+    monkeypatch.setattr(mgr, "_addons_dir", lambda: blocker / "addons")
+    with pytest.raises(OSError):
+        mgr.install("layout_model")
+    assert mgr.get_progress("layout_model")["status"] == "error"
+    with pytest.raises(OSError):
+        mgr.install("layout_model")  # not "an installation is already in progress"
 
 
 def test_a_different_model_in_the_pack_fails_the_check(env):
@@ -174,6 +220,23 @@ def test_install_goes_to_inkdocs_own_folder_and_needs_no_pack(env, tmp_path, mon
 
 
 # ─── API ─────────────────────────────────────────────────────────────────────
+def test_the_add_on_routes_need_the_token_and_refuse_what_cant_be_installed(env):
+    from fastapi.testclient import TestClient
+
+    import app.server.server as server_module
+
+    client = TestClient(server_module.app)
+    token = {"X-InkDoc-Token": server_module.SESSION_TOKEN}
+    for action in ("install", "cancel", "verify", "remove"):
+        assert client.post(f"/addons/layout_model/{action}").status_code == 403, action
+    # The shipped entry is unreleased, and this test's Docling pack has no copy of the model.
+    resp = client.post("/addons/layout_model/install", headers=token)
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "This add-on has not been published yet. The Docling engine comes with it."
+    assert client.post("/addons/layout_model/verify", headers=token).json() == {
+        "valid": False, "reason": "Add-on is not installed"}
+
+
 def test_the_add_on_api_lists_it_with_where_it_installs():
     from fastapi.testclient import TestClient
 

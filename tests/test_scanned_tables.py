@@ -98,7 +98,7 @@ def test_an_html_table_is_replaced_too():
     ([(2, [["Name", "Age"], ["Ann", "31"], ["Bob", "42"]])],
      "it doesn't match what GLM-OCR wrote for the page"),
     ([(2, LEFT)], "writing it would leave out part of what GLM-OCR wrote there"),
-    ([(2, LEFT), (3, RIGHT)], "it matches a table on another page too"),
+    ([(2, LEFT), (3, RIGHT)], "it doesn't match what GLM-OCR wrote for the page"),
     ([(2, [["Region", "Q1"], ["North", "120"], ["South"]])], "GLM-OCR's reading of it is not a full grid"),
 ])
 def test_a_reading_that_could_be_wrong_changes_nothing(readings, note):
@@ -133,6 +133,37 @@ def test_a_table_glm_ocr_wrote_as_plain_lines_becomes_a_table():
     assert written == [{"page": 2, "tables": 1, "issue": "scanned", "source": "glm_ocr"}]
 
 
+def test_a_note_under_a_plain_lines_table_stays():
+    page = LOOSE.replace("Dairy Milk 12\n", "Dairy Milk 12\nSource: Ministry of Agriculture, 2023\n")
+    out, written, _ = write_scanned_tables(page, _found((2, INVENTORY)))
+    assert [b.rows for b in find_table_blocks(out.split("\n"))] == [INVENTORY]
+    assert "\nSource: Ministry of Agriculture, 2023\n" in out, "only the table's own lines are replaced"
+    assert written[0]["tables"] == 1
+
+
+def test_a_line_with_other_words_inside_the_table_stops_it():
+    page = LOOSE.replace("Pears 25\n", "Pears 25\nprices checked by hand\n")
+    out, written, details = write_scanned_tables(page, _found((2, INVENTORY)))
+    assert out == page and written == []
+    assert any("would leave out part of what GLM-OCR wrote there" in line for line in details)
+
+
+def test_the_same_table_on_two_pages_is_written_on_each():
+    page = LOOSE.replace("\n\nCounted on Friday.", "\n\nPage two\n\n" + LOOSE.split("\n\n")[1])
+    out, written, _ = write_scanned_tables(page, _found((2, INVENTORY), (3, INVENTORY)))
+    assert [b.rows for b in find_table_blocks(out.split("\n"))] == [INVENTORY, INVENTORY]
+    assert written == [{"page": 2, "tables": 1, "issue": "scanned", "source": "glm_ocr"},
+                       {"page": 3, "tables": 1, "issue": "scanned", "source": "glm_ocr"}]
+
+
+def test_symbols_that_stand_for_letters_are_not_another_script():
+    # The micro and ohm signs on the page, Greek mu and omega in the crop: the same letters.
+    page = "| Part | Value |\n|---|---|\n| R1 | 4.7 kΩ |\n| C1 | 10 µF |\n| C2 | 22 µF |\n| Note | n/a |"
+    crop = [["Part", "Value"], ["R1", "4.7 kΩ"], ["C1", "10 μF"], ["C2", "22 μF"], ["Note", "n/a"]]
+    out, written, details = write_scanned_tables(page, _found((2, crop)))
+    assert not any("another script" in line for line in details), details
+
+
 def test_a_paragraph_with_other_words_is_left_alone():
     prose = ("Inventory\n\nThe count on Friday found these: Category Item Stock Fruit Apples 40 Pears 25 Dairy Milk 12,"
              " which matches what the shop recorded for the month before.")
@@ -160,6 +191,14 @@ def test_the_layout_models_answer_becomes_areas_in_reading_order():
     found = find_scanned_tables("doc.pdf", [2, 3], lambda path, pages, job: answer)
     assert [(a.page, a.bbox[0]) for a in found.areas] == [(2, 50.0), (2, 300.0)]
     assert found.truncated and not found.skipped
+
+
+def test_pages_the_layout_model_skipped_are_named():
+    answer = {"pages": [{"page": 4, "skipped": "rotated", "tables": []}, {"page": 5, "skipped": "missing", "tables": []}],
+              "truncated": False, "error": ""}
+    found = find_scanned_tables("doc.pdf", [4, 5], lambda path, pages, job: answer)
+    assert found.unread_pages == [(4, "rotated")]
+    assert write_scanned_tables("text", found)[2] == ["Page 4: not looked at for tables: the page is rotated."]
 
 
 @pytest.mark.parametrize("detect", [

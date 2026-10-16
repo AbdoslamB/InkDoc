@@ -359,10 +359,11 @@ def build(output_dir: Path, model_source: Path | None, release_tag: str) -> dict
 
 
 def _verify(catalogue_path: Path, require_published: bool) -> tuple[bool, list[str]]:
-    """Validate through the same code the application and CI use."""
+    """Validate this add-on's entry through the same code the application and CI use
+    (the catalogue's other add-ons may be unreleased)."""
     from scripts.verify_addon_catalogue import verify
 
-    return verify(catalogue_path, require_published)
+    return verify(catalogue_path, require_published, names=[ADDON_NAME])
 
 
 def main() -> int:

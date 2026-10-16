@@ -289,6 +289,47 @@ def test_tables_on_a_scanned_page_are_read_one_by_one(auto, monkeypatch, tmp_pat
     assert passes["scanned_tables"]["skipped"] == "needs GLM-OCR and the layout model"
 
 
+def test_a_failing_scanned_tables_step_leaves_the_page_as_glm_ocr_read_it(auto, monkeypatch, tmp_path):
+    import app.core.scanned_tables as scanned_tables
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr(auto_engine, "layout_model_location", lambda: (tmp_path, {"model.onnx": "ab" * 32}))
+    monkeypatch.setattr(scanned_tables, "find_scanned_tables", broken)
+    run, _asked = auto
+    markdown, _options, passes = run([image_page("ccitt")], MERGED_SCAN, engines=(G,), layout=True)
+    assert markdown == MERGED_SCAN
+    assert passes["scanned_tables"]["skipped"] == "it failed"
+
+
+MERGED_RULED = "\n".join([
+    "## Quarterly summary", "",
+    "| Region | Q1 | Q2 | Product | Units | Price |", "|---|---|---|---|---|---|",
+    "| North | 120 | 135 | Alpha | 12 | 4.50 |", "| South | 98 | 101 | Beta | 7 | 9.99 |",
+    "| East | 143 | 150 | Gamma | 30 | 1.25 |", "", "Figures are unaudited and subject to revision.",
+])
+
+
+def test_a_switched_off_table_check_gives_no_warning(auto):
+    run, _asked = auto
+    _markdown, options, _passes = run("side_by_side_ruled", MERGED_RULED)
+    assert options.table_report.repaired, "on: the merged pair is rebuilt"
+    markdown, options, passes = run("side_by_side_ruled", MERGED_RULED, off={"table_check"})
+    assert markdown == MERGED_RULED
+    report = options.table_report
+    assert report.warning is False and report.issues == [], "no warning from a check that is off"
+    assert passes["table_check"]["skipped"] == "switched off"
+
+
+def test_a_switched_off_step_keeps_its_reason_through_a_page_split(auto):
+    run, _asked = auto
+    pages = [prose_page(60), prose_page(60, 1), image_page("ccitt")]
+    _markdown, options, passes = run(pages, "text", engines=(G, D), off={"digital_layout"})
+    assert options.auto_decision.segments, "the PDF was split by page"
+    assert passes["digital_layout"]["skipped"] == "switched off"
+
+
 def test_a_failing_addition_costs_nothing_but_itself(auto, monkeypatch):
     import app.core.figure_text as figure_text
 

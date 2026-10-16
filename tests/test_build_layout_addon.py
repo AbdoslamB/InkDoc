@@ -20,13 +20,16 @@ MODEL = b"stand-in layout model"
 
 def _setup(tmp_path: Path) -> tuple[Path, Path]:
     source = tmp_path / "source"
-    source.mkdir()
+    source.mkdir(parents=True)
     for name in build.UPSTREAM_FILES:
         (source / name).write_bytes(MODEL if name == build.MODEL_FILE else f"{name}\n".encode())
     catalogue = json.loads(build.CATALOGUE_PATH.read_text(encoding="utf-8"))
-    catalogue["addons"][build.ADDON_NAME]["pack_copy"]["sha256_files"][build.MODEL_FILE] = (
-        hashlib.sha256(MODEL).hexdigest()
-    )
+    catalogue["addons"][build.ADDON_NAME]["pack_copy"]["sha256_files"] = {
+        name: hashlib.sha256((source / name).read_bytes()).hexdigest() for name in build.UPSTREAM_FILES
+    }
+    catalogue["addons"][build.ADDON_NAME]["pack_copy"]["sizes"] = {
+        name: (source / name).stat().st_size for name in build.UPSTREAM_FILES
+    }
     path = tmp_path / "addons.json"
     path.write_text(json.dumps(catalogue), encoding="utf-8")
     return source, path
@@ -64,7 +67,11 @@ def test_the_archive_holds_exactly_what_the_installer_checks(tmp_path):
 def test_only_the_pinned_model_is_packaged(tmp_path):
     source, catalogue = _setup(tmp_path)
     (source / build.MODEL_FILE).write_bytes(b"some other model")
-    with pytest.raises(SystemExit, match="not the pinned model"):
+    with pytest.raises(SystemExit, match="model.onnx is not the pinned file"):
+        build.build(tmp_path / "out", source, "layout-addon-v1", catalogue=catalogue, check_load=False)
+    source, catalogue = _setup(tmp_path / "again")
+    (source / "README.md").write_text("an edited card", encoding="utf-8")
+    with pytest.raises(SystemExit, match="README.md is not the pinned file"):
         build.build(tmp_path / "out", source, "layout-addon-v1", catalogue=catalogue, check_load=False)
     (source / "config.json").unlink()
     with pytest.raises(SystemExit, match="lacks config.json"):

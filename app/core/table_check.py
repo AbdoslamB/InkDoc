@@ -433,6 +433,11 @@ def table_lines(table: dict, page: int) -> list[str]:
     return out
 
 
+def step_on(result: BandResult, kinds: Collection[str] | None) -> bool:
+    """Whether every table of a band belongs to a step that is on (`kinds`; None: all are)."""
+    return kinds is None or all(t.get("kind", "lines") in kinds for t in result.tables)
+
+
 def repair(lines: list[str], results: list[BandResult], kinds: Collection[str] | None = None) -> str:
     """Replace each repairable band's lines with the PDF's tables; marks results repaired.
 
@@ -446,7 +451,7 @@ def repair(lines: list[str], results: list[BandResult], kinds: Collection[str] |
     for _start, _index, result in sorted(located, key=lambda t: (t[0], t[1]), reverse=True):
         if result.issue == OK:
             continue
-        if kinds is not None and any(t.get("kind", "lines") not in kinds for t in result.tables):
+        if not step_on(result, kinds):
             result.not_repaired = "that step is switched off"
             continue
         if result.how == "words-approx":

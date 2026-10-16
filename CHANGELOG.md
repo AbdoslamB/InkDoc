@@ -59,7 +59,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   InkDoc finds each table on a scanned page and has GLM-OCR read it on its
   own. That reading takes the place of what GLM-OCR wrote for the whole page
   (often plain lines, side-by-side tables run together, or a shifted header)
-  only when it holds the same words and nothing is lost. Each rebuilt table is
+  only when it holds the same words; a note or source line next to the table
+  stays where it was. Each rebuilt table is
   marked in the file (`source=glm-ocr checked=layout,page-reading`). On
   InkDoc's table test pages scanned at 200 DPI, tables read exactly went from
   4 to 9 of 13, with no invented cells.

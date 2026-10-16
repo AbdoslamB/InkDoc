@@ -886,7 +886,8 @@ async def run_auto(
         await asyncio.to_thread(_apply_enrichment_policy, options, decision)
         markdown = await _convert_split(item, options, split, path=path, lane=lane, job=job, read_by=read_by)
         used = decision.engine
-        log.skipped("digital_layout", "the page split chose the engines")
+        if plan.on("digital_layout"):
+            log.skipped("digital_layout", "the page split chose the engines")
     else:
         # GLM-OCR only for files it should finish within the time limit; else Docling.
         gate_note = ""
@@ -1139,7 +1140,8 @@ async def _scanned_tables(
     glm_pages: Collection[int],
 ) -> str:
     """The scanned_tables step (app/core/scanned_tables.py): the layout model finds the
-    tables in MarkItDown's lane (it runs in that worker), GLM-OCR reads each in its lane."""
+    tables in MarkItDown's lane (it runs in that worker), GLM-OCR reads each in its lane.
+    An addition: a failure leaves the Markdown as it was (a cancel still stops the job)."""
     from app.core.engines.layout_model import MODEL_FILE
     from app.core.engines.markitdown_worker_client import find_layout_in_worker
     from app.core.scanned_tables import (
@@ -1152,36 +1154,44 @@ async def _scanned_tables(
     if probe is None:
         log.skipped("scanned_tables", "the PDF could not be read")
         return markdown
-    pages = target_pages(probe, glm_pages)
-    location = await asyncio.to_thread(layout_model_location) if pages else None
-    if not pages:
-        log.ran("scanned_tables")  # GLM-OCR read no scanned page
-        return markdown
-    if location is None:
-        log.skipped("scanned_tables", "needs the layout model")  # removed since the conversion started
-        return markdown
-    folder, digests = location
+    try:
+        pages = target_pages(probe, glm_pages)
+        if not pages:
+            log.ran("scanned_tables")  # GLM-OCR read no scanned page
+            return markdown
+        location = await asyncio.to_thread(layout_model_location)
+        if location is None:
+            log.skipped("scanned_tables", "needs the layout model")  # removed since the conversion started
+            return markdown
+        folder, digests = location
 
-    def detect(source: str, numbers: list[int], detect_job: Any) -> dict:
-        return find_layout_in_worker(source, numbers, str(folder), digests.get(MODEL_FILE, ""), detect_job)
+        def detect(source: str, numbers: list[int], detect_job: Any) -> dict:
+            return find_layout_in_worker(source, numbers, str(folder), digests.get(MODEL_FILE, ""), detect_job)
 
-    async with lane(EngineKind.MARKITDOWN):
-        job.raise_if_cancelled()
-        found = await asyncio.to_thread(find_scanned_tables, path, pages, detect, job=job)
-    if found.skipped:
-        log.skipped("scanned_tables", found.skipped)
-        return markdown
-    if found.areas:
-        from app.core.engines.glm_ocr_engine import read_table_region
-
-        async with lane(EngineKind.GLM_OCR):
+        async with lane(EngineKind.MARKITDOWN):
             job.raise_if_cancelled()
-            await asyncio.to_thread(read_scanned_tables, found, read_table_region, job=job)
-    markdown, written, details = write_scanned_tables(markdown, found)
+            found = await asyncio.to_thread(find_scanned_tables, path, pages, detect, job=job)
+        if found.skipped:
+            log.skipped("scanned_tables", found.skipped)
+            return markdown
+        if found.areas:
+            from app.core.engines.glm_ocr_engine import read_table_region
+
+            async with lane(EngineKind.GLM_OCR):
+                job.raise_if_cancelled()
+                await asyncio.to_thread(read_scanned_tables, found, read_table_region, job=job)
+        # Pure, but it reads the whole Markdown: off the event loop.
+        result, written, details = await asyncio.to_thread(write_scanned_tables, markdown, found)
+    except ConversionCancelledError:
+        raise
+    except Exception as exc:
+        logger.warning("Tables on scanned pages skipped (%s)", type(exc).__name__)
+        log.skipped("scanned_tables", "it failed")
+        return markdown
     summary.repaired.extend(written)
     summary.details.extend(details)
     log.ran("scanned_tables", sum(w["tables"] for w in written))
-    return markdown
+    return result
 
 
 def _unread_reason(inspection: Any) -> str:

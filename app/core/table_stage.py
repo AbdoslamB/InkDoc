@@ -44,6 +44,7 @@ from app.core.table_check import (
     TableSummary,
     check,
     repair,
+    step_on,
     summarize,
 )
 from app.core.thorough_passes import (
@@ -295,14 +296,16 @@ def finish_tables(
     """(Markdown to keep, what happened to its tables): repair what may be repaired. Blocking.
 
     `kinds` are the finder results whose step is on (app/core/thorough_passes.py);
-    None allows every kind.
+    None allows every kind. A band of a step that is off is left out of the
+    report as well: no warning from a check the user switched off.
     """
     if insp.early is not None:
         return insp.markdown, insp.early
     found = insp.found
     try:
         result = repair(insp.lines, insp.bands, kinds=kinds) if repair_allowed else insp.markdown
-        summary = summarize(insp.bands, [p["page"] for p in found.get("pages", [])], repair_allowed=repair_allowed)
+        reported = [band for band in insp.bands if step_on(band, kinds)]
+        summary = summarize(reported, [p["page"] for p in found.get("pages", [])], repair_allowed=repair_allowed)
     except Exception as exc:  # a bug here must never cost the conversion
         logger.exception("Table check failed: %s", exc)
         return insp.markdown, TableSummary(checked=False, skipped_reason=SKIP_ERROR)

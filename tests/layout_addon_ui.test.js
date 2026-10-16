@@ -157,6 +157,8 @@ const BASE = {
     }
     assert.ok(/\.addon-card \.btn\[hidden\] \{\s*display: none;/.test(css), "hidden beats .btn's display");
     assert.ok(source.includes("refreshLayoutAddon();"), "opening Settings reads its status");
+    const refresh = slice("  async function refreshEngines()", "  // ─── GLM-OCR engine card");
+    assert.ok(/finally \{[\s\S]*refreshLayoutAddon\(\);/.test(refresh), "a Docling install or removal updates the card");
 
     console.log("layout_addon_ui.test.js: all assertions passed");
 })().catch((err) => {

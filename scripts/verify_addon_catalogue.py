@@ -17,11 +17,15 @@ context:
 
     # Release guard: every add-on must additionally be published.
     python scripts/verify_addon_catalogue.py --require-published
+
+A build script checks only the entry it just built (verify(..., names=[...])):
+the other add-ons may well be unreleased.
 """
 from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Collection
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -35,15 +39,24 @@ from app.core.addon_manager import (  # noqa: E402
 )
 
 
-def verify(catalogue_path: Path, require_published: bool) -> tuple[bool, list[str]]:
-    """Return (ok, messages). Never raises for catalogue content problems."""
+def verify(
+    catalogue_path: Path, require_published: bool, names: Collection[str] | None = None
+) -> tuple[bool, list[str]]:
+    """Return (ok, messages). Never raises for catalogue content problems.
+
+    `names` limits the check to those add-ons (every one must exist); None checks all.
+    """
     messages: list[str] = []
 
     if not catalogue_path.is_file():
         return False, [f"Catalogue not found: {catalogue_path}"]
 
     mgr = AddonManager(catalogue_path=catalogue_path)
-    names = mgr.list_addon_names()
+    declared = mgr.list_addon_names()
+    missing = sorted(set(names or ()) - set(declared))
+    if missing:
+        return False, [f"Catalogue at {catalogue_path} does not declare {', '.join(missing)}"]
+    names = sorted(names) if names is not None else declared
     if not names:
         # An empty catalogue is almost certainly a broken file rather than an
         # intentional state, and silently passing would defeat the guard.

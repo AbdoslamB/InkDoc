@@ -6,6 +6,11 @@ pypdfium2>=4.30.0
 # Imported directly by GLM-OCR (page images: EXIF rotation, scaling). Already
 # installed through markitdown/pdfplumber; listed for the same reason.
 Pillow>=10.1
+# Imported directly by the layout model add-on's runner (app/core/engines/layout_model.py,
+# in the MarkItDown worker). Already installed through markitdown's magika, with
+# these same lower bounds; listed for the same reason.
+onnxruntime>=1.17.0
+numpy>=1.24
 markdown>=3.6
 fastapi>=0.110.0
 uvicorn[standard]>=0.28.0

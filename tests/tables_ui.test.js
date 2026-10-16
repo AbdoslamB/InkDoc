@@ -67,6 +67,19 @@ assert.strictEqual(formatTableNote({ checked: true, warning: false, repaired: []
     assert.strictEqual(paras.toast, "2 paragraphs restored from the PDF");
 }
 {
+    // Tables on scanned pages: GLM-OCR's second reading, never "from the PDF".
+    const scan = formatTableNote({ checked: true, warning: false,
+        repaired: [{ page: 2, tables: 2, issue: "scanned", source: "glm_ocr" }] });
+    assert.strictEqual(scan.short, "2 tables rebuilt");
+    assert.strictEqual(scan.title, "Tables read again");
+    assert.ok(scan.long.startsWith("On scanned pages, GLM-OCR read 2 tables again"));
+    assert.ok(!scan.long.includes("from the PDF itself") && scan.toast === "2 tables rebuilt");
+    const both = formatTableNote({ checked: true, warning: false, repaired: [
+        { page: 1, tables: 1, issue: "merged", source: "pdf_lines" }, { page: 3, tables: 1, issue: "scanned", source: "glm_ocr" }] });
+    assert.strictEqual(both.title, "Tables rebuilt");
+    assert.ok(both.long.includes("rebuilt it from the PDF itself") && both.long.includes("On scanned pages"));
+}
+{
     // A table left wrong outranks tables rebuilt elsewhere in the same file.
     const note = formatTableNote({ checked: true, warning: true, message: "m", repaired: [{ page: 1, tables: 1 }] });
     assert.strictEqual(note.warning, true);

@@ -8,6 +8,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Auto quality** (Settings → General): *Fast* (the default; conversions are
+  exactly as before), *Balanced* or *Thorough*. The API has a matching
+  `auto_quality` setting and per-request parameter.
+- **Table check (Balanced and Thorough).** After a PDF conversion, InkDoc reads
+  the PDF's own tables, from their ruling lines and the text layer, and
+  compares them with the result. With **Auto**, a table the engine got wrong
+  is rebuilt from the PDF: side-by-side tables merged into one, tables that
+  came out as loose lines or as a picture placeholder, dropped tables, shapes
+  in cells left out, merged cells and stacked headers read wrongly. A table is
+  rebuilt only when every word of the PDF inside it lands in one of its cells.
+  Each rebuilt table is marked with a comment in the saved file
+  (`<!-- inkdoc:table page=3 source=pdf-lines checked=text-layer -->`), and the
+  result's notice says how many were rebuilt. Other engines are only checked,
+  with a warning when a table looks wrong. Rebuilt tables are plain Markdown:
+  merged cells are repeated and stacked headers flattened ("Revenue 2023").
+  Shapes in cells are named by what is drawn ("[green shape]"). On InkDoc's
+  table test pages, tables read exactly went from 2 to 12 of 12 with
+  MarkItDown and from 3 to 10 of 12 with Docling (12 of 12 at Thorough).
+  Pages with drawn lines or boxes cost about 10–260 ms each; documents without
+  tables cost nothing more.
+- **Thorough reads complex digital PDFs properly.** A digital PDF goes to
+  Docling, which follows columns, sidebars and side-by-side tables, instead of
+  MarkItDown, which interleaves them line by line. Long PDFs go in 12-page
+  parts, and GLM-OCR is used when Docling isn't installed. Then InkDoc adds
+  what the engine left out, from the PDF's own text:
+  - the labels and values inside charts, with a labelled bar chart as a table;
+  - rating grids drawn with coloured markers and ◀ ▶ arrows, as a table
+    (for example `○ ○ ○ ● ○ (green)` under "Overweight");
+  - whole paragraphs the engine dropped;
+  - the PDF's `&`, dashes and quotes where the engine simplified them.
+
+  On an 8-page investment report with two columns, side-by-side tables,
+  rating grids and charts, Thorough found 97.5% of the PDF's words and filled
+  292 table cells. GLM-OCR found 89.6% and filled 217, and MarkItDown's
+  tables came out interleaved.
+- **Page split for mixed PDFs (Thorough).** With both Docling and GLM-OCR
+  installed, a PDF with both text pages and scanned pages is read page by page.
+  Docling reads the text pages and GLM-OCR only the scanned ones, and the
+  results are joined in page order. The result's details list which engine read
+  which pages.
+- **Tables without lines (Thorough).** A borderless table that the engine
+  wrote as loose text or dropped is found from the positions of the PDF's
+  words. It is rebuilt only when GLM-OCR's own reading of that area agrees,
+  and it keeps the PDF's exact text. Without GLM-OCR such a table is noted in
+  the details but never written. Two-column articles, tables of contents and
+  forms are not mistaken for tables.
 - **Show or hide engines** (Settings → Engines): each engine card starts with a
   **Show on main screen** switch. Turning it off removes that engine's button
   from the main screen and marks the card **Hidden**; the engine stays

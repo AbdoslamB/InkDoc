@@ -255,15 +255,16 @@ function setup({ initial } = {}) {
         assert.ok(/id="textSizeStatus" role="status" aria-live="polite"/.test(display));
     }
 
-    // Preferences: three groups (saving, Docling fallback, PDF check), each toggle
-    // in its own, no inline spacing left over.
+    // Preferences: four groups (saving, Docling fallback, PDF check, Auto
+    // quality), each setting in its own, no inline spacing left over.
     {
         const prefs = html.slice(html.indexOf(">Preferences<"), html.indexOf('class="settings-section settings-display"'));
         const groups = prefs.split('<div class="settings-group">').slice(1);
-        assert.strictEqual(groups.length, 3);
+        assert.strictEqual(groups.length, 4);
         assert.ok(groups[0].includes('id="autoSaveToggle"') && groups[0].includes('id="btnChangeSaveFolder"'));
         assert.ok(groups[1].includes('id="doclingFallbackToggle"'));
         assert.ok(groups[2].includes('id="qualityCheckToggle"'));
+        assert.ok(groups[3].includes('id="autoQualityGroup"'));
         assert.ok(!/toggle-switch" style="margin-top/.test(prefs));
         assert.ok(/\.settings-group \+ \.settings-group \{[^}]*border-top: 1px solid var\(--divider\);/.test(css), "a line only between groups");
     }

@@ -57,6 +57,19 @@ def image_page(kind: str = "rgb", *, lines: list[str] | None = None, in_form: bo
     return {"image": kind, "lines": list(lines or []), "in_form": in_form, "wf": width_fraction}
 
 
+def drawn_page(ops: list[str], *, lines: list[str] | None = None) -> dict:
+    """A page drawn with raw content-stream operators (tables, shapes), plus optional lines.
+
+    Build the operators with text_op() and the helpers in tests/_table_fixtures.py.
+    """
+    return {"raw": "\n".join(ops), "lines": list(lines or [])}
+
+
+def text_op(x: float, y: float, text: str, size: float = 9) -> str:
+    """Draw `text` with its baseline at (x, y), PDF coordinates (origin bottom-left)."""
+    return f"BT /F1 {size} Tf {x:.2f} {y:.2f} Td (" + _escape(text).decode("cp1252") + ") Tj ET"
+
+
 def _escape(text: str) -> bytes:
     esc = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
     return esc.encode("cp1252")
@@ -98,6 +111,8 @@ def build_pdf(pages: list[dict], *, producer: str | None = None, encrypt: bool =
             else:
                 xobjects.append(f"/Im0 {image} 0 R")
                 content += f"q {w} 0 0 {PAGE_H} 0 0 cm /Im0 Do Q\n".encode()
+        if spec.get("raw"):
+            content += spec["raw"].encode("cp1252") + b"\n"
         if spec.get("lines"):
             content += b"BT /F1 9 Tf 11 TL 40 760 Td\n"
             for line in spec["lines"]:
@@ -105,8 +120,9 @@ def build_pdf(pages: list[dict], *, producer: str | None = None, encrypt: bool =
             content += b"ET\n"
         stream = add(f"<< /Length {len(content)} >>\nstream\n".encode() + content + b"\nendstream")
         xo = f"/XObject << {' '.join(xobjects)} >>" if xobjects else ""
+        rotate = f"/Rotate {spec['rotate']} " if spec.get("rotate") else ""
         kids.append(add(
-            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {PAGE_W} {PAGE_H}] "
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {PAGE_W} {PAGE_H}] {rotate}"
             f"/Resources << /Font << /F1 {font} 0 R >> {xo} >> /Contents {stream} 0 R >>".encode()
         ))
     objs[1] = f"<< /Type /Pages /Kids [{' '.join(f'{k} 0 R' for k in kids)}] /Count {len(kids)} >>".encode()

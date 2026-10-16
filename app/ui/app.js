@@ -100,6 +100,57 @@ document.addEventListener("DOMContentLoaded", () => {
     return { short, long: message, title, toast };
   }
 
+  // What the table check says (Auto quality Balanced/Thorough), or null: a
+  // warning when a table was left not matching the PDF, a note when InkDoc
+  // rebuilt tables from the PDF itself.
+  function formatTableNote(tables) {
+    if (!tables || !tables.checked) return null;
+    if (tables.warning) {
+      return {
+        warning: true,
+        short: "Table may be wrong",
+        title: "A table may not match the PDF",
+        long: tables.message || "A table in the result may not match the PDF.",
+        toast: "but a table may not match the PDF",
+      };
+    }
+    const rebuilt = (tables.repaired || []).reduce((n, r) => n + (Number(r.tables) || 0), 0);
+    const figures = Number(tables.figures_filled) || 0;
+    const paragraphs = Number(tables.paragraphs_restored) || 0;
+    if (!rebuilt && !figures && !paragraphs) return null;
+    const what = rebuilt === 1 ? "1 table" : `${rebuilt} tables`;
+    const pics = figures === 1 ? "1 figure" : `${figures} figures`;
+    const paras = paragraphs === 1 ? "1 paragraph" : `${paragraphs} paragraphs`;
+    const sentences = [];
+    const parts = [];
+    if (rebuilt) {
+      sentences.push(`The engine got ${rebuilt === 1 ? "a table" : `${rebuilt} tables`} wrong, so InkDoc rebuilt ` +
+        `${rebuilt === 1 ? "it" : "them"} from the PDF itself and checked the result against the PDF's text.`);
+      parts.push(`${what} rebuilt`);
+    }
+    if (figures) {
+      sentences.push(`The engine left out the text inside ${pics}; InkDoc added it from the PDF ` +
+        "(chart labels and values, as a table where the chart has them).");
+      parts.push(`${pics} filled in`);
+    }
+    if (paragraphs) {
+      sentences.push(`The engine dropped ${paras}; InkDoc put ${paragraphs === 1 ? "it" : "them"} back from the PDF.`);
+      parts.push(`${paras} restored`);
+    }
+    sentences.push("Each addition is marked with a comment in the saved file.");
+    let title = "Improved from the PDF";
+    if (parts.length === 1 && rebuilt) title = rebuilt === 1 ? "Table rebuilt from the PDF" : "Tables rebuilt from the PDF";
+    else if (parts.length === 1 && figures) title = "Figure text added from the PDF";
+    else if (parts.length === 1) title = "Text restored from the PDF";
+    return {
+      warning: false,
+      short: parts.join(" · "),
+      title,
+      long: sentences.join(" "),
+      toast: `${parts.join(", ")} from the PDF`,
+    };
+  }
+
   // The one-click fix a quality report suggests, as { label, engine } or
   // { label, install: true }; null when there is nothing to offer. An engine
   // the user hid is never suggested for installing; re-converting with one
@@ -2204,6 +2255,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (doclingFormulaEnrichmentToggle && !doclingFormulaEnrichmentToggle.disabled) {
       doclingFormulaEnrichmentToggle.checked = Boolean(s.docling_formula_enrichment);
     }
+    if (s.auto_quality !== undefined) syncAutoQuality(s.auto_quality);
     if (s.layout_width !== undefined) syncLayoutWidth(s.layout_width);
     if (s.preview_text_size !== undefined) syncTextSize(s.preview_text_size);
     if (s.render_math !== undefined) syncRenderMath(s.render_math);
@@ -2348,6 +2400,51 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     });
   }
+
+  // ─── Auto quality ────────────────────────────────────────────────────────
+  // Fast (as before), Balanced (tables checked against the PDF; Auto rebuilds
+  // wrong ones) or Thorough (also page splitting and GLM-OCR tables in Auto).
+  // Saved in settings.json; the server reads it for every conversion. A change
+  // applies at once and is undone if it can't be saved.
+  const AUTO_QUALITY_LEVELS = ["fast", "balanced", "thorough"];
+  const autoQualityRadios = Array.from(document.querySelectorAll('input[name="autoQuality"]'));
+  let autoQuality = applyAutoQuality("fast");
+  let autoQualitySaves = 0; // newest save wins; loadSettings waits for it
+
+  function applyAutoQuality(value) {
+    const level = AUTO_QUALITY_LEVELS.includes(value) ? value : "fast";
+    autoQualityRadios.forEach((radio) => { radio.checked = radio.value === level; });
+    return level;
+  }
+
+  function syncAutoQuality(value) {
+    if (autoQualitySaves === 0) autoQuality = applyAutoQuality(value);
+  }
+
+  autoQualityRadios.forEach((radio) => {
+    radio.addEventListener("change", async () => {
+      if (!radio.checked || radio.value === autoQuality) return;
+      const previous = autoQuality;
+      autoQuality = applyAutoQuality(radio.value);
+      const save = ++autoQualitySaves;
+      let saved = false;
+      try {
+        const resp = await fetchWithToken(`${apiBase}/settings`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ auto_quality: autoQuality }),
+        });
+        saved = resp.ok;
+      } catch (_) {}
+      if (save !== autoQualitySaves) return; // a newer choice is on its way
+      autoQualitySaves = 0;
+      if (!saved) {
+        autoQuality = applyAutoQuality(previous);
+        showToast("Couldn't save the Auto quality setting.", "error");
+      }
+    });
+  });
+  // ─── End Auto quality ────────────────────────────────────────────────────
 
   // ─── Layout width ────────────────────────────────────────────────────────
   // How much of a wide window InkDoc uses (Settings → General → Display). The
@@ -3589,6 +3686,7 @@ document.addEventListener("DOMContentLoaded", () => {
     item.errorType       = "";
     item.auto            = null;
     item.quality         = null;
+    item.tables          = null;
     item.warnings        = [];
     renderQueue();
     startProgressPoll(item);
@@ -3671,12 +3769,14 @@ document.addEventListener("DOMContentLoaded", () => {
     item.fallbackReason   = data.fallback_reason || "";
     item.auto             = data.auto || null;
     item.quality          = data.quality || null;
+    item.tables           = data.tables || null;
     item.warnings         = Array.isArray(data.warnings) ? data.warnings : [];
     item.engine           = item.engineUsed;
     setItemMarkdown(item, data.markdown);
     item.savedTo          = data.saved_to_downloads || "";
 
-    const warning = formatQualityWarning(item.quality);
+    const tableNote = formatTableNote(item.tables);
+    const warning = formatQualityWarning(item.quality) || (tableNote && tableNote.warning ? tableNote : null);
     const via = item.engineRequested === "auto"
       ? `Auto → ${getEngineDisplayName(item.engineUsed)}`
       : getEngineDisplayName(item.engineUsed);
@@ -3697,6 +3797,8 @@ document.addEventListener("DOMContentLoaded", () => {
         showToast(`Converted ${label} via MarkItDown (Docling fallback)`, "success");
       } else if (warning) {
         showToast(`Converted ${label}, ${warning.toast}`, "info");
+      } else if (tableNote) {
+        showToast(`Converted ${label} via ${via} (${tableNote.toast})`, "success");
       } else if (item.warnings.length) {
         showToast(`Converted ${label} via ${via} (${item.warnings.length} note${item.warnings.length === 1 ? "" : "s"})`, "info");
       } else if (!(item.auto && maybeShowHintToast(item.auto.hint))) {
@@ -4373,6 +4475,10 @@ document.addEventListener("DOMContentLoaded", () => {
     const q = item.quality;
     if (item.auto) {
       if (item.auto.reason) lines.push(`Auto: ${item.auto.reason}`);
+      if (Array.isArray(item.auto.segments) && item.auto.segments.length) {
+        lines.push("Pages read by: " + item.auto.segments
+          .map((s) => `${s.pages} ${getEngineDisplayName(s.engine)}`).join(" · "));
+      }
       const esc = item.auto.escalation;
       if (esc && esc.error) {
         lines.push(`Retry with ${getEngineDisplayName(esc.to)} failed: ${esc.error}`);
@@ -4390,6 +4496,11 @@ document.addEventListener("DOMContentLoaded", () => {
       if (q.low_pages && q.low_pages.length) lines.push(`Pages with the most missing text: ${list(q.low_pages)}`);
       if (q.scan_pages && q.scan_pages.length) lines.push(`Scanned pages not read: ${list(q.scan_pages)}`);
       if (q.skipped_reason) lines.push(`Comparison skipped: ${q.skipped_reason.replace(/_/g, " ")}.`);
+    }
+    const t = item.tables;
+    if (t) {
+      (t.details || []).forEach((line) => lines.push(line));
+      if (t.skipped_reason) lines.push(`Table check skipped: ${t.skipped_reason.replace(/_/g, " ")}.`);
     }
     return lines;
   }
@@ -4421,7 +4532,8 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
     if (previewQualityBadge) {
-      const warning = formatQualityWarning(item.quality);
+      const tableNote = formatTableNote(item.tables);
+      const warning = formatQualityWarning(item.quality) || (tableNote && tableNote.warning ? tableNote : null);
       if (warning) {
         previewQualityBadge.style.display = "inline-flex";
         previewQualityBadge.textContent = `⚠ ${warning.short}`;
@@ -4548,15 +4660,19 @@ document.addEventListener("DOMContentLoaded", () => {
 
     updatePreviewBadges(item);
 
-    // One notice, most important first: a missing-text warning, then a
-    // Docling fallback, then Auto's install tip, then plain information.
+    // One notice, most important first: a missing-text warning, a table that
+    // may be wrong, then a Docling fallback, then Auto's install tip, then
+    // plain information (tables rebuilt, engine notes).
     const warning = formatQualityWarning(item.quality);
+    const tableNote = formatTableNote(item.tables);
     const details = conversionDetailLines(item);
     if (warning) {
       showConversionNotice("warning", warning.title, warning.long, {
         actions: qualityNoticeActions(item),
         details,
       });
+    } else if (tableNote && tableNote.warning) {
+      showConversionNotice("warning", tableNote.title, tableNote.long, { details });
     } else if (item.fallbackOccurred) {
       showConversionNotice(
         "unsupported",
@@ -4569,6 +4685,8 @@ document.addEventListener("DOMContentLoaded", () => {
         actions: [{ label: item.auto.hint.includes("Docling") ? "Install Docling" : "Open Settings", onClick: (e) => openSettings(e, "engines") }],
         details,
       });
+    } else if (tableNote) {
+      showConversionNotice("info", tableNote.title, tableNote.long, { details });
     } else if (item.warnings && item.warnings.length) {
       showConversionNotice("info", "Note", item.warnings[0], { details });
     } else if (item.quality && item.quality.image_pages && item.quality.image_pages.length) {

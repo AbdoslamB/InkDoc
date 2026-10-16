@@ -92,6 +92,11 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "docling_code_enrichment": False,
     "docling_formula_enrichment": False,
     "quality_check_enabled": True,
+    # "fast" | "balanced" | "thorough" (app/core/table_stage.py). Fast, the
+    # default, converts exactly as before; Balanced checks every PDF's tables
+    # against the PDF and lets Auto replace wrong ones; Thorough adds page
+    # splitting and GLM-OCR table reading in Auto.
+    "auto_quality": "fast",
     "glm_ocr_use_gpu": False,
     "glm_ocr_download_source": "auto",
     "glm_ocr_catalogue_seen": 0,
@@ -149,6 +154,7 @@ RESETTABLE_SETTINGS = (
     "auto_hint_hidden",
     "fallback_to_markitdown",
     "quality_check_enabled",
+    "auto_quality",
     "layout_width",
     "preview_text_size",
     "render_math",

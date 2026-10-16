@@ -8,7 +8,10 @@
 2. converts with that engine, in that engine's lane;
 3. runs the missing-text check on PDFs (app/core/quality_check.py);
 4. if the check says an OCR engine would do better and one is installed,
-   converts again with it and keeps the better of the two results.
+   converts again with it and keeps the better of the two results;
+5. at the Balanced and Thorough "Auto quality" levels, checks the PDF's tables
+   against the PDF itself and replaces the ones the engine got wrong
+   (app/core/table_stage.py).
 
 Auto is the only mode that ever re-runs a conversion by itself, and every
 choice it makes is reported (engine_used, auto.reason, auto.escalation).
@@ -136,6 +139,9 @@ class AutoDecision:
     escalation: dict[str, Any] | None = None
     # {"from": "markitdown", "from_missing_pct": 18, "to": "docling",
     #  "kept": "docling" | "markitdown", "error": str | None}
+    # A page split (Auto quality: Thorough): [{"engine": "docling", "pages": "1-12"}, ...]
+    # in page order; `engine` is then the one that read the most pages.
+    segments: list[dict[str, str]] | None = None
 
     def to_dict(self, engine_used: EngineKind | None = None) -> dict[str, Any]:
         return {
@@ -145,7 +151,117 @@ class AutoDecision:
             "hint": self.hint,
             "escalated": self.escalated,
             "escalation": self.escalation,
+            "segments": self.segments,
         }
+
+
+# ─── Page split (Auto quality: Thorough) ─────────────────────────────────────
+# A mixed PDF (text pages and scanned ones) is read page by page: Docling for
+# the pages with a text layer, GLM-OCR only for the pages that need OCR, then
+# joined in page order. Only with both engines usable, only when it leaves at
+# least SPLIT_MIN_TEXT_PAGES to Docling, and only in at most SPLIT_MAX_RUNS
+# runs of consecutive pages (each run is one conversion).
+SPLIT_MIN_TEXT_PAGES = 2
+SPLIT_MAX_RUNS = 8
+
+
+@dataclass
+class PageSegment:
+    engine: EngineKind
+    pages: list[int]                  # 1-based, consecutive
+
+
+def plan_page_split(probe: PdfProbe | None, ocr_engines: list[EngineKind]) -> list[PageSegment] | None:
+    """The page runs and the engine for each, or None to convert the file whole. Pure.
+
+    Pages needing OCR are the scanned ones, plus the full-page images when
+    there are enough of them that decide() would send the file to OCR.
+    """
+    if probe is None or probe.truncated or not probe.page_count or len(probe.pages) != probe.page_count:
+        return None
+    if EngineKind.GLM_OCR not in ocr_engines or EngineKind.DOCLING not in ocr_engines:
+        return None
+    ocr = set(probe.scan_pages)
+    images = probe.image_pages
+    if len(images) >= ROUTE_IMAGE_PAGE_MIN and len(images) / len(probe.pages) >= ROUTE_IMAGE_PAGE_FRACTION:
+        ocr |= set(images)
+    if not ocr or probe.page_count - len(ocr) < SPLIT_MIN_TEXT_PAGES:
+        return None
+    segments: list[PageSegment] = []
+    for page in range(1, probe.page_count + 1):
+        engine = EngineKind.GLM_OCR if page in ocr else EngineKind.DOCLING
+        if segments and segments[-1].engine == engine:
+            segments[-1].pages.append(page)
+        else:
+            segments.append(PageSegment(engine, [page]))
+    return segments if len(segments) <= SPLIT_MAX_RUNS else None
+
+
+# ─── Digital PDFs at Thorough ────────────────────────────────────────────────
+# MarkItDown reads a PDF's text layer line by line across the whole page, so
+# two columns, side-by-side tables and sidebars come out interleaved. At
+# Thorough a digital PDF goes to a layout-aware engine instead: Docling (it
+# keeps the PDF's own text and rebuilds tables), or GLM-OCR when Docling is
+# not installed. Long PDFs go to Docling in parts of THOROUGH_DOCLING_PAGES.
+THOROUGH_DOCLING_PAGES = 12
+
+
+def thorough_digital_route(decision: AutoDecision, docling_ok: bool, glm_ok: bool) -> None:
+    """At Thorough, move a digital PDF off MarkItDown onto a layout-aware engine. Pure."""
+    if decision.engine != EngineKind.MARKITDOWN or "Digital PDF" not in decision.reason:
+        return
+    if docling_ok:
+        decision.engine = EngineKind.DOCLING
+        decision.reason += " (Thorough: Docling follows the page layout and keeps the PDF's own text)"
+    elif glm_ok:
+        decision.engine = EngineKind.GLM_OCR
+        decision.reason += " (Thorough: GLM-OCR follows the page layout; Docling isn't installed)"
+
+
+def docling_chunks(probe: PdfProbe | None) -> list[PageSegment] | None:
+    """Docling runs of at most THOROUGH_DOCLING_PAGES pages, or None for a short PDF."""
+    if probe is None or probe.page_count <= THOROUGH_DOCLING_PAGES:
+        return None
+    pages = list(range(1, probe.page_count + 1))
+    return [
+        PageSegment(EngineKind.DOCLING, pages[i:i + THOROUGH_DOCLING_PAGES])
+        for i in range(0, len(pages), THOROUGH_DOCLING_PAGES)
+    ]
+
+
+def _polish(markdown: str, probe: PdfProbe, used: EngineKind, options: ConversionOptions) -> str:
+    """Thorough: put back the PDF's '&', dashes and quotes an engine simplified (app/core/text_polish.py)."""
+    if used in (EngineKind.MARKITDOWN, EngineKind.MARKIT):
+        return markdown  # they copy the text layer as it is
+    from app.core.text_polish import restore_typography, unescape_ampersands
+
+    try:
+        markdown, amps = unescape_ampersands(markdown)
+        markdown, words = restore_typography(markdown, [p.text for p in probe.pages])
+    except Exception as exc:  # a nicety: never a reason to fail
+        logger.warning("Thorough polish skipped: %s", exc)
+        return markdown
+    options.polish_counts = (amps, words)
+    return markdown
+
+
+def split_decision(segments: list[PageSegment], probe: PdfProbe) -> AutoDecision:
+    """The decision Auto reports for a page split."""
+    from app.core.pdf_pages import page_runs
+
+    counts = {e: sum(len(s.pages) for s in segments if s.engine == e) for e in (EngineKind.DOCLING, EngineKind.GLM_OCR)}
+    primary = max(counts, key=lambda e: counts[e])
+    n_text, n_ocr = counts[EngineKind.DOCLING], counts[EngineKind.GLM_OCR]
+    scans = set(probe.scan_pages)
+    kind = "scanned" if all(p in scans for s in segments if s.engine == EngineKind.GLM_OCR for p in s.pages) else "image"
+    reason = (
+        f"Mixed PDF: {n_text} text page{'s' if n_text != 1 else ''} read with Docling, "
+        f"{n_ocr} {kind} page{'s' if n_ocr != 1 else ''} with GLM-OCR"
+    )
+    return AutoDecision(
+        primary, reason, probe=probe,
+        segments=[{"engine": s.engine.value, "pages": page_runs(s.pages)} for s in segments],
+    )
 
 
 # ─── Availability (disk only, never cached) ──────────────────────────────────
@@ -295,6 +411,17 @@ def format_duration(seconds: float) -> str:
     if minutes < 60:
         return f"{minutes} min"
     return f"{minutes // 60} h {minutes % 60} min" if minutes % 60 else f"{minutes // 60} h"
+
+
+def glm_estimate_for_pages(pages: int) -> float | None:
+    """GLM-OCR's estimated time for `pages` pages on this machine, or None if unknown."""
+    try:
+        from app.core.glm_ocr_manager import GlmOcrManager
+
+        return GlmOcrManager.get_instance().estimate_seconds(max(1, pages))
+    except Exception as exc:
+        logger.debug("GLM-OCR estimate unavailable: %s", exc)
+        return None
 
 
 def glm_estimate_seconds(path: str, probe: PdfProbe | None, pdf: bool) -> float | None:
@@ -575,6 +702,94 @@ async def _convert_with_fallback(
             )
 
 
+async def _convert_split(
+    item: QueueItem,
+    options: ConversionOptions,
+    segments: list[PageSegment],
+    *,
+    path: str,
+    lane: LaneProvider,
+    job: JobHandle,
+) -> str:
+    """Convert each run of pages with its engine and join the results in page order.
+
+    Docling's runs go first (each as a PDF of just those pages), then
+    GLM-OCR's (reading those pages of the original file), so on a machine with
+    little memory each engine starts once. A run whose engine fails is read by
+    the next one down (GLM-OCR, then Docling, then MarkItDown), and the
+    response says so. Each run takes its engine's lane only while it converts.
+    """
+    import shutil
+    import tempfile
+
+    from app.core.pdf_pages import page_runs, write_page_subset
+    from app.core.queue_model import SourceKind
+
+    texts: dict[int, str] = {}
+    tmpdir = tempfile.mkdtemp(prefix="inkdoc-split-")
+
+    def notes(more: list[str]) -> None:
+        options.engine_warnings = [*options.engine_warnings, *more]
+
+    async def subset(pages: list[int]) -> QueueItem:
+        # A PDF of just these pages (pdfium lock held inside; milliseconds).
+        sub = os.path.join(tmpdir, f"pages-{pages[0]}-{pages[-1]}.pdf")
+        if not os.path.exists(sub):
+            await asyncio.to_thread(write_page_subset, path, pages, sub)
+        return QueueItem(source=sub, kind=SourceKind.FILE, display_name=item.display_name, engine=EngineKind.DOCLING)
+
+    async def run(engine: EngineKind, run_item: QueueItem, pages: list[int], run_options: ConversionOptions) -> str:
+        job.set_phase(
+            "converting", f"Reading page{'s' if len(pages) > 1 else ''} {page_runs(pages)} with {engine_label(engine)}…",
+            engine=engine.value,
+        )
+        async with lane(engine):
+            job.raise_if_cancelled()
+            return await asyncio.to_thread(_convert_once, run_item, run_options, engine, None)
+
+    try:
+        order = [s for s in segments if s.engine == EngineKind.DOCLING] + [
+            s for s in segments if s.engine == EngineKind.GLM_OCR
+        ]
+        for seg in order:
+            job.raise_if_cancelled()
+            chain = [seg.engine] + ([EngineKind.DOCLING] if seg.engine == EngineKind.GLM_OCR else []) + [
+                EngineKind.MARKITDOWN
+            ]
+            last_error = ""
+            for attempt, engine in enumerate(chain):
+                if engine == EngineKind.GLM_OCR:
+                    run_item = QueueItem(source=path, kind=SourceKind.FILE, display_name=item.display_name,
+                                         engine=EngineKind.GLM_OCR)
+                    run_options = dataclasses.replace(options, page_subset=list(seg.pages))
+                else:
+                    run_item = await subset(seg.pages)
+                    run_options = dataclasses.replace(options, page_subset=None)
+                try:
+                    texts[seg.pages[0]] = await run(engine, run_item, seg.pages, run_options)
+                    options.engine_warnings = run_options.engine_warnings
+                    if attempt:
+                        options.fallback_occurred = True
+                        options.fallback_reason = last_error
+                        notes([
+                            f"Pages {page_runs(seg.pages)}: {engine_label(chain[0])} failed ({last_error}); "
+                            f"read with {engine_label(engine)} instead."
+                        ])
+                    break
+                except ConversionCancelledError:
+                    raise
+                except Exception as exc:
+                    logger.warning("Auto page split: %s failed on pages %s: %s",
+                                   engine_label(engine), page_runs(seg.pages), exc)
+                    last_error = _safe_error(exc)
+                    if engine == EngineKind.MARKITDOWN:
+                        raise
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+    parts = [texts.get(seg.pages[0], "").strip() for seg in segments]
+    return "\n\n".join(p for p in parts if p) + "\n"
+
+
 async def run_auto(
     item: QueueItem,
     options: ConversionOptions,
@@ -605,6 +820,8 @@ async def run_auto(
 
     job.set_phase("routing", "Choosing an engine…")
     ocr_engines, install_target, pdf = await asyncio.to_thread(_availability, path)
+    glm_usable = EngineKind.GLM_OCR in ocr_engines  # before any time limit: a table area is small
+    docling_usable_now = EngineKind.DOCLING in ocr_engines
     installable = install_target is not None
     install_name = engine_label(EngineKind(install_target)) if install_target else "Docling"
 
@@ -614,37 +831,68 @@ async def run_auto(
             job.raise_if_cancelled()
             probe = await asyncio.to_thread(probe_pdf, path)
 
-    # GLM-OCR only for files it should finish within the time limit; else Docling.
-    gate_note = ""
-    if EngineKind.GLM_OCR in ocr_engines:
-        estimate = await asyncio.to_thread(glm_estimate_seconds, path, probe, pdf)
-        ocr_engines, gate_note = glm_time_gate(ocr_engines, estimate)
+    # Thorough: a mixed PDF is read page by page (Docling for text pages,
+    # GLM-OCR for the rest), with GLM-OCR's time limit counted on its pages only.
+    from app.core.table_stage import LEVEL_THOROUGH, normalize_level
 
-    decision = decide(
-        path,
-        ocr_engines=ocr_engines,
-        ocr_installable=installable,
-        probe=probe,
-        pdf=pdf,
-        from_url=fetched is not None,
-        install_name=install_name,
-    )
-    if gate_note and decision.engine != EngineKind.GLM_OCR:
-        needed_ocr = decision.engine in OCR_ENGINE_ORDER or "no OCR engine" in decision.reason
-        if needed_ocr:
-            decision.reason += f" ({gate_note})"
-            if decision.engine == EngineKind.MARKITDOWN and not decision.hint:
-                decision.hint = gate_note + "."
-    options.auto_decision = decision
+    split: list[PageSegment] | None = None
+    if pdf and normalize_level(options.auto_quality) == LEVEL_THOROUGH:
+        split = plan_page_split(probe, ocr_engines)
+        if split is not None:
+            ocr_pages = sum(len(s.pages) for s in split if s.engine == EngineKind.GLM_OCR)
+            estimate = await asyncio.to_thread(glm_estimate_for_pages, ocr_pages)
+            if estimate is not None and estimate > GLM_OCR_TIME_LIMIT_S:
+                split = None
+
     # Auto runs its own fallback (below), in the right lane.
     options.allow_engine_fallback = False
-    if decision.engine == EngineKind.DOCLING:
+    if split is not None:
+        decision = split_decision(split, probe)  # type: ignore[arg-type]
+        options.auto_decision = decision
         await asyncio.to_thread(_apply_enrichment_policy, options, decision)
+        markdown = await _convert_split(item, options, split, path=path, lane=lane, job=job)
+        used = decision.engine
+    else:
+        # GLM-OCR only for files it should finish within the time limit; else Docling.
+        gate_note = ""
+        if EngineKind.GLM_OCR in ocr_engines:
+            estimate = await asyncio.to_thread(glm_estimate_seconds, path, probe, pdf)
+            ocr_engines, gate_note = glm_time_gate(ocr_engines, estimate)
 
-    markdown = await _convert_with_fallback(
-        item, options, decision.engine, lane=lane, fetched=fetched, job=job
-    )
-    used = options.engine_used or decision.engine
+        decision = decide(
+            path,
+            ocr_engines=ocr_engines,
+            ocr_installable=installable,
+            probe=probe,
+            pdf=pdf,
+            from_url=fetched is not None,
+            install_name=install_name,
+        )
+        if gate_note and decision.engine != EngineKind.GLM_OCR:
+            needed_ocr = decision.engine in OCR_ENGINE_ORDER or "no OCR engine" in decision.reason
+            if needed_ocr:
+                decision.reason += f" ({gate_note})"
+                if decision.engine == EngineKind.MARKITDOWN and not decision.hint:
+                    decision.hint = gate_note + "."
+        thorough = normalize_level(options.auto_quality) == LEVEL_THOROUGH
+        if thorough and pdf and probe is not None:
+            thorough_digital_route(decision, docling_usable_now, EngineKind.GLM_OCR in ocr_engines)
+        options.auto_decision = decision
+        if decision.engine == EngineKind.DOCLING:
+            await asyncio.to_thread(_apply_enrichment_policy, options, decision)
+
+        chunks = docling_chunks(probe) if thorough and decision.engine == EngineKind.DOCLING else None
+        if chunks is not None:
+            # Docling's worker stops a conversion after 3 minutes: a long PDF goes in parts.
+            markdown = await _convert_split(item, options, chunks, path=path, lane=lane, job=job)
+        else:
+            markdown = await _convert_with_fallback(
+                item, options, decision.engine, lane=lane, fetched=fetched, job=job
+            )
+        used = options.engine_used or decision.engine
+
+    if pdf and probe is not None and normalize_level(options.auto_quality) == LEVEL_THOROUGH:
+        markdown = await asyncio.to_thread(_polish, markdown, probe, used, options)
 
     report: QualityReport | None = None
     if pdf and options.quality_check:
@@ -704,9 +952,95 @@ async def run_auto(
         decision.escalated = True
         decision.escalation = escalation
 
+    if pdf:
+        from app.core.table_stage import checks_tables
+
+        if checks_tables(options.auto_quality):
+            before = markdown
+            markdown = await _check_tables(
+                path, markdown, probe, options, lane=lane, job=job, glm_usable=glm_usable
+            )
+            if markdown != before and report is not None and report.checked and probe is not None:
+                # The words are the same, but the check describes the saved text.
+                ocr_engine = ocr_engines[0] if ocr_engines else None
+                report = await asyncio.to_thread(
+                    assess, path, markdown, used,
+                    probe=probe, ocr_engine=ocr_engine, ocr_installable=installable,
+                    ocr_install_engine=install_target or "docling",
+                )
+
     options.engine_used = used
     options.quality_report = report
     return markdown
+
+
+async def _check_tables(
+    path: str,
+    markdown: str,
+    probe: PdfProbe | None,
+    options: ConversionOptions,
+    *,
+    lane: LaneProvider,
+    job: JobHandle,
+    glm_usable: bool = False,
+) -> str:
+    """The table stage for Auto: check, and replace what the engine got wrong.
+
+    The finder runs in the MarkItDown worker, so the inspection takes
+    MarkItDown's lane. At Thorough, tables found from word positions are read
+    a second time by GLM-OCR, in GLM-OCR's lane (only when it is installed),
+    before anything is written.
+    """
+    from app.core.table_stage import (
+        LEVEL_THOROUGH,
+        confirm_tables,
+        finish_tables,
+        inspect_tables,
+        normalize_level,
+        pending_confirmations,
+    )
+
+    deep = normalize_level(options.auto_quality) == LEVEL_THOROUGH
+    async with lane(EngineKind.MARKITDOWN):
+        job.raise_if_cancelled()
+        inspection = await asyncio.to_thread(inspect_tables, path, markdown, probe, deep=deep, job=job)
+    if deep and glm_usable and pending_confirmations(inspection):
+        from app.core.engines.glm_ocr_engine import read_table_region
+
+        async with lane(EngineKind.GLM_OCR):
+            job.raise_if_cancelled()
+            await asyncio.to_thread(confirm_tables, inspection, read_table_region, job=job)
+    result, summary = await asyncio.to_thread(finish_tables, inspection, repair_allowed=True)
+    if deep and inspection.found:
+        from app.core.figure_text import recover_dropped_paragraphs, recover_figure_text
+
+        pages = inspection.found.get("pages", [])
+        filled = restored = 0
+        try:
+            result, filled = await asyncio.to_thread(recover_figure_text, result, pages)
+            result, restored = await asyncio.to_thread(recover_dropped_paragraphs, result, pages)
+        except Exception as exc:  # an addition, never a reason to fail
+            logger.warning("Figure text skipped: %s", exc)
+        if filled:
+            summary.figures_filled = filled
+            summary.details.append(
+                f"Added the text of {filled} figure{'s' if filled != 1 else ''} from the PDF "
+                "(chart labels and values the engine left out)."
+            )
+        if restored:
+            summary.paragraphs_restored = restored
+            summary.details.append(
+                f"Put back {restored} paragraph{'s' if restored != 1 else ''} of the PDF the engine left out."
+            )
+    amps, words = options.polish_counts
+    if amps or words:
+        summary.characters_restored = amps + words
+        summary.details.append(
+            f"Put back {amps + words} of the PDF's characters the engine had simplified "
+            "('&', dashes and quotes)."
+        )
+    options.table_report = summary
+    return result
 
 
 def run_auto_blocking(

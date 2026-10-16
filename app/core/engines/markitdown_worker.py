@@ -11,6 +11,9 @@ Protocol, one JSON object per line:
 
     stdin   {"id": 7, "action": "convert", "source": "...", "output": "...",
              "options": {...}, "stream_info": {...}, "url": "..."}
+            {"id": 8, "action": "tables", "source": "...", "output": "...",
+             "pages": [3, 4], "hints": {"5": [[["h1", "h2"], ["a", "b"]]]},
+             "deep": false, "time_budget_s": 20}
             {"action": "shutdown"}
     stdout  {"status": "ready", "pid": 1234, "markitdown": "0.1.7"}   once, when warm
             {"status": "error", "error": "..."}                         instead, if it can't load
@@ -20,6 +23,10 @@ Protocol, one JSON object per line:
 The Markdown never goes through the pipe: it is written to the private file
 named by "output", created here exclusively. Conversions run on a few threads
 at once, as they did inside InkDoc's own process.
+
+"tables" runs the table finder (app/core/table_finder.py) on the given pages
+and writes its JSON to "output" the same way: pdfplumber is loaded here
+already, so InkDoc's own process never has to.
 """
 from __future__ import annotations
 
@@ -109,17 +116,47 @@ def _convert(request: dict, send) -> None:
             stream_info if isinstance(stream_info, dict) else {},
             request.get("url") if isinstance(request.get("url"), str) else None,
         )
-        # O_EXCL: the file must not exist yet, so nothing already at that name
-        # (a link included) is written through; 0600: readable by this user
-        # only. newline="": the text is stored exactly as converted.
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
-        fd = os.open(str(request["output"]), flags, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
-            f.write(text or "")
+        _write_result(str(request["output"]), text or "")
         send({"id": rid, "ok": True, "none": text is None})
     except Exception as exc:
         # The message exactly as an in-process conversion raised it: the server
         # words its error for the user from this text.
+        send({"id": rid, "ok": False, "error": str(exc), "type": type(exc).__name__})
+
+
+def _write_result(path: str, text: str) -> None:
+    # O_EXCL: the file must not exist yet, so nothing already at that name
+    # (a link included) is written through; 0600: readable by this user
+    # only. newline="": the text is stored exactly as produced.
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    fd = os.open(path, flags, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+        f.write(text)
+
+
+def _tables(request: dict, send) -> None:
+    rid = request.get("id")
+    try:
+        from app.core.table_finder import DEFAULT_TIME_BUDGET_S, find_tables
+
+        pages = [int(p) for p in request.get("pages") or [] if isinstance(p, int)]
+        budget = request.get("time_budget_s")
+        budget = float(budget) if isinstance(budget, (int, float)) and budget > 0 else DEFAULT_TIME_BUDGET_S
+        raw_hints = request.get("hints")
+        hints = {}
+        if isinstance(raw_hints, dict):
+            for page, tables in raw_hints.items():
+                if str(page).isdigit() and isinstance(tables, list):
+                    hints[int(page)] = [
+                        [[str(c) for c in row] for row in t if isinstance(row, list)]
+                        for t in tables if isinstance(t, list)
+                    ]
+        result = find_tables(
+            str(request["source"]), pages, hints=hints, deep=request.get("deep") is True, time_budget_s=budget
+        )
+        _write_result(str(request["output"]), json.dumps(result))
+        send({"id": rid, "ok": True, "none": False})
+    except Exception as exc:
         send({"id": rid, "ok": False, "error": str(exc), "type": type(exc).__name__})
 
 
@@ -175,6 +212,8 @@ def main(argv: list[str]) -> int:
         action = request.get("action")
         if action == "convert":
             pool.submit(_convert, request, send)
+        elif action == "tables":
+            pool.submit(_tables, request, send)
         elif action == "shutdown":
             break
 

@@ -121,6 +121,27 @@
                     </label>
                     <p class="settings-caption">Compares the result with the PDF's embedded text and warns if part of it was lost. Read-only; never changes the saved file.</p>
                   </div>
+
+                  <div class="settings-group">
+                    <div class="layout-width-row">
+                      <span class="layout-width-label" id="autoQualityLabel">Auto quality</span>
+                      <div class="segmented" id="autoQualityGroup" role="radiogroup" aria-labelledby="autoQualityLabel">
+                        <label class="segmented-option" title="Convert as before">
+                          <input type="radio" class="sr-only" name="autoQuality" value="fast" checked>
+                          <span>Fast</span>
+                        </label>
+                        <label class="segmented-option" title="Check PDF tables against the PDF; Auto rebuilds the ones an engine got wrong">
+                          <input type="radio" class="sr-only" name="autoQuality" value="balanced">
+                          <span>Balanced</span>
+                        </label>
+                        <label class="segmented-option" title="Balanced, plus page-by-page engines for mixed PDFs and GLM-OCR for hard tables (slower)">
+                          <input type="radio" class="sr-only" name="autoQuality" value="thorough">
+                          <span>Thorough</span>
+                        </label>
+                      </div>
+                    </div>
+                    <p class="settings-caption" id="autoQualityCaption">Balanced checks every PDF's tables against the PDF itself: side-by-side tables, merged cells and shapes in cells. In Auto, a table an engine got wrong is rebuilt from the PDF and marked in the file. Thorough reads digital PDFs with Docling (layout-aware) instead of MarkItDown, adds the text of charts, rating grids drawn with markers and paragraphs the engine dropped, splits mixed PDFs by page and, with GLM-OCR installed, rebuilds tables without lines once GLM-OCR's reading agrees. Slower; other engines are only checked, never changed.</p>
+                  </div>
                 </div>
 
                 <div class="settings-section settings-display">

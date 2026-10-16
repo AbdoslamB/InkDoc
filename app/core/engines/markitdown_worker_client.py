@@ -10,6 +10,8 @@ box gets focus), and exits after IDLE_TIMEOUT_S without work.
 
 - One worker converts several files at once on its threads, as InkDoc's own
   process did before: the same throughput, one copy of markitdown in memory.
+- The table check's finder (app/core/table_finder.py, pdfplumber) runs there
+  too, through find_tables(), for the same reason.
 - A conversion that arrives while the worker is starting waits for that same
   start; it never launches a second worker.
 - The idle clock runs only while nothing is being converted.
@@ -418,28 +420,8 @@ class MarkItDownWorker:
         url: str | None,
     ) -> str:
         """Convert `source` in the worker. Raises WorkerUnavailableError if it can't start."""
-        job = getattr(options, "job", None)
-        while True:
-            proc = self._wait_ready(job)
-            with self._lock:
-                # Registered against the worker just waited for. If the idle
-                # timer stopped it in between, start again rather than wait on
-                # a worker that is going away.
-                if self._proc is not proc:
-                    continue
-                tmpdir = self._private_tmpdir_locked()
-                self._next_id += 1
-                rid = self._next_id
-                pending = _Pending(output=tmpdir / f"{rid}-{uuid.uuid4().hex}.md", generation=self._generation)
-                self._pending[rid] = pending
-                self._active += 1
-                self._cancel_idle_timer_locked()
-                break
-        request = {
-            "id": rid,
-            "action": "convert",
+        fields = {
             "source": str(source),
-            "output": str(pending.output),
             "options": {
                 "enable_plugins": bool(options.enable_plugins),
                 "keep_data_uris": bool(options.keep_data_uris),
@@ -452,6 +434,56 @@ class MarkItDownWorker:
             "stream_info": dict(stream_info or {}),
             "url": url,
         }
+        response, text = self._call(
+            "convert", fields, getattr(options, "job", None), ".md",
+            crashed=(
+                "MarkItDown stopped unexpectedly while converting this file. It may be "
+                "damaged or too large; try again, or try another engine."
+            ),
+        )
+        return None if response.get("none") else text  # type: ignore[return-value]
+
+    def find_tables(
+        self,
+        source: str,
+        pages: list[int],
+        job: Any = None,
+        time_budget_s: float | None = None,
+        hints: dict[int, list] | None = None,
+        deep: bool = False,
+    ) -> dict:
+        """Run the table finder (app/core/table_finder.py) on `pages` of the PDF, in the worker."""
+        fields: dict[str, Any] = {"source": str(source), "pages": [int(p) for p in pages]}
+        if hints:
+            fields["hints"] = {str(page): tables for page, tables in hints.items()}
+        if deep:
+            fields["deep"] = True
+        if time_budget_s is not None:
+            fields["time_budget_s"] = float(time_budget_s)
+        _response, text = self._call(
+            "tables", fields, job, ".json", crashed="The table check stopped unexpectedly."
+        )
+        return json.loads(text)
+
+    def _call(self, action: str, fields: dict, job: Any, suffix: str, *, crashed: str) -> tuple[dict, str]:
+        """One request to the worker; (its response, the text it wrote to its result file)."""
+        while True:
+            proc = self._wait_ready(job)
+            with self._lock:
+                # Registered against the worker just waited for. If the idle
+                # timer stopped it in between, start again rather than wait on
+                # a worker that is going away.
+                if self._proc is not proc:
+                    continue
+                tmpdir = self._private_tmpdir_locked()
+                self._next_id += 1
+                rid = self._next_id
+                pending = _Pending(output=tmpdir / f"{rid}-{uuid.uuid4().hex}{suffix}", generation=self._generation)
+                self._pending[rid] = pending
+                self._active += 1
+                self._cancel_idle_timer_locked()
+                break
+        request = {"id": rid, "action": action, "output": str(pending.output), **fields}
         try:
             try:
                 with self._write_lock:
@@ -479,10 +511,7 @@ class MarkItDownWorker:
                 raise ConversionCancelledError("conversion_cancelled")
             response = pending.response or {"crashed": True}
             if response.get("crashed"):
-                raise MarkItDownWorkerCrashedError(
-                    "MarkItDown stopped unexpectedly while converting this file. It may be "
-                    "damaged or too large; try again, or try another engine."
-                )
+                raise MarkItDownWorkerCrashedError(crashed)
             if not response.get("ok"):
                 raise MarkItDownConversionError(str(response.get("error", "")), str(response.get("type", "")))
             if not pending.output.exists():
@@ -490,7 +519,7 @@ class MarkItDownWorker:
             # newline="": exactly the text the worker wrote, line endings included.
             with open(pending.output, encoding="utf-8", errors="replace", newline="") as f:
                 text = f.read()
-            return None if response.get("none") else text  # type: ignore[return-value]
+            return response, text
         finally:
             _unlink_quietly(pending.output)
             with self._lock:
@@ -600,3 +629,18 @@ def convert_with_markitdown(
     from app.core.converter import run_markitdown
 
     return run_markitdown(source, options, stream_info, url)
+
+
+def find_tables_in_worker(
+    source: str, pages: list[int], job: Any = None, hints: dict[int, list] | None = None, deep: bool = False
+) -> dict:
+    """The table finder's result for `pages`: in the worker, or here if it can't be started."""
+    worker = MarkItDownWorker.get_instance()
+    if worker.usable():
+        try:
+            return worker.find_tables(source, pages, job, hints=hints, deep=deep)
+        except WorkerUnavailableError as exc:
+            logger.warning("MarkItDown worker unavailable (%s); finding tables in InkDoc's own process.", exc)
+    from app.core.table_finder import find_tables
+
+    return find_tables(source, pages, hints=hints, deep=deep)

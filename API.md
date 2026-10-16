@@ -45,6 +45,7 @@ Convert an uploaded document to Markdown.
   - `enable_plugins` *(bool, optional, default: `false`)*: Enable MarkItDown plugins.
   - `keep_data_uris` *(bool, optional, default: `false`)*: Retain base64 data URIs for images.
   - `check_quality` *(bool, optional)*: Run the [missing-text check](#missing-text-check) on PDFs for this request. Omit it to follow the `quality_check_enabled` setting (on by default); pass `false` to skip it when converting thousands of files.
+  - `auto_quality` *(string, optional, `'fast'` | `'balanced'` | `'thorough'`)*: The [table check and page split](#table-check) for this request. Omit it to follow the `auto_quality` setting (`fast` by default: nothing changes). Any other value is refused with `422`.
   - `job_id` *(string, optional)*: A client-generated id (8–100 characters of letters, digits, `-`, `_`, `.` or `:`) for [progress and cancel](#get-convertprogressjob_id--post-convertcanceljob_id).
 
 **cURL Example (Raw Markdown Output)**:
@@ -57,7 +58,7 @@ curl -F "file=@annual_report.pdf" "http://localhost:13118/convert/file?engine=do
 curl -F "file=@dataset.xlsx" "http://localhost:13118/convert/file?response_format=json&save_to_downloads=true"
 ```
 
-**JSON response** (`response_format=json`). `auto` is `null` unless `engine=auto`; `quality` is `null` for anything that is not a PDF, or when the check is off:
+**JSON response** (`response_format=json`). `auto` is `null` unless `engine=auto`; `quality` is `null` for anything that is not a PDF, or when the check is off; `tables` is `null` unless the [table check](#table-check) ran (`auto_quality` Balanced or Thorough, PDFs only):
 ```jsonc
 {
   "success": true,
@@ -73,7 +74,17 @@ curl -F "file=@dataset.xlsx" "http://localhost:13118/convert/file?response_forma
     "hint": "",                          // e.g. "Docling would read the 5 scanned pages. Install it in Settings."
     "escalated": true,
     "escalation": {"from": "markitdown", "from_missing_pct": 18, "from_scan_pages": 0,
-                   "to": "docling", "kept": "docling", "error": null}
+                   "to": "docling", "kept": "docling", "error": null},
+    "segments": null                     // Thorough page split: [{"engine": "docling", "pages": "1-12"}, …]
+  },
+  "tables": {
+    "checked": true, "skipped_reason": "", "pages_checked": [3], "tables_found": 2,
+    "repaired": [{"page": 3, "tables": 2, "issue": "merged", "source": "pdf_lines"}],
+    "issues": [],                        // tables found wrong and left as they were: {page, tables, issue, message, why}
+    "warning": false, "message": "",
+    "details": ["Compared 2 tables with the PDF on page 3.",
+                "Page 3: rebuilt 2 tables from the PDF's ruling lines (merged); checked against the PDF's text."],
+    "figures_filled": 0, "paragraphs_restored": 0, "characters_restored": 0   // Thorough
   },
   "quality": {
     "checked": true, "coverage": 0.97, "missing_pct": 3,
@@ -109,10 +120,11 @@ Convert a web page or YouTube video to Markdown.
     "keep_data_uris": false,
     "engine": "markitdown",
     "check_quality": null,
+    "auto_quality": null,
     "job_id": null
   }
   ```
-  `engine`, `check_quality` and `job_id` work as for `/convert/file`. The response has the same `auto` and `quality` fields: a URL that serves a PDF (detected by content, not name) is routed and checked like an uploaded one.
+  `engine`, `check_quality`, `auto_quality` and `job_id` work as for `/convert/file`. The response has the same `auto`, `quality` and `tables` fields: a URL that serves a PDF (detected by content, not name) is routed and checked like an uploaded one.
 
 **cURL Example**:
 ```bash
@@ -132,9 +144,10 @@ Convert multiple files in a single HTTP request.
   - `engine` *(string, optional, default: `'markitdown'`)*: including `'auto'`.
   - `save_to_downloads` *(bool, optional, default: `false`)*
   - `check_quality` *(bool, optional)*
+  - `auto_quality` *(string, optional)*
   - `job_id` *(string, optional)*: each file reports progress under `<job_id>-<index>` (0-based).
 
-Each entry in `results` carries the same `engine_*`, `fallback*`, `auto`, `quality` and `save_fallback` fields as a single conversion.
+Each entry in `results` carries the same `engine_*`, `fallback*`, `auto`, `quality`, `tables` and `save_fallback` fields as a single conversion.
 
 **cURL Example**:
 ```bash
@@ -183,6 +196,27 @@ Auto picks a concrete engine for each file and verifies the result. It never dow
 **GLM-OCR time limit.** GLM-OCR is chosen only for a file estimated to finish within 5 minutes on this computer (pages × measured seconds per page, plus a cold start). A longer file goes to Docling instead, and `auto.reason` says so (*"GLM-OCR would take about 25 min on this computer, so Docling was used"*); without Docling it goes to MarkItDown with a `hint` explaining how to run GLM-OCR explicitly. Explicit `engine=glm_ocr` has no limit.
 
 When MarkItDown's result fails the missing-text check and an OCR engine is installed, Auto converts again with it (Docling, or GLM-OCR within its time limit) and keeps the better result (reported in `auto.escalation`); only one file is saved. If Docling fails, Auto falls back to MarkItDown whatever the `fallback_to_markitdown` setting says, and reports it in `fallback`. If the code/formula model is not installed, Auto runs Docling without enrichment and says so in `auto.reason`. Explicit engines never re-run by themselves.
+
+**Page split (`auto_quality=thorough`).** A PDF with both text pages and pages that need OCR is read page by page: Docling for the text pages, GLM-OCR only for the others, joined in page order. GLM-OCR's time limit then counts its pages only. It needs both engines installed, leaves at least two pages to Docling and uses at most eight runs of consecutive pages; otherwise the file is converted whole as above. `auto.segments` lists who read which pages, and `engine_used` is the engine that read the most. A run whose engine fails is read by the next one (GLM-OCR → Docling → MarkItDown), reported in `fallback` and `warnings`.
+
+### <a id="table-check"></a>Table check (`auto_quality`)
+`auto_quality` is `fast` (the default: conversions are exactly as before), `balanced` or `thorough`. At Balanced and Thorough, after a PDF conversion InkDoc reads the PDF's own tables (from their ruling lines and the text layer, in the MarkItDown worker) on the pages that draw lines or boxes, plus the pages of any table of four or more columns in the result, and compares them with the Markdown:
+
+- **`engine=auto`**: a table the engine got wrong is replaced by the PDF's own. This covers side-by-side tables merged into one, a table shown as loose lines or as a picture placeholder, a dropped table, shapes in cells left out, and rows or columns that don't match. A table is replaced only when every word of the PDF's text layer inside it lands in one of its cells, and only the lines holding that table's own words are replaced. Each table InkDoc writes is preceded by `<!-- inkdoc:table page=N source=pdf-lines|pdf-words checked=text-layer -->`. A table that can't be verified or located is left as it was and reported in `tables.issues`.
+- **Explicit engines**: the tables are only checked. `tables.warning` and `tables.message` say what looks wrong; the Markdown is exactly the engine's.
+
+InkDoc writes tables in plain Markdown. A merged cell's text is repeated in each row and column it covers, and stacked header rows are flattened ("Revenue 2023"). A full-width row at the top becomes a caption line. Shapes and images in a cell are named by what is drawn: `[green shape]`, `[3 blue shapes]`, `[image]`. Borderless tables are split only when an engine merged them and the PDF shows a gutter between their columns. The engine's own cell text is kept. Pages turned by `/Rotate` and scanned pages (no text layer) are not table-checked.
+
+**Thorough, digital PDFs.** A digital PDF that Auto would give to MarkItDown goes to Docling instead (or to GLM-OCR when Docling isn't installed), in parts of 12 pages; `auto.reason` says so. Afterwards, from the PDF's own text:
+
+- Docling's `&amp;`, hyphens and straight quotes are put back to the PDF's `&`, dashes and curly quotes. A word changes only when the PDF spells it one way only.
+- The text inside each figure Docling marked `<!-- image -->` is added after the placeholder, as a table for a labelled bar chart: `<!-- inkdoc:figure-text page=N source=pdf-text -->`.
+- Rating grids drawn with markers become a table (label, rating, scale such as `○ ○ ○ ● ○ (green)`, `◀`/`▶` for change arrows); `source=pdf-shapes`.
+- Whole paragraphs the engine dropped (three or more lines) are put back after the block above them: `<!-- inkdoc:dropped-text page=N source=pdf-text -->`.
+
+`tables.figures_filled`, `tables.paragraphs_restored` and `tables.characters_restored` count these.
+
+**Thorough** also looks for tables without lines on every text page, from the positions of the PDF's words (`source=pdf-words`). Such a table is written only in two cases. First, the engine wrote no table there (loose lines, a picture, nothing). Second, GLM-OCR is installed and its reading of the same area (`Table Recognition:`) has the same rows and columns, with at least 90% of the cells alike. The written table keeps the PDF's own text and is marked `checked=text-layer,glm-ocr`. At most six tables per file are read a second time, within GLM-OCR's 5-minute limit. Without agreement the table is left as it is, with a line in `tables.details` and no warning.
 
 ### <a id="missing-text-check"></a>Missing-text check
 After a PDF conversion, InkDoc compares the Markdown with the PDF's own embedded text layer. It skips pages it cannot trust (image-only pages, OCR'd scans, CJK-heavy pages) and running headers/footers. `quality.warning` is `true` when about 10% or more of the document's text, or 25% of one page, is missing, when scanned pages were left unread by MarkItDown/Markit, or when the output is full of `(cid:N)` font junk. `quality.suggestion` names the engine to try (`docling`, `glm_ocr`, `markitdown`) or the engine to install (`install_docling`, `install_glm_ocr`). A GLM-OCR result with missing text suggests MarkItDown (a vision model can skip a table; the PDF's own text layer is what MarkItDown reads). The check is read-only: it never changes or delays the saved file (explicit engines save first, then check).
@@ -284,6 +318,7 @@ Query or update application engine preferences.
   {
     "fallback_to_markitdown": true,
     "quality_check_enabled": true,
+    "auto_quality": "fast",
     "glm_ocr_download_source": "auto",
     "layout_width": "standard",
     "preview_text_size": 100,
@@ -295,7 +330,7 @@ Query or update application engine preferences.
     "auto_hint_hidden": false
   }
   ```
-  `quality_check_enabled` (default `true`) turns the missing-text check on or off for requests that do not pass `check_quality`. `glm_ocr_download_source` is `auto` (official source first, InkDoc mirror as fallback) or `mirror_only`. `layout_width` (default `standard`) is how much of a wide window the UI uses: `standard` (up to 1400px), `wide` (up to 1920px) or `full`; any other value is refused with `422`. The UI applies it from the next page load. `preview_text_size` (default `100`) is the document preview's text size in percent: `85`, `90`, `100`, `110`, `120`, `135` or `150`; anything else is refused with `422`. `render_math` (default `true`) draws LaTeX math in the UI preview with the bundled KaTeX; it never changes conversion output, saved files or API responses.
+  `quality_check_enabled` (default `true`) turns the missing-text check on or off for requests that do not pass `check_quality`. `auto_quality` (default `fast`) is the [table check and page split](#table-check) level for requests that do not pass `auto_quality`: `fast`, `balanced` or `thorough`; anything else is refused with `422`. `glm_ocr_download_source` is `auto` (official source first, InkDoc mirror as fallback) or `mirror_only`. `layout_width` (default `standard`) is how much of a wide window the UI uses: `standard` (up to 1400px), `wide` (up to 1920px) or `full`; any other value is refused with `422`. The UI applies it from the next page load. `preview_text_size` (default `100`) is the document preview's text size in percent: `85`, `90`, `100`, `110`, `120`, `135` or `150`; anything else is refused with `422`. `render_math` (default `true`) draws LaTeX math in the UI preview with the bundled KaTeX; it never changes conversion output, saved files or API responses.
 
   Interface preferences, applied by the UI before first paint: `theme` (`dark`, the default, or `light`); `preferred_engine` (`auto`, the default, `markitdown`, `docling`, `markit` or `glm_ocr`), the engine selected on the main screen; `hidden_engines`, the engines whose button is hidden on the main screen (any of `markitdown`, `docling`, `markit`, `glm_ocr`; never `auto`; stored once each, in a fixed order); `auto_save` (default `false`), the Auto-save switch; `auto_hint_hidden` (default `false`), "Don't show again" on Auto's install tip. Any other value is refused with `422`. None of them changes what the conversion endpoints do: Auto and explicit `engine` values ignore `hidden_engines`, and only a request's own `save_to_downloads` saves a file. `legacy_prefs_imported` is set by the UI once it has moved these out of the browser storage InkDoc 1.2 used.
 
@@ -306,7 +341,7 @@ Query or update application engine preferences.
   `path` is where auto-save writes now; `chosen` is the folder picked in Settings (`""` for Downloads). The save folder can only be changed in the desktop app's folder dialog: `POST /settings` ignores `save_dir`, and no other request can set it.
 
 ### `POST /settings/reset`
-Restore the default preferences. Requires `X-InkDoc-Token`. Resets `theme`, `preferred_engine`, `hidden_engines`, `auto_save`, `auto_hint_hidden`, `fallback_to_markitdown`, `quality_check_enabled`, `layout_width`, `preview_text_size`, `render_math` and `check_for_updates_daily` in one write, and returns the same body as `GET /settings`. Installed engines and add-ons and their settings (Docling enrichment, GLM-OCR GPU and download source), the save folder and all files are kept. `503` as above if the file can't be written.
+Restore the default preferences. Requires `X-InkDoc-Token`. Resets `theme`, `preferred_engine`, `hidden_engines`, `auto_save`, `auto_hint_hidden`, `fallback_to_markitdown`, `quality_check_enabled`, `auto_quality`, `layout_width`, `preview_text_size`, `render_math` and `check_for_updates_daily` in one write, and returns the same body as `GET /settings`. Installed engines and add-ons and their settings (Docling enrichment, GLM-OCR GPU and download source), the save folder and all files are kept. `503` as above if the file can't be written.
 
 ---
 
@@ -378,6 +413,8 @@ Conversion responses include engine diagnostic headers:
 - `X-Auto-Reason`: Why Auto chose its engine (`engine=auto` only).
 - `X-Quality-Warning`: `true` or `false` when a PDF was checked for missing text.
 - `X-Quality-Missing-Pct`: Estimated share of the PDF's text missing from the output, when measured.
+- `X-Tables-Rebuilt`: How many tables InkDoc replaced with the PDF's own, when the [table check](#table-check) ran.
+- `X-Tables-Warning`: `true` when a table was found wrong and left as it was (always reported for explicit engines).
 - `X-Engine-Warnings`: Notes that are not failures (`warnings` in JSON), joined with ` | `.
 - `X-Save-Fallback`: Present when auto-save could not use the chosen save folder and saved to `~/Downloads` instead (`save_fallback` in JSON). Like the other text headers it is limited to 200 characters and non-Latin-1 characters become `?`; use `response_format=json` for the exact text.
 

@@ -257,11 +257,20 @@ class ConversionOptions:
     allow_engine_fallback: bool = True
     # Run the missing-text check after a PDF conversion (app/core/quality_check.py).
     quality_check: bool = True
+    # "fast" | "balanced" | "thorough" (app/core/table_stage.py). Balanced and
+    # Thorough check a PDF's tables against the PDF itself; Auto then replaces
+    # the ones an engine got wrong. Thorough also lets Auto split mixed PDFs
+    # by page and read hard tables with GLM-OCR.
+    auto_quality: str = "fast"
+    # GLM-OCR reads only these 1-based pages (Auto's page split); None = all.
+    page_subset: list[int] | None = None
 
     # Results written by whichever path ran, read by the server. Plain data only.
     engine_used: EngineKind | None = None   # always concrete, never AUTO
     auto_decision: Any = None               # auto_engine.AutoDecision when engine=auto
     quality_report: Any = None              # quality_check.QualityReport for PDFs
+    table_report: Any = None                # table_check.TableSummary when tables were checked
+    polish_counts: tuple[int, int] = (0, 0)  # Thorough: ('&' restored, words given back their dashes/quotes)
     # Notes about the result that are not failures (GLM-OCR: a page that looped
     # and was cut short, the GPU falling back to the CPU). Replaced, never
     # mutated in place, since dataclasses.replace shares the list.

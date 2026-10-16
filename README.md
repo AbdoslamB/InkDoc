@@ -240,6 +240,24 @@ After every PDF conversion, with any engine, InkDoc compares the Markdown with t
 
 When Auto's first result fails the check and Docling is installed, Auto converts once more with Docling and keeps the better result, and says so. That is the only automatic re-run: with an explicitly chosen engine, InkDoc warns and leaves the choice to you.
 
+### Table check (Auto quality)
+
+Complex tables are where every engine slips: side-by-side tables merged into one, merged cells shifted, tables that come out as loose lines or as a picture, shapes in cells dropped. **Settings → General → Auto quality** sets how hard InkDoc checks:
+
+- **Fast** (the default): conversions are exactly as before.
+- **Balanced**: after a PDF conversion InkDoc reads the PDF's own tables, from their ruling lines and the text layer, and compares them with the result. With **Auto**, a table the engine got wrong is rebuilt from the PDF. It is rebuilt only when every word of the PDF inside it lands in one of its cells, and it is marked in the saved file with `<!-- inkdoc:table page=3 source=pdf-lines checked=text-layer -->`. With other engines InkDoc only warns.
+- **Thorough**: the best result InkDoc can make, at the cost of speed. A digital PDF is read with Docling, which follows the page layout (columns, sidebars, side-by-side tables), instead of MarkItDown, which interleaves them. Long PDFs go in 12-page parts. Without Docling, GLM-OCR is used. Then InkDoc repairs what the engine missed, all from the PDF's own text:
+  - **Charts:** a chart's labels and values are added; a labelled bar chart becomes a table.
+  - **Rating grids:** grids drawn with coloured markers (Underweight … Overweight, with ◀ ▶ change arrows) are read from the markers and written as a table.
+  - **Dropped paragraphs:** whole paragraphs the engine left out are put back.
+  - **Simplified characters:** `&`, dashes and quotes are restored.
+  - **Mixed PDFs:** with GLM-OCR installed too, pages are split: Docling reads the text pages, GLM-OCR the scanned ones.
+  - **Tables without lines:** found from word positions and rebuilt only when GLM-OCR's reading of that area agrees.
+
+  On an 8-page investment report with two columns, side-by-side tables, rating grids and charts, Thorough found 97.5% of the PDF's words and filled 292 table cells. GLM-OCR found 89.6% and filled 217, and left the ratings and chart values out. The rest was page footers.
+
+Rebuilt tables are plain Markdown. Merged cells are repeated and stacked headers flattened ("Revenue 2023"). Shapes in cells are named by what is drawn ("[green shape]", "[3 blue shapes]"). On InkDoc's table test pages at Thorough, tables read exactly went from 2 to 12 of 12 with MarkItDown, from 3 to 12 of 12 with Docling and from 6 to 11 of 12 with GLM-OCR, with no invented cells.
+
 <br />
 
 ## <a id="formats"></a>Supported Document Formats
@@ -313,7 +331,7 @@ InkDoc ships with an embedded REST API for automated pipelines, agents, and deve
 
 | Endpoint | What it does |
 | :--- | :--- |
-| `POST /convert/file` | Upload a file (multipart). Choose an engine with `?engine=` (`markitdown`, `docling`, `markit`, `glm_ocr` or `auto`) and auto-save with `?save_to_downloads=true` (into the save folder chosen in Settings, `~/Downloads` by default). JSON responses include the missing-text check (`quality`) and Auto's choice (`auto`). |
+| `POST /convert/file` | Upload a file (multipart). Choose an engine with `?engine=` (`markitdown`, `docling`, `markit`, `glm_ocr` or `auto`) and auto-save with `?save_to_downloads=true` (into the save folder chosen in Settings, `~/Downloads` by default). JSON responses include the missing-text check (`quality`), Auto's choice (`auto`) and, with `?auto_quality=balanced` or `thorough`, the table check (`tables`). |
 | `POST /convert/url` | Convert a web page from a JSON body: `{"url": "...", "save_to_downloads": true}`. |
 | `GET /convert/progress/{job_id}` | Live phase of a conversion started with `?job_id=`; `POST /convert/cancel/{job_id}` stops it. |
 | `GET /docs` | Interactive OpenAPI (Swagger) UI. |
@@ -361,6 +379,8 @@ inkdoc/
 │   │   ├── auto_engine.py     # Auto engine: per-file routing & verified Docling retry
 │   │   ├── pdf_probe.py       # Fast PDF text-layer & scanned-page probe (pypdfium2)
 │   │   ├── quality_check.py   # Missing-text check for PDF conversions
+│   │   ├── table_stage.py     # Table check: find (table_finder.py), compare & rebuild (table_check.py)
+│   │   ├── markdown_tables.py # Reading & writing Markdown tables (merged cells, stacked headers)
 │   │   ├── jobs.py            # Conversion progress & cancel registry
 │   │   ├── glm_ocr_catalogue.py  # GLM-OCR pins, hashes & sources (+ signed online catalogue)
 │   │   ├── glm_ocr_manager.py    # GLM-OCR download (upstream → mirror), self-test, update, remove

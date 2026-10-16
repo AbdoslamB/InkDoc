@@ -1,11 +1,13 @@
 """One cheap CPU pass over a PDF, shared by the missing-text check and Auto.
 
 Reads each page's embedded text layer and the placement of its images with
-pdfium, without rendering anything. Two features use the result:
+pdfium, without rendering anything. Three features use the result:
 
 - app/core/quality_check.py compares a conversion's output with the text
   layer, and skips pages whose text is inside an image;
-- app/core/auto_engine.py routes scanned PDFs to an OCR engine.
+- app/core/auto_engine.py routes scanned PDFs to an OCR engine;
+- app/core/table_stage.py looks for tables only on pages with drawn lines or
+  boxes (rule_lines, vector_boxes), counted on the same walk over the page.
 
 Telling scans from cover photos
 -------------------------------
@@ -52,6 +54,16 @@ SCAN_CODECS = frozenset({"CCITTFaxDecode", "JBIG2Decode", "CCF", "JBIG2"})
 # Lowercased substrings of the Producer/Creator metadata written by scanner
 # software. "scan" is deliberately broad (ScanSnap, CamScanner, "Scanned by…").
 SCANNER_PRODUCERS = ("scan", "paper capture", "kofax", "naps2", "captiva")
+
+# Table candidates (app/core/table_stage.py): vector paths drawn on the page.
+# A ruling line is a path thinner than RULE_MAX_THICKNESS and at least
+# RULE_MIN_LENGTH long; a box is a path at least that thick both ways (a cell
+# outline, a shaded cell, a status square). Either count reaching
+# TABLE_MIN_PATHS makes the page worth a look for tables. Bounds only: no
+# path is decoded.
+RULE_MAX_THICKNESS = 2.5
+RULE_MIN_LENGTH = 15.0
+TABLE_MIN_PATHS = 4
 
 DEFAULT_MAX_PAGES = 500
 DEFAULT_TIME_BUDGET_S = 2.0
@@ -112,9 +124,16 @@ class PageProbe:
     scan_likely: bool = False  # image_only AND scan evidence: text almost certainly inside the image
     ocr_layer: bool = False    # char_count >= 25 and image_coverage >= 0.9: OCR'd scan
     scan_evidence: list[str] = field(default_factory=list)  # why scan_likely (for logs/tests)
+    rule_lines: int = 0        # thin vector paths (table borders, underlines)
+    vector_boxes: int = 0      # box-shaped vector paths (cell outlines, shading, shapes)
     # Per-page evidence gathered while reading; folded into scan_likely at the end.
     _codec: bool = field(default=False, repr=False)
     _gray_full: bool = field(default=False, repr=False)
+
+    @property
+    def table_candidate(self) -> bool:
+        """Drawn lines or boxes enough to hold a table (a cheap filter, not a verdict)."""
+        return self.rule_lines >= TABLE_MIN_PATHS or self.vector_boxes >= TABLE_MIN_PATHS
 
 
 @dataclass
@@ -138,6 +157,11 @@ class PdfProbe:
     @property
     def pages_probed(self) -> int:
         return len(self.pages)
+
+    @property
+    def table_pages(self) -> list[int]:
+        """1-based numbers of probed pages that may hold a drawn table."""
+        return [p.index + 1 for p in self.pages if p.table_candidate]
 
 
 def is_pdf(path: str | os.PathLike[str]) -> bool:
@@ -182,7 +206,27 @@ def _transform_rect(m: tuple[float, ...], rect: tuple[float, float, float, float
 _IDENTITY = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
 
 
-def _iter_images(page, pdfium, raw):
+def _count_path(obj, raw, ctm: tuple[float, ...] | None, paths: dict) -> None:
+    """Tally one vector path as a ruling line or a box, from its bounds only."""
+    import ctypes
+
+    left, bottom, right, top = (ctypes.c_float() for _ in range(4))
+    if not raw.FPDFPageObj_GetBounds(
+        obj, ctypes.byref(left), ctypes.byref(bottom), ctypes.byref(right), ctypes.byref(top)
+    ):
+        return
+    rect = (left.value, bottom.value, right.value, top.value)
+    if ctm is not None:
+        rect = _transform_rect(ctm, rect)
+    w, h = rect[2] - rect[0], rect[3] - rect[1]
+    if min(w, h) <= RULE_MAX_THICKNESS:
+        if max(w, h) >= RULE_MIN_LENGTH:
+            paths["rules"] += 1
+    elif w < 0.9 * paths["page_w"] and h < 0.9 * paths["page_h"]:
+        paths["boxes"] += 1
+
+
+def _iter_images(page, pdfium, raw, paths: dict | None = None):
     """Yield (image object, bounds in page space) for every image, following forms.
 
     pdfium reports the bounds of an object inside a Form XObject in the form's
@@ -190,7 +234,9 @@ def _iter_images(page, pdfium, raw):
     reports half its real size). Each form's matrix is composed on the way down
     so every image comes back in page coordinates. Objects are visited through
     the raw API so text and path objects, which can number in the tens of
-    thousands on a chart-heavy page, cost one type check each.
+    thousands on a chart-heavy page, cost one type check each. With `paths`
+    ({"rules", "boxes", "page_w", "page_h"}), vector paths are tallied on the
+    same walk (one bounds call each).
     """
 
     def walk(container, is_form: bool, ctm: tuple[float, ...], depth: int):
@@ -210,6 +256,8 @@ def _iter_images(page, pdfium, raw):
                 except Exception:
                     continue
                 yield helper, (_transform_rect(ctm, bounds) if depth else bounds)
+            elif kind == raw.FPDF_PAGEOBJ_PATH and paths is not None:
+                _count_path(obj, raw, ctm if depth else None, paths)
             elif kind == raw.FPDF_PAGEOBJ_FORM and depth < FORM_MAX_DEPTH - 1:
                 helper = pdfium.PdfObject(obj, page=page, pdf=page.pdf, level=depth)
                 try:
@@ -233,7 +281,8 @@ def _probe_page(page, index: int, pdfium, raw) -> PageProbe:
     page_area = max(width * height, 1.0)
     covered = 0.0
     images: list[tuple[object, float]] = []
-    for img, (left, bottom, right, top) in _iter_images(page, pdfium, raw):
+    paths = {"rules": 0, "boxes": 0, "page_w": width, "page_h": height}
+    for img, (left, bottom, right, top) in _iter_images(page, pdfium, raw, paths):
         # Clip to the page box; overlapping images are rare enough to just sum.
         w = max(0.0, min(right, width) - max(left, 0.0))
         h = max(0.0, min(top, height) - max(bottom, 0.0))
@@ -250,6 +299,8 @@ def _probe_page(page, index: int, pdfium, raw) -> PageProbe:
         image_coverage=round(coverage, 4),
         image_only=image_only,
         ocr_layer=char_count >= IMAGE_ONLY_MAX_CHARS and coverage >= OCR_LAYER_MIN_COVERAGE,
+        rule_lines=paths["rules"],
+        vector_boxes=paths["boxes"],
     )
     if not image_only:
         return result

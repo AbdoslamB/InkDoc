@@ -286,13 +286,18 @@ def convert_with_glm_ocr(item: QueueItem, options: ConversionOptions) -> str:
     job = getattr(options, "job", None) or NULL_JOB
     server = GlmOcrServer.get_instance()
     pages = open_pages(item.source)
-    total = pages.count
     long_side = mgr.render_long_side()
     ctx_size = DEFAULT_CTX_SIZE
     token_factor = 1.0          # actual / estimated image tokens, learned from page 1
     results: list[str] = []
     warnings: list[str] = []
     page_seconds: list[float] = []
+    # Auto's page split reads only some pages (1-based); labels keep their numbers.
+    subset = getattr(options, "page_subset", None)
+    indices = (
+        [p - 1 for p in subset if 1 <= p <= pages.count] if subset else list(range(pages.count))
+    )
+    total = len(indices)
 
     try:
         if total <= 0:
@@ -301,21 +306,23 @@ def convert_with_glm_ocr(item: QueueItem, options: ConversionOptions) -> str:
         if cold:
             job.set_phase("starting", "Starting GLM-OCR…", engine="glm_ocr")
         job.set_pages(0, total)
-        for index in range(total):
+        for position, index in enumerate(indices):
             job.raise_if_cancelled()
-            job.set_phase(
-                "converting",
-                f"Reading page {index + 1} of {total} with GLM-OCR…" if total > 1 else "Reading with GLM-OCR…",
-                engine="glm_ocr",
-            )
+            if subset:
+                message = f"Reading page {index + 1} ({position + 1} of {total}) with GLM-OCR…"
+            elif total > 1:
+                message = f"Reading page {index + 1} of {total} with GLM-OCR…"
+            else:
+                message = "Reading with GLM-OCR…"
+            job.set_phase("converting", message, engine="glm_ocr")
             started = time.time()
             text, token_factor = _read_page(
-                server, pages, index, total, long_side, ctx_size, token_factor, warnings, image_to_data_uri,
+                server, pages, index, pages.count, long_side, ctx_size, token_factor, warnings, image_to_data_uri,
             )
-            if not (cold and index == 0):     # the first page after a cold start also loads the model
+            if not (cold and position == 0):  # the first page after a cold start also loads the model
                 page_seconds.append(time.time() - started)
             results.append(text)
-            job.set_pages(index + 1, total)
+            job.set_pages(position + 1, total)
     except GlmOcrServerError as exc:
         # Its messages are written for the user ("did not become ready within 90
         # seconds", "needs the Visual C++ Redistributable").
@@ -379,6 +386,89 @@ def _read_page(
     return clean_page_output(text), token_factor
 
 
+# ─── One table area (the table check's second reading) ───────────────────────
+TABLE_PROMPT = "Table Recognition:"
+CROP_PAD_PT = 6.0
+MAX_CROP_SCALE = 4.0          # small tables are enlarged, but not without limit
+
+
+def render_region(path: str, page: int, bbox: list[float], long_side: int) -> Any:
+    """An RGB image of one area of a PDF page.
+
+    `bbox` is (x0, top, x1, bottom) in points from the top-left corner (the
+    table finder's coordinates). The page is cut down to the area before
+    rendering, so a small table costs a small image. pdfium lock held.
+    """
+    import pypdfium2 as pdfium
+
+    from app.core.pdf_probe import pdfium_lock
+
+    x0, top, x1, bottom = (float(v) for v in bbox)
+    with pdfium_lock():
+        doc = pdfium.PdfDocument(path)
+        try:
+            pg = doc[page - 1]
+            try:
+                width, height = pg.get_size()
+                left = max(0.0, x0 - CROP_PAD_PT)
+                right = max(0.0, width - (x1 + CROP_PAD_PT))
+                upper = max(0.0, top - CROP_PAD_PT)
+                lower = max(0.0, height - (bottom + CROP_PAD_PT))
+                area_w = max(1.0, width - left - right)
+                area_h = max(1.0, height - upper - lower)
+                scale = min(MAX_CROP_SCALE, long_side / max(area_w, area_h))
+                bitmap = pg.render(scale=scale, crop=(left, lower, right, upper))
+                try:
+                    return bitmap.to_pil().convert("RGB")
+                finally:
+                    bitmap.close()
+            finally:
+                pg.close()
+        finally:
+            doc.close()
+
+
+def table_rows_from_output(text: str) -> list[list[str]] | None:
+    """The rows of the first table in a model answer (HTML or pipe), InkDoc's way; None if none."""
+    from app.core.markdown_tables import find_table_blocks, parse_html_cells, to_markdown_grid
+
+    text = clean_page_output(text)
+    if "<table" in text.lower():
+        cells, n_rows, n_cols = parse_html_cells(text)
+        _captions, rows = to_markdown_grid(cells, n_rows, n_cols)
+        return rows or None
+    blocks = find_table_blocks(text.split("\n"))
+    return blocks[0].rows if blocks else None
+
+
+def read_table_region(path: str, page: int, bbox: list[float]) -> list[list[str]] | None:
+    """GLM-OCR's reading of one table area, as rows (header first); None if it read no table.
+
+    Used by the table check at Thorough as an independent second reading of a
+    table found from word positions (app/core/table_stage.confirm_tables).
+    An answer that loops or runs out of room counts as no reading.
+    """
+    from app.core.engines.glm_ocr_server import DEFAULT_CTX_SIZE, GlmOcrServer, image_to_data_uri
+    from app.core.glm_ocr_manager import GlmOcrManager
+
+    mgr = GlmOcrManager.get_instance()
+    if not mgr.is_usable():
+        return None
+    side = mgr.render_long_side()
+    for _attempt in range(MAX_RERENDERS + 1):
+        img = render_region(path, page, bbox, side)
+        budget = output_budget(DEFAULT_CTX_SIZE, estimate_image_tokens(img.width, img.height))
+        if budget is not None:
+            break
+        side = int(side * RERENDER_FACTOR)
+    else:
+        return None
+    result = GlmOcrServer.get_instance().ocr(image_to_data_uri(_png_bytes(img)), TABLE_PROMPT, budget)
+    if result.finish_reason == "length" or find_repetition_start(result.text) is not None:
+        return None
+    return table_rows_from_output(result.text)
+
+
 def estimate_for_file(path: str) -> dict[str, Any]:
     """Pages and estimated seconds for converting `path` with GLM-OCR now."""
     from app.core.glm_ocr_manager import LONG_JOB_SECONDS, GlmOcrManager
@@ -407,6 +497,9 @@ __all__ = [
     "find_repetition_start",
     "open_pages",
     "output_budget",
+    "read_table_region",
+    "render_region",
     "scaled_size",
+    "table_rows_from_output",
 ]
 

@@ -257,6 +257,19 @@ def _quality_check_enabled(override: bool | None) -> bool:
         return True
 
 
+def _auto_quality_level(override: str | None) -> str:
+    """The per-request override, else the user's "Auto quality" setting (default fast)."""
+    from app.core.table_stage import DEFAULT_LEVEL, normalize_level
+
+    if override is not None:
+        return normalize_level(override)
+    try:
+        return normalize_level(EngineManager.get_instance().get_settings().get("auto_quality"))
+    except Exception as exc:
+        logger.warning("Could not read the Auto quality setting: %s", exc)
+        return DEFAULT_LEVEL
+
+
 def _start_job(job_id: str | None) -> Any:
     """A progress/cancel handle for `job_id`, or a no-op one when none was sent."""
     from app.core.jobs import JOBS, NULL_JOB, is_valid_job_id
@@ -271,24 +284,34 @@ def _start_job(job_id: str | None) -> Any:
     return JOBS.start(job_id)
 
 
-def _assess_in_thread(source_path: str, markdown: str, engine_used: EngineKind) -> Any:
-    """Missing-text check for an explicit engine. Never raises; None for non-PDFs."""
+def _assess_in_thread(
+    source_path: str, markdown: str, engine_used: EngineKind, check_text: bool = True
+) -> tuple[Any, Any]:
+    """(missing-text report or None, probe or None) for an explicit engine. Never raises.
+
+    The probe is returned so the table check reuses it rather than reading the
+    PDF twice; both are None for anything that is not a PDF.
+    """
     try:
         from app.core.auto_engine import ocr_install_target, ocr_status
-        from app.core.pdf_probe import is_pdf
+        from app.core.pdf_probe import is_pdf, probe_pdf
         from app.core.quality_check import assess
 
         if not is_pdf(source_path):
-            return None
+            return None, None
+        probe = probe_pdf(source_path)
+        if not check_text:
+            return None, probe
         ocr_engine, installable = ocr_status()
         target = ocr_install_target() if installable else None
-        return assess(
-            source_path, markdown, engine_used, ocr_engine=ocr_engine, ocr_installable=installable,
-            ocr_install_engine=target or "docling",
+        report = assess(
+            source_path, markdown, engine_used, probe=probe, ocr_engine=ocr_engine,
+            ocr_installable=installable, ocr_install_engine=target or "docling",
         )
+        return report, probe
     except Exception as exc:
         logger.warning("Missing-text check failed: %s", exc)
-        return None
+        return None, None
 
 
 async def _run_quality_check(source_path: str, markdown: str, options: ConversionOptions, job: Any) -> None:
@@ -296,9 +319,14 @@ async def _run_quality_check(source_path: str, markdown: str, options: Conversio
 
     Runs outside the engine lane and inside the probe lane, so it neither holds
     a conversion slot nor a thread while it waits. Only adds information to the
-    response; the saved file is never touched.
+    response; the saved file is never touched. At the Balanced and Thorough
+    "Auto quality" levels the PDF's tables are checked too (report only: an
+    explicit engine's output is never changed).
     """
-    if not options.quality_check:
+    from app.core.table_stage import checks_tables
+
+    check_tables = checks_tables(options.auto_quality)
+    if not options.quality_check and not check_tables:
         return
     engine_used = options.engine_used or (
         EngineKind.MARKITDOWN if options.fallback_occurred else options.engine
@@ -306,9 +334,20 @@ async def _run_quality_check(source_path: str, markdown: str, options: Conversio
     if job is not None:
         job.set_phase("checking", "Checking…")
     async with get_probe_semaphore():
-        options.quality_report = await asyncio.to_thread(
-            _assess_in_thread, source_path, markdown, engine_used
+        options.quality_report, probe = await asyncio.to_thread(
+            _assess_in_thread, source_path, markdown, engine_used, options.quality_check
         )
+    if check_tables and probe is not None:
+        from app.core.table_stage import run_table_stage
+
+        if job is not None:
+            job.set_phase("checking", "Checking tables…")
+        # The file is already saved: no job handle, so a late cancel cannot turn
+        # a finished conversion into a cancelled one.
+        async with get_conversion_semaphore(EngineKind.MARKITDOWN):
+            _unchanged, options.table_report = await asyncio.to_thread(
+                run_table_stage, source_path, markdown, probe, repair_allowed=False
+            )
 
 
 async def _convert_explicit(
@@ -388,6 +427,7 @@ def _conversion_payload(options: ConversionOptions, engine_kind: EngineKind) -> 
         engine_used = EngineKind.MARKITDOWN
     decision = getattr(options, "auto_decision", None)
     report = getattr(options, "quality_report", None)
+    tables = getattr(options, "table_report", None)
     return {
         "engine_requested": engine_kind.value,
         "engine_used": engine_used.value,
@@ -395,6 +435,9 @@ def _conversion_payload(options: ConversionOptions, engine_kind: EngineKind) -> 
         "fallback_reason": fallback_reason,
         "auto": decision.to_dict(engine_used) if engine_kind == EngineKind.AUTO and decision else None,
         "quality": report.to_dict() if report is not None else None,
+        # The table check (Auto quality Balanced/Thorough): tables compared with
+        # the PDF, the ones InkDoc rebuilt and where from, and any left wrong.
+        "tables": tables.to_dict() if tables is not None else None,
         # Notes that are not failures, e.g. a GLM-OCR page cut short because the
         # model repeated itself, or GPU acceleration falling back to the CPU.
         "warnings": list(getattr(options, "engine_warnings", None) or []),
@@ -423,6 +466,10 @@ def _markdown_response(markdown_text: str, payload: dict[str, Any]) -> PlainText
         resp.headers["X-Quality-Warning"] = str(bool(quality.get("warning"))).lower()
         if quality.get("missing_pct") is not None:
             resp.headers["X-Quality-Missing-Pct"] = str(quality["missing_pct"])
+    tables = payload.get("tables")
+    if tables and tables.get("checked"):
+        resp.headers["X-Tables-Rebuilt"] = str(sum(r.get("tables", 0) for r in tables.get("repaired", [])))
+        resp.headers["X-Tables-Warning"] = str(bool(tables.get("warning"))).lower()
     return resp
 
 
@@ -707,6 +754,14 @@ CHECK_QUALITY_DESCRIPTION = (
     "Run the missing-text check on PDFs (overrides the user's setting for this request). "
     "Omit to use the setting."
 )
+AUTO_QUALITY_DESCRIPTION = (
+    "'fast', 'balanced' or 'thorough' (overrides the user's 'Auto quality' setting for this "
+    "request; omit to use it). Balanced and Thorough check a PDF's tables against the PDF and "
+    "report them in `tables`; with engine=auto, tables an engine got wrong are replaced by the "
+    "PDF's own, each marked with a comment. Thorough also lets Auto split mixed PDFs by page "
+    "and read hard tables with GLM-OCR."
+)
+AutoQuality = Literal["fast", "balanced", "thorough"]
 JOB_ID_DESCRIPTION = (
     "Optional client-generated id (8-100 chars of letters, digits, - _ . :) for "
     "GET /convert/progress/{job_id} and POST /convert/cancel/{job_id}"
@@ -730,6 +785,7 @@ class UrlConvertRequest(BaseModel):
         description=ENGINE_PARAM_DESCRIPTION,
     )
     check_quality: bool | None = Field(default=None, description=CHECK_QUALITY_DESCRIPTION)
+    auto_quality: AutoQuality | None = Field(default=None, description=AUTO_QUALITY_DESCRIPTION)
     job_id: str | None = Field(default=None, description=JOB_ID_DESCRIPTION)
 
 
@@ -761,6 +817,14 @@ class SettingsPayload(BaseModel):
         description=(
             "Compare each PDF conversion with the PDF's embedded text and warn when part "
             "of it is missing. Read-only; never changes the saved file."
+        ),
+    )
+    auto_quality: AutoQuality | None = Field(
+        default=None,
+        description=(
+            "'fast' (the default: convert as before), 'balanced' (check PDF tables against "
+            "the PDF; Auto replaces the ones an engine got wrong) or 'thorough' (also page "
+            "splitting and GLM-OCR table reading in Auto)."
         ),
     )
     glm_ocr_download_source: str | None = Field(
@@ -1620,6 +1684,7 @@ async def convert_file(
         description="Output format: 'text' returns raw Markdown; 'json' returns JSON metadata and content",
     ),
     check_quality: bool | None = Query(None, description=CHECK_QUALITY_DESCRIPTION),
+    auto_quality: AutoQuality | None = Query(None, description=AUTO_QUALITY_DESCRIPTION),
     job_id: str | None = Query(None, description=JOB_ID_DESCRIPTION),
 ):
     """Convert an uploaded file (PDF, DOCX, XLSX, PPTX, Images, Audio, HTML, etc.) to Markdown."""
@@ -1645,6 +1710,7 @@ async def convert_file(
             keep_data_uris=keep_data_uris,
             engine=engine_kind,
             quality_check=_quality_check_enabled(check_quality),
+            auto_quality=_auto_quality_level(auto_quality),
             **_docling_enrichment_options(engine_kind),
         )
         if engine_kind == EngineKind.AUTO:
@@ -1742,6 +1808,7 @@ async def convert_url(
             keep_data_uris=payload.keep_data_uris,
             engine=engine_kind,
             quality_check=_quality_check_enabled(payload.check_quality),
+            auto_quality=_auto_quality_level(payload.auto_quality),
             **_docling_enrichment_options(engine_kind),
         )
         # Fetched first, in a thread but outside any lane: the fetch has its own
@@ -1834,6 +1901,7 @@ async def convert_batch(
     enable_plugins: bool = Query(False, description="Enable MarkItDown plugins"),
     engine: str = Query("markitdown", description=ENGINE_PARAM_DESCRIPTION),
     check_quality: bool | None = Query(None, description=CHECK_QUALITY_DESCRIPTION),
+    auto_quality: AutoQuality | None = Query(None, description=AUTO_QUALITY_DESCRIPTION),
     job_id: str | None = Query(
         None,
         description=JOB_ID_DESCRIPTION + "; each file reports under '<job_id>-<index>' (0-based)",
@@ -1858,6 +1926,7 @@ async def convert_batch(
         enable_plugins=enable_plugins,
         engine=engine_kind,
         quality_check=_quality_check_enabled(check_quality),
+        auto_quality=_auto_quality_level(auto_quality),
         **_docling_enrichment_options(engine_kind),
     )
 

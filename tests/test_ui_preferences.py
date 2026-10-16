@@ -471,6 +471,7 @@ CHANGED = {
     "auto_hint_hidden": True,
     "fallback_to_markitdown": True,
     "quality_check_enabled": False,
+    "auto_quality": "thorough",
     "layout_width": "full",
     "preview_text_size": 150,
     "render_math": False,

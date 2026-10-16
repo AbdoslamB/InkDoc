@@ -206,6 +206,49 @@ def test_length_limit_triggers_the_retry(fake, tmp_path):
     assert len(server.calls) == 2 and opts.engine_warnings
 
 
+def test_a_page_subset_reads_only_those_pages_and_keeps_their_numbers(fake, tmp_path):
+    # Auto's page split: pages 2 and 4 of a five-page PDF.
+    server, _ = fake
+    loop = "Header\n" + "same line\n" * 20
+    server.replies = ["second", loop, loop]
+    registry = JobRegistry()
+    job = registry.start("job-subset-1")
+    pdf = write_pdf(tmp_path / "doc.pdf", [prose_page(30, i) for i in range(5)])
+    md, opts = convert(pdf, ConversionOptions(engine=EngineKind.GLM_OCR, job=job, page_subset=[2, 4, 9]))
+    assert len(server.calls) == 3  # page 2, then page 4 twice (the repeat retry); 9 doesn't exist
+    assert md.startswith("second\n\nHeader")
+    assert any(w.startswith("Page 4:") for w in opts.engine_warnings), "the real page number"
+    final = registry.get("job-subset-1")
+    assert final["page"] == 2 and final["pages"] == 2
+
+
+# ─── One table area (the table check's second reading) ───────────────────────
+def test_a_table_area_is_read_with_the_table_prompt(fake, tmp_path):
+    server, _ = fake
+    server.replies = ['<table border="1"><tr><th rowspan="2">Region</th><th colspan="2">Sales</th></tr>'
+                      "<tr><td>Q1</td><td>Q2</td></tr><tr><td>North</td><td>10</td><td>12</td></tr></table>"]
+    pdf = write_pdf(tmp_path / "doc.pdf", [prose_page()])
+    rows = ge.read_table_region(str(pdf), 1, [100, 100, 300, 160])
+    assert server.calls[0]["prompt"] == "Table Recognition:"
+    # InkDoc's rules: the stacked header is flattened, merged cells repeated.
+    assert rows == [["Region", "Sales Q1", "Sales Q2"], ["North", "10", "12"]]
+    # Only the area (plus a small margin) is rendered, at about the render size.
+    width, height = server.calls[0]["size"]
+    assert abs(width / height - (200 + 12) / (60 + 12)) < 0.05
+    assert max(width, height) <= 1600
+
+
+def test_a_looping_or_tableless_answer_is_no_reading(fake, tmp_path):
+    server, _ = fake
+    pdf = write_pdf(tmp_path / "doc.pdf", [prose_page()])
+    server.replies = ["| a | b |\n|---|---|\n" + "| 1 | 2 |\n" * 12]
+    assert ge.read_table_region(str(pdf), 1, [100, 100, 300, 160]) is None
+    server.replies = ["Just some text."]
+    assert ge.read_table_region(str(pdf), 1, [100, 100, 300, 160]) is None
+    server.replies = ["```markdown\n| a | b |\n|---|---|\n| 1 | 2 |\n```"]
+    assert ge.read_table_region(str(pdf), 1, [100, 100, 300, 160]) == [["a", "b"], ["1", "2"]]
+
+
 def test_progress_is_reported_after_each_page(fake, tmp_path):
     server, _ = fake
     registry = JobRegistry()

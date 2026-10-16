@@ -821,7 +821,6 @@ async def run_auto(
 
     job.set_phase("routing", "Choosing an engine…")
     ocr_engines, install_target, pdf = await asyncio.to_thread(_availability, path)
-    glm_usable = EngineKind.GLM_OCR in ocr_engines  # before any time limit: a table area is small
     docling_usable_now = EngineKind.DOCLING in ocr_engines
     installable = install_target is not None
     install_name = engine_label(EngineKind(install_target)) if install_target else "Docling"
@@ -833,7 +832,8 @@ async def run_auto(
             probe = await asyncio.to_thread(probe_pdf, path)
 
     # The "Auto quality" steps on for this conversion (app/core/thorough_passes.py),
-    # judged on what is installed, before GLM-OCR's time limit.
+    # judged on what is installed. GLM-OCR's time limit applies below, where it
+    # would read whole pages; reading a table area takes seconds.
     plan = PassPlan(
         options.auto_quality, available={e.value for e in ocr_engines}, disabled=options.passes_off
     )
@@ -910,15 +910,6 @@ async def run_auto(
             )
         used = options.engine_used or decision.engine
 
-    if pdf and plan.on("polish"):
-        if probe is None:
-            log.skipped("polish", "the PDF could not be read")
-        elif used in (EngineKind.MARKITDOWN, EngineKind.MARKIT):
-            log.ran("polish")  # they copy the text layer as it is
-        else:
-            markdown = await asyncio.to_thread(_polish, markdown, probe, used, options)
-            log.ran("polish", sum(options.polish_counts))
-
     report: QualityReport | None = None
     if pdf and options.quality_check:
         job.raise_if_cancelled()
@@ -977,19 +968,28 @@ async def run_auto(
         decision.escalated = True
         decision.escalation = escalation
 
+    # The steps that edit a result run once, on the result kept.
+    converted = markdown
+    if pdf and plan.on("polish"):
+        if probe is None:
+            log.skipped("polish", "the PDF could not be read")
+        elif used in (EngineKind.MARKITDOWN, EngineKind.MARKIT):
+            log.ran("polish")  # they copy the text layer as it is
+        else:
+            markdown = await asyncio.to_thread(_polish, markdown, probe, used, options)
+            log.ran("polish", sum(options.polish_counts))
     if pdf and plan.relevant():
-        before = markdown
         markdown = await _check_tables(
-            path, markdown, probe, options, lane=lane, job=job, plan=plan, log=log, glm_usable=glm_usable
+            path, markdown, probe, options, lane=lane, job=job, plan=plan, log=log
         )
-        if markdown != before and report is not None and report.checked and probe is not None:
-            # The words are the same, but the check describes the saved text.
-            ocr_engine = ocr_engines[0] if ocr_engines else None
-            report = await asyncio.to_thread(
-                assess, path, markdown, used,
-                probe=probe, ocr_engine=ocr_engine, ocr_installable=installable,
-                ocr_install_engine=install_target or "docling",
-            )
+    if markdown != converted and report is not None and report.checked and probe is not None:
+        # The words are the same, but the check describes the saved text.
+        ocr_engine = ocr_engines[0] if ocr_engines else None
+        report = await asyncio.to_thread(
+            assess, path, markdown, used,
+            probe=probe, ocr_engine=ocr_engine, ocr_installable=installable,
+            ocr_install_engine=install_target or "docling",
+        )
 
     options.engine_used = used
     options.quality_report = report
@@ -1006,14 +1006,13 @@ async def _check_tables(
     job: JobHandle,
     plan: PassPlan,
     log: PassLog,
-    glm_usable: bool = False,
 ) -> str:
     """The table stage for Auto: check, and replace what the engine got wrong.
 
     The finder runs in the MarkItDown worker, so the inspection takes
     MarkItDown's lane. Tables found from word positions are read a second
-    time by GLM-OCR, in GLM-OCR's lane (only when it is installed), before
-    anything is written. Which of this runs is `plan`'s to say; what each
+    time by GLM-OCR, in GLM-OCR's lane, before anything is written (the step
+    needs GLM-OCR installed). Which of this runs is `plan`'s to say; what each
     step did goes into `log` and the report's `passes`.
     """
     from app.core.table_check import TableSummary
@@ -1031,8 +1030,7 @@ async def _check_tables(
             inspection = await asyncio.to_thread(
                 inspect_tables, path, markdown, probe, detectors=plan.detectors(), job=job
             )
-        pending = pending_confirmations(inspection) if plan.on("borderless_tables") else []
-        if pending and glm_usable:
+        if plan.on("borderless_tables") and pending_confirmations(inspection):
             from app.core.engines.glm_ocr_engine import read_table_region
 
             async with lane(EngineKind.GLM_OCR):
@@ -1041,7 +1039,7 @@ async def _check_tables(
         result, summary = await asyncio.to_thread(
             finish_tables, inspection, repair_allowed=True, kinds=plan.table_kinds()
         )
-        _log_table_passes(log, plan, inspection, unconfirmed=bool(pending) and not glm_usable)
+        _log_table_passes(log, plan, inspection)
     else:
         inspection = None
         result, summary = markdown, TableSummary(checked=False, skipped_reason=SKIP_SWITCHED_OFF)
@@ -1104,7 +1102,7 @@ def _unread_reason(inspection: Any) -> str:
     return "the PDF could not be read" if early.skipped_reason == SKIP_UNREADABLE else "the table check failed"
 
 
-def _log_table_passes(log: PassLog, plan: PassPlan, inspection: Any, *, unconfirmed: bool) -> None:
+def _log_table_passes(log: PassLog, plan: PassPlan, inspection: Any) -> None:
     """What the table check and the finder's steps did: tables written, per step."""
     names = [p.name for p in PASSES if p.table_kinds and plan.on(p.name)]
     if inspection.early is not None and not inspection.early.checked:
@@ -1120,10 +1118,7 @@ def _log_table_passes(log: PassLog, plan: PassPlan, inspection: Any, *, unconfir
                 if name in written:
                     written[name] += 1
     for name, count in written.items():
-        if name == "borderless_tables" and unconfirmed and not count:
-            log.skipped(name, "GLM-OCR isn't installed to confirm them")
-        else:
-            log.ran(name, count)
+        log.ran(name, count)
 
 
 def run_auto_blocking(

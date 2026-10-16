@@ -472,6 +472,7 @@ CHANGED = {
     "fallback_to_markitdown": True,
     "quality_check_enabled": False,
     "auto_quality": "thorough",
+    "thorough_passes_off": ["polish"],
     "layout_width": "full",
     "preview_text_size": 150,
     "render_math": False,

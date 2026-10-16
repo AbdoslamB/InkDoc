@@ -18,7 +18,7 @@ from app.core.auto_engine import run_auto
 from app.core.converter import ConversionOptions
 from app.core.queue_model import EngineKind, QueueItem, SourceKind
 from app.core.table_finder import find_tables
-from tests._pdf_fixtures import write_pdf
+from tests._pdf_fixtures import prose_page, write_pdf
 from tests._table_fixtures import FIXTURES
 
 BOTH = {"docling", "glm_ocr"}
@@ -53,16 +53,20 @@ def test_thorough_with_both_engines_runs_every_step():
                                   tp.TABLE_KIND_BORDERLESS}
 
 
-@pytest.mark.parametrize("available, layout, split", [
-    (set(), "needs Docling or GLM-OCR", "needs Docling and GLM-OCR"),
-    ({"docling"}, "", "needs Docling and GLM-OCR"),
-    ({"glm_ocr"}, "", "needs Docling and GLM-OCR"),
-    (BOTH, "", ""),
+@pytest.mark.parametrize("available, layout, split, borderless", [
+    (set(), "needs Docling or GLM-OCR", "needs Docling and GLM-OCR", "needs GLM-OCR"),
+    ({"docling"}, "", "needs Docling and GLM-OCR", "needs GLM-OCR"),
+    ({"glm_ocr"}, "", "needs Docling and GLM-OCR", ""),
+    (BOTH, "", "", ""),
 ])
-def test_steps_that_need_an_engine_say_which(available, layout, split):
+def test_steps_that_need_an_engine_say_which(available, layout, split, borderless):
     plan = tp.PassPlan("thorough", available)
     assert plan.reason("digital_layout") == layout
     assert plan.reason("page_split") == split
+    # Tables without lines are written only once GLM-OCR agrees: without it,
+    # the finder doesn't look for them at all.
+    assert plan.reason("borderless_tables") == borderless
+    assert (tp.DETECT_BORDERLESS in plan.detectors()) == (not borderless)
     assert plan.on("polish") and plan.on("figure_text")  # no engine needed
 
 
@@ -97,6 +101,13 @@ def test_the_log_reports_every_step_of_the_level():
     assert tp.PassLog(tp.PassPlan("fast")).to_list() == []
 
 
+def test_known_names_keep_only_steps_once_in_run_order():
+    assert tp.known_names(["polish", "nope", "digital_layout", "polish"]) == ("digital_layout", "polish")
+    assert tp.known_names({"figure_text"}) == ("figure_text",)
+    for junk in (None, "polish", 3, {"polish": True}):
+        assert tp.known_names(junk) == (), junk
+
+
 def test_catalogue_lists_every_step():
     cat = tp.catalogue()
     assert [c["name"] for c in cat] == list(tp.PASS_NAMES)
@@ -124,31 +135,43 @@ LOOSE_PAIR = (
 )
 
 
+D, G, M = EngineKind.DOCLING, EngineKind.GLM_OCR, EngineKind.MARKITDOWN
+
+
 @pytest.fixture
 def auto(monkeypatch, tmp_path):
-    """run(fixture, engine reply, level, off) with Docling installed (a stand-in) and no GLM-OCR."""
+    """run(doc, reply, ...): Auto with stand-in engines and the table finder in this process.
+
+    `doc` is a fixture name or a list of pages; `reply` the Markdown every
+    engine returns, or {engine: Markdown}; `engines` the OCR engines installed
+    (Docling alone by default).
+    """
     asked: list[list[str]] = []
-    reply = {"text": ""}
+    state: dict = {"reply": "", "engines": [D], "runs": 0}
 
     def fake_convert(item, options, engine, fetched):
         options.engine_used = engine
-        return reply["text"]
+        reply = state["reply"]
+        return reply[engine] if isinstance(reply, dict) else reply
 
     def finder(path, pages, _job, **kwargs):
         asked.append(list(kwargs.get("detectors") or []))
         return find_tables(path, pages, **kwargs)
 
     monkeypatch.setattr(auto_engine, "_convert_once", fake_convert)
-    monkeypatch.setattr(auto_engine, "ocr_engines_usable", lambda: [EngineKind.DOCLING])
+    monkeypatch.setattr(auto_engine, "ocr_engines_usable", lambda: list(state["engines"]))
+    monkeypatch.setattr(auto_engine, "glm_estimate_seconds", lambda *a: 10.0)
+    monkeypatch.setattr(auto_engine, "glm_estimate_for_pages", lambda n: 10.0 * n)
     monkeypatch.setattr(table_stage, "_find_in_worker", finder)
 
-    def run(fixture: str, text: str, level: str = "thorough", off=()):
-        pages, _ = FIXTURES[fixture]()
-        pdf = str(write_pdf(tmp_path / f"{fixture}.pdf", pages))
-        reply["text"] = text
+    def run(doc, reply, level="thorough", off=(), engines=(D,), quality_check=False):
+        pages = FIXTURES[doc]()[0] if isinstance(doc, str) else doc
+        state["runs"] += 1
+        pdf = str(write_pdf(tmp_path / f"doc{state['runs']}.pdf", pages))
+        state.update(reply=reply, engines=list(engines))
         item = QueueItem(source=pdf, kind=SourceKind.FILE, display_name="doc.pdf", engine=EngineKind.AUTO)
         options = ConversionOptions(
-            engine=EngineKind.AUTO, auto_quality=level, passes_off=tuple(off), quality_check=False
+            engine=EngineKind.AUTO, auto_quality=level, passes_off=tuple(off), quality_check=quality_check
         )
         markdown = asyncio.run(run_auto(item, options))
         report = options.table_report
@@ -161,7 +184,7 @@ def test_auto_reports_what_each_step_did(auto):
     run, asked = auto
     markdown, options, passes = run("rating_grid", EMPTY_GRID)
     assert "source=pdf-shapes" in markdown and "| Equities | | | |" not in markdown
-    assert asked == [[tp.DETECT_RATING_GRIDS, tp.DETECT_BORDERLESS, tp.DETECT_SEGMENTS]]
+    assert asked == [[tp.DETECT_RATING_GRIDS, tp.DETECT_SEGMENTS]]
     assert list(passes) == list(tp.PASS_NAMES)
     assert passes["digital_layout"] == {"name": "digital_layout", "ran": True, "changed": 1, "skipped": ""}
     assert options.engine_used == EngineKind.DOCLING
@@ -175,15 +198,45 @@ def test_a_step_switched_off_is_not_run_and_says_so(auto):
     run, asked = auto
     markdown, _options, passes = run("rating_grid", EMPTY_GRID, off={"rating_grids"})
     assert "| Equities | | | |" in markdown and "source=pdf-shapes" not in markdown
-    assert asked == [[tp.DETECT_BORDERLESS, tp.DETECT_SEGMENTS]], "the finder never looks for markers"
+    assert asked == [[tp.DETECT_SEGMENTS]], "the finder never looks for markers"
     assert passes["rating_grids"] == {"name": "rating_grids", "ran": False, "changed": 0, "skipped": "switched off"}
 
 
-def test_tables_without_lines_wait_for_glm_ocr(auto):
-    run, _asked = auto
+def test_tables_without_lines_need_glm_ocr_to_confirm_them(auto, monkeypatch):
+    import app.core.engines.glm_ocr_engine as glm_ocr_engine
+
+    run, asked = auto
     markdown, _options, passes = run("side_by_side_borderless", LOOSE_PAIR)
     assert "inkdoc:table" not in markdown
-    assert passes["borderless_tables"]["skipped"] == "GLM-OCR isn't installed to confirm them"
+    assert passes["borderless_tables"]["skipped"] == "needs GLM-OCR"
+    assert tp.DETECT_BORDERLESS not in asked[-1], "not looked for when they can't be confirmed"
+
+    truth = [t["rows"] for t in FIXTURES["side_by_side_borderless"]()[1]]
+    readings: list[tuple[int, list[float]]] = []
+
+    def read_table_region(path, page, bbox):
+        readings.append((page, bbox))
+        return truth[len(readings) - 1]
+
+    monkeypatch.setattr(glm_ocr_engine, "read_table_region", read_table_region)
+    markdown, _options, passes = run("side_by_side_borderless", LOOSE_PAIR, engines=(G, D))
+    assert len(readings) == 2
+    assert markdown.count("checked=text-layer,glm-ocr") == 2
+    assert passes["borderless_tables"] == {"name": "borderless_tables", "ran": True, "changed": 2, "skipped": ""}
+
+
+def test_the_polish_applies_to_the_result_auto_keeps(auto):
+    # MarkItDown first (the layout step is off), its result misses most of the
+    # text, so Auto converts again with Docling and keeps that: the polish has
+    # to run on Docling's result, not on the one thrown away.
+    run, _asked = auto
+    page = prose_page(120, extra_lines=["Research by Fenner & Smith and partners"])
+    full = "\n\n".join(page["lines"])
+    reply = {M: page["lines"][0], D: full.replace("&", "&amp;")}
+    markdown, options, passes = run([page], reply, off={"digital_layout"}, quality_check=True)
+    assert options.auto_decision.escalated and options.engine_used == D
+    assert "Fenner & Smith" in markdown and "&amp;" not in markdown
+    assert passes["polish"]["changed"] == 1 and options.table_report.characters_restored == 1
 
 
 def test_a_failing_addition_costs_nothing_but_itself(auto, monkeypatch):

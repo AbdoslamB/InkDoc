@@ -256,6 +256,8 @@ Complex tables are where every engine slips: side-by-side tables merged into one
 
   On an 8-page investment report with two columns, side-by-side tables, rating grids and charts, Thorough found 97.5% of the PDF's words and filled 292 table cells. GLM-OCR found 89.6% and filled 217, and left the ratings and chart values out. The rest was page footers.
 
+  Each of these is a step you can switch off under **Auto quality → Steps**. A step that needs an engine you haven't installed is greyed out, with a button to install it.
+
 Rebuilt tables are plain Markdown. Merged cells are repeated and stacked headers flattened ("Revenue 2023"). Shapes in cells are named by what is drawn ("[green shape]", "[3 blue shapes]"). On InkDoc's table test pages at Thorough, tables read exactly went from 2 to 12 of 12 with MarkItDown, from 3 to 12 of 12 with Docling and from 6 to 11 of 12 with GLM-OCR, with no invented cells.
 
 <br />

@@ -76,6 +76,7 @@ try:
     from app.core.queue_model import EngineKind, QueueItem, SourceKind
     from app.core.save_location import folder_state, save_markdown
     from app.core.security import SSRFValidationError, validate_url_for_ssrf
+    from app.core.thorough_passes import PASS_NAMES, catalogue, known_names
     from app.core.url_fetcher import (
         UrlFetchError,
         UrlFetchSizeExceededError,
@@ -257,17 +258,21 @@ def _quality_check_enabled(override: bool | None) -> bool:
         return True
 
 
-def _auto_quality_level(override: str | None) -> str:
-    """The per-request override, else the user's "Auto quality" setting (default fast)."""
-    from app.core.table_stage import DEFAULT_LEVEL, normalize_level
+def _auto_quality_options(override: str | None) -> dict[str, Any]:
+    """ConversionOptions' "Auto quality" fields: the level (the per-request override,
+    else the user's setting; default fast) and the steps the user switched off."""
+    from app.core.table_stage import normalize_level
 
-    if override is not None:
-        return normalize_level(override)
     try:
-        return normalize_level(EngineManager.get_instance().get_settings().get("auto_quality"))
+        settings = EngineManager.get_instance().get_settings()
     except Exception as exc:
-        logger.warning("Could not read the Auto quality setting: %s", exc)
-        return DEFAULT_LEVEL
+        logger.warning("Could not read the Auto quality settings: %s", exc)
+        settings = {}
+    level = override if override is not None else settings.get("auto_quality")
+    return {
+        "auto_quality": normalize_level(level),
+        "passes_off": known_names(settings.get("thorough_passes_off")),
+    }
 
 
 def _start_job(job_id: str | None) -> Any:
@@ -762,6 +767,7 @@ AUTO_QUALITY_DESCRIPTION = (
     "and read hard tables with GLM-OCR."
 )
 AutoQuality = Literal["fast", "balanced", "thorough"]
+PassName = Literal[PASS_NAMES]  # the steps of app/core/thorough_passes.py
 JOB_ID_DESCRIPTION = (
     "Optional client-generated id (8-100 chars of letters, digits, - _ . :) for "
     "GET /convert/progress/{job_id} and POST /convert/cancel/{job_id}"
@@ -825,6 +831,15 @@ class SettingsPayload(BaseModel):
             "'fast' (the default: convert as before), 'balanced' (check PDF tables against "
             "the PDF; Auto replaces the ones an engine got wrong) or 'thorough' (also page "
             "splitting and GLM-OCR table reading in Auto)."
+        ),
+    )
+    thorough_passes_off: list[PassName] | None = Field(
+        default=None,
+        max_length=len(PASS_NAMES),
+        description=(
+            "Steps of Balanced and Thorough not to run, by name (default: none). GET /settings "
+            "lists every step in `thorough_passes`; `tables.passes` in a conversion says what "
+            "each did."
         ),
     )
     glm_ocr_download_source: str | None = Field(
@@ -1481,6 +1496,8 @@ def get_settings():
     # The folder auto-save writes to now. Read-only here: it is chosen in the
     # desktop app's folder dialog, never through POST /settings.
     settings["save_folder"] = folder_state()
+    # The steps of Balanced and Thorough, for their switches (read-only).
+    settings["thorough_passes"] = catalogue()
     return settings
 
 
@@ -1516,6 +1533,8 @@ def update_settings(payload: SettingsPayload, request: Request):
         updates["hidden_engines"] = [
             name for name in HIDEABLE_ENGINES if name in updates["hidden_engines"]
         ]
+    if "thorough_passes_off" in updates:
+        updates["thorough_passes_off"] = list(known_names(updates["thorough_passes_off"]))
 
     try:
         return EngineManager.get_instance().update_settings(updates, strict=True)
@@ -1537,10 +1556,10 @@ def reset_settings(request: Request):
     """Restore the default preferences. Requires session token.
 
     Resets the theme, the engine choice and which engines are hidden, auto-save,
-    Auto's tip, the Docling fallback, the PDF check, layout width, text size,
-    math formulas and the daily update check. Keeps installed engines and
-    add-ons and their setup, the save folder, and every file. Returns the same
-    body as GET /settings.
+    Auto's tip, the Docling fallback, the PDF check, Auto quality and its steps,
+    layout width, text size, math formulas and the daily update check. Keeps
+    installed engines and add-ons and their setup, the save folder, and every
+    file. Returns the same body as GET /settings.
     """
     require_session_token(request)
     try:
@@ -1710,7 +1729,7 @@ async def convert_file(
             keep_data_uris=keep_data_uris,
             engine=engine_kind,
             quality_check=_quality_check_enabled(check_quality),
-            auto_quality=_auto_quality_level(auto_quality),
+            **_auto_quality_options(auto_quality),
             **_docling_enrichment_options(engine_kind),
         )
         if engine_kind == EngineKind.AUTO:
@@ -1808,7 +1827,7 @@ async def convert_url(
             keep_data_uris=payload.keep_data_uris,
             engine=engine_kind,
             quality_check=_quality_check_enabled(payload.check_quality),
-            auto_quality=_auto_quality_level(payload.auto_quality),
+            **_auto_quality_options(payload.auto_quality),
             **_docling_enrichment_options(engine_kind),
         )
         # Fetched first, in a thread but outside any lane: the fetch has its own
@@ -1926,7 +1945,7 @@ async def convert_batch(
         enable_plugins=enable_plugins,
         engine=engine_kind,
         quality_check=_quality_check_enabled(check_quality),
-        auto_quality=_auto_quality_level(auto_quality),
+        **_auto_quality_options(auto_quality),
         **_docling_enrichment_options(engine_kind),
     )
 

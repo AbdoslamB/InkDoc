@@ -141,6 +141,13 @@
                       </div>
                     </div>
                     <p class="settings-caption" id="autoQualityCaption">Balanced checks every PDF's tables against the PDF itself: side-by-side tables, merged cells and shapes in cells. In Auto, a table an engine got wrong is rebuilt from the PDF and marked in the file. Thorough reads digital PDFs with Docling (layout-aware) instead of MarkItDown, adds the text of charts, rating grids drawn with markers and paragraphs the engine dropped, splits mixed PDFs by page and, with GLM-OCR installed, rebuilds tables without lines once GLM-OCR's reading agrees. Slower; other engines are only checked, never changed.</p>
+                    <!-- One switch per step, built by app.js from GET /settings
+                         (thorough_passes); hidden until that list arrives. -->
+                    <details class="auto-steps" id="autoSteps" hidden>
+                      <summary>Steps</summary>
+                      <p class="settings-caption">What Balanced and Thorough add to an engine's result. A step switched off never runs; new steps arrive switched on.</p>
+                      <ul class="auto-steps-list" id="autoStepsList" aria-label="Steps of Balanced and Thorough"></ul>
+                    </details>
                   </div>
                 </div>
 

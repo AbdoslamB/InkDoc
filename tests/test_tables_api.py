@@ -98,6 +98,46 @@ def test_only_known_levels_are_accepted():
     assert client.post("/settings", json={"auto_quality": "thorough"}).status_code in (401, 403)
 
 
+# ─── Steps switched off (Settings: thorough_passes_off) ──────────────────────
+def _off(value, headers=TOKEN):
+    return client.post("/settings", json={"thorough_passes_off": value}, headers=headers)
+
+
+def test_steps_switched_off_are_checked_against_the_registry():
+    from app.core.engine_manager import EngineManager
+    from app.core.thorough_passes import PASS_NAMES, catalogue
+
+    body = client.get("/settings").json()
+    assert body["thorough_passes_off"] == [], "every step on by default"
+    assert body["thorough_passes"] == catalogue(), "the page's switches come from the registry"
+    assert _off(["polish", "digital_layout", "polish"]).status_code == 200
+    stored = lambda: EngineManager.get_instance().get_settings()["thorough_passes_off"]  # noqa: E731
+    assert stored() == ["digital_layout", "polish"], "once each, in run order"
+    for bad in (["nope"], "polish", [3], [*PASS_NAMES, "polish"]):
+        assert _off(bad).status_code == 422, bad
+    assert stored() == ["digital_layout", "polish"], "a refused change changes nothing"
+    assert _off([], headers={}).status_code == 403
+    assert _off([]).status_code == 200 and stored() == []
+
+
+def test_a_step_switched_off_is_not_run():
+    assert _off(["table_check"]).status_code == 200
+    data = _convert("auto", level="balanced").json()
+    assert len(find_table_blocks(data["markdown"].split("\n"))) == 1, "MarkItDown's own table, untouched"
+    tables = data["tables"]
+    assert tables["checked"] is False and tables["skipped_reason"] == "switched_off"
+    assert tables["passes"] == [{"name": "table_check", "ran": False, "changed": 0, "skipped": "switched off"}]
+    assert _convert("markitdown", level="balanced").json()["tables"] is None, "explicit engines skip it too"
+
+
+def test_a_hand_edited_list_never_breaks_a_conversion():
+    from app.core.engine_manager import EngineManager
+
+    EngineManager.get_instance().update_settings({"thorough_passes_off": "table_check"})
+    data = _convert("auto", level="balanced").json()
+    assert data["tables"]["repaired"], "not a list: nothing is off"
+
+
 def test_restore_defaults_puts_fast_back():
     client.post("/settings", json={"auto_quality": "thorough"}, headers=TOKEN)
     assert client.post("/settings/reset", headers=TOKEN).json()["auto_quality"] == "fast"

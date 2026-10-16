@@ -321,6 +321,21 @@ document.addEventListener("DOMContentLoaded", () => {
       : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
     return `ui-${rand}`;
   }
+
+  // What a step of Auto quality (GET /settings: thorough_passes) still needs
+  // here: null when it can run, else { text: "Needs GLM-OCR", install: "glm_ocr" }.
+  // available(engine) is true, false, or undefined while not known yet, which
+  // counts as available so nothing greys out before the engines' status arrives.
+  function autoStepNeeds(step, available) {
+    const missing = (names) => (Array.isArray(names) ? names : []).filter((e) => available(e) === false);
+    const all = missing(step.needs_all);
+    if (all.length) return { text: `Needs ${all.map(getEngineDisplayName).join(" and ")}`, install: all[0] };
+    const any = Array.isArray(step.needs_any) ? step.needs_any : [];
+    if (any.length && missing(any).length === any.length) {
+      return { text: `Needs ${any.map(getEngineDisplayName).join(" or ")}`, install: any[0] };
+    }
+    return null;
+  }
   // ─── End of pure helpers ──
 
   // ─── State ───────────────────────────────────────────────────────────────
@@ -794,6 +809,18 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  // Settings on Engines, with that engine's card open and its buttons (Install,
+  // Download, Verify…) in the middle of the pane: GLM-OCR's card is the last and
+  // tallest, and at the bottom a toast would cover them.
+  const ENGINE_CARD_IDS = { docling: "engineCardDocling", glm_ocr: "engineCardGlmOcr" };
+  function openEngineCard(e, engine) {
+    openSettings(e, "engines");
+    const card = document.getElementById(ENGINE_CARD_IDS[engine]);
+    if (!card) return;
+    card.open = true;
+    (card.querySelector(".engine-actions") || card).scrollIntoView({ block: "center" });
+  }
+
   // Bind unified pill clicks
   allEnginePills.forEach((btn) => {
     if (btn) {
@@ -804,14 +831,7 @@ document.addEventListener("DOMContentLoaded", () => {
           return;
         }
         if (btn.dataset.engine === "glm_ocr" && btn.classList.contains("is-installable")) {
-          openSettings(e, "engines");
-          const card = document.getElementById("engineCardGlmOcr");
-          if (card) {
-            card.open = true;
-            // Its buttons (Download, Verify…) to the middle of the pane: the card
-            // is the last and tallest, and at the bottom the toast would cover them.
-            (card.querySelector(".engine-actions") || card).scrollIntoView({ block: "center" });
-          }
+          openEngineCard(e, "glm_ocr");
           showToast(
             glmStatus && glmStatus.installed
               ? "GLM-OCR didn't pass its self-test. Run it again in Settings."
@@ -1490,6 +1510,7 @@ document.addEventListener("DOMContentLoaded", () => {
       // Docling's state may have changed either way: Auto while the chosen
       // engine can't be used, the choice again once it can.
       restorePreferredEngine();
+      updateAutoSteps();
       // The add-on's installability is derived from pack state, so it has to be
       // re-read whenever that changes. refreshEngines returns early on several
       // paths, so this belongs in finally rather than at the end of the body.
@@ -1595,6 +1616,7 @@ document.addEventListener("DOMContentLoaded", () => {
             : "GLM-OCR isn't downloaded. Click to open Settings and download it.");
     }
     restorePreferredEngine();
+    updateAutoSteps();
     setVisibilitySwitchAvailable("glm_ocr", offer, st.reason || "GLM-OCR is not available for this computer.");
 
     if (glmOptions) glmOptions.style.display = st.installed ? "block" : "none";
@@ -2256,6 +2278,7 @@ document.addEventListener("DOMContentLoaded", () => {
       doclingFormulaEnrichmentToggle.checked = Boolean(s.docling_formula_enrichment);
     }
     if (s.auto_quality !== undefined) syncAutoQuality(s.auto_quality);
+    syncAutoSteps(s.thorough_passes, s.thorough_passes_off);
     if (s.layout_width !== undefined) syncLayoutWidth(s.layout_width);
     if (s.preview_text_size !== undefined) syncTextSize(s.preview_text_size);
     if (s.render_math !== undefined) syncRenderMath(s.render_math);
@@ -2446,6 +2469,115 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   // ─── End Auto quality ────────────────────────────────────────────────────
 
+  // ─── Auto quality steps ──────────────────────────────────────────────────
+  // One switch per step of Balanced and Thorough, under Auto quality. The steps
+  // come from GET /settings (thorough_passes, app/core/thorough_passes.py), so
+  // the page keeps no list of its own. The setting is the list of steps
+  // switched off (thorough_passes_off), so a new step arrives on. A step whose
+  // engine isn't usable here is greyed out, with a button to install it. A
+  // change applies at once and is undone if it can't be saved.
+  const autoStepsBox = document.getElementById("autoSteps");
+  const autoStepsList = document.getElementById("autoStepsList");
+  const autoStepRows = new Map(); // step name -> its row's elements
+  let autoStepsOff = [];
+  let autoStepsSaves = 0; // newest save wins; loadSettings waits for it
+
+  function syncAutoSteps(steps, off) {
+    if (Array.isArray(steps)) buildAutoSteps(steps);
+    if (autoStepsSaves === 0 && Array.isArray(off)) {
+      // Names this version doesn't know would make the next save fail.
+      autoStepsOff = off.filter((name) => autoStepRows.has(name));
+    }
+    updateAutoSteps();
+  }
+
+  // Built once per list of steps, then only updated: a refresh never takes the
+  // focus away from a switch.
+  function buildAutoSteps(steps) {
+    if (!autoStepsList) return;
+    const valid = steps.filter((s) => s && typeof s.name === "string" && typeof s.title === "string");
+    if (valid.map((s) => s.name).join() === [...autoStepRows.keys()].join()) return;
+    autoStepRows.clear();
+    autoStepsList.replaceChildren(...valid.map(autoStepRow));
+    if (autoStepsBox) autoStepsBox.hidden = valid.length === 0;
+  }
+
+  function autoStepRow(step) {
+    const el = (tag, className, text) => {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text) node.textContent = text;
+      return node;
+    };
+    const input = el("input");
+    input.type = "checkbox";
+    input.dataset.autoStep = step.name;
+    const label = el("label", "toggle-switch");
+    label.append(
+      input,
+      el("span", "toggle-slider"),
+      el("span", "toggle-label", step.title),
+      el("span", "auto-step-level", step.level === "balanced" ? "Balanced and Thorough" : "Thorough"),
+    );
+    const description = el("p", "settings-caption", step.description);
+    description.id = `autoStepDesc-${step.name}`;
+    input.setAttribute("aria-describedby", description.id);
+    const needsText = el("span");
+    const separator = el("span", "", "·");
+    separator.setAttribute("aria-hidden", "true");
+    const install = el("button", "btn btn-sm btn-secondary", "Install");
+    install.type = "button";
+    const needs = el("p", "auto-step-needs");
+    needs.hidden = true;
+    needs.append(needsText, separator, install);
+    const row = el("li", "auto-step");
+    row.append(label, description, needs);
+    input.addEventListener("change", () => setAutoStep(step.name, input.checked));
+    install.addEventListener("click", (e) => openEngineCard(e, install.dataset.engine));
+    autoStepRows.set(step.name, { step, input, label, needs, needsText, install });
+    return row;
+  }
+
+  // Each switch from the setting, and greyed out while its engine isn't usable.
+  // Run again whenever an engine's status changes.
+  function updateAutoSteps() {
+    autoStepRows.forEach(({ step, input, label, needs, needsText, install }, name) => {
+      input.checked = !autoStepsOff.includes(name);
+      const missing = autoStepNeeds(step, engineAvailable);
+      input.disabled = Boolean(missing);
+      label.title = missing ? missing.text : "";
+      needs.hidden = !missing;
+      if (!missing) return;
+      needsText.textContent = missing.text;
+      install.dataset.engine = missing.install;
+      install.setAttribute("aria-label", `Install ${getEngineDisplayName(missing.install)}`);
+    });
+  }
+
+  async function setAutoStep(name, on) {
+    const previous = autoStepsOff;
+    autoStepsOff = previous.filter((n) => n !== name).concat(on ? [] : [name]);
+    updateAutoSteps();
+    const save = ++autoStepsSaves;
+    let saved = false;
+    try {
+      const resp = await fetchWithToken(`${apiBase}/settings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ thorough_passes_off: autoStepsOff }),
+      });
+      saved = resp.ok;
+    } catch (_) {}
+    if (save !== autoStepsSaves) return; // a newer change is on its way
+    autoStepsSaves = 0;
+    if (!saved) {
+      autoStepsOff = previous;
+      updateAutoSteps();
+      showToast("Couldn't save that step.", "error");
+    }
+  }
+  // ─── End Auto quality steps ──────────────────────────────────────────────
+
   // ─── Layout width ────────────────────────────────────────────────────────
   // How much of a wide window InkDoc uses (Settings → General → Display). The
   // server puts the saved choice on <html> before first paint, so the page
@@ -2609,7 +2741,7 @@ document.addEventListener("DOMContentLoaded", () => {
       title: "Restore default settings?",
       message: "InkDoc's appearance and preferences go back to how they were when it was installed.",
       details: [
-        "Reset: theme, engine choice and hidden engines, auto-save, Auto's tips, Docling fallback, PDF check, layout width, text size, math formulas and the daily update check.",
+        "Reset: theme, engine choice and hidden engines, auto-save, Auto's tips, Docling fallback, PDF check, Auto quality and its steps, layout width, text size, math formulas and the daily update check.",
         "Kept: installed engines and add-ons and their settings, your save folder, and every converted file.",
       ],
       confirmText: "Restore defaults",

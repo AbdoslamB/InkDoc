@@ -97,6 +97,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # against the PDF and lets Auto replace wrong ones; Thorough adds page
     # splitting and GLM-OCR table reading in Auto.
     "auto_quality": "fast",
+    # Steps of Balanced and Thorough switched off, by name (app/core/thorough_passes.py).
+    # A list of what is off, so a step added in a later version arrives switched on.
+    "thorough_passes_off": [],
     "glm_ocr_use_gpu": False,
     "glm_ocr_download_source": "auto",
     "glm_ocr_catalogue_seen": 0,
@@ -155,6 +158,7 @@ RESETTABLE_SETTINGS = (
     "fallback_to_markitdown",
     "quality_check_enabled",
     "auto_quality",
+    "thorough_passes_off",
     "layout_width",
     "preview_text_size",
     "render_math",

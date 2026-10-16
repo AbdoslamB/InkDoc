@@ -51,12 +51,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **What each step did** (API): `tables.passes` lists every step of the
   chosen Auto quality level, whether it ran, what it changed, or why it was
   skipped (for example "needs Docling and GLM-OCR").
+- **Switch single steps off** (Settings → General → Auto quality → Steps):
+  one switch per step of Balanced and Thorough, all on by default. A step that
+  needs an engine you haven't installed is greyed out, with a button to
+  install it. The API has a matching `thorough_passes_off` setting.
 - **Tables without lines (Thorough).** A borderless table that the engine
   wrote as loose text or dropped is found from the positions of the PDF's
   words. It is rebuilt only when GLM-OCR's own reading of that area agrees,
-  and it keeps the PDF's exact text. Without GLM-OCR such a table is noted in
-  the details but never written. Two-column articles, tables of contents and
-  forms are not mistaken for tables.
+  and it keeps the PDF's exact text, so this step needs GLM-OCR installed.
+  Two-column articles, tables of contents and forms are not mistaken for
+  tables.
 - **Show or hide engines** (Settings → Engines): each engine card starts with a
   **Show on main screen** switch. Turning it off removes that engine's button
   from the main screen and marks the card **Hidden**; the engine stays
@@ -65,8 +69,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Switch engine** skips hidden engines.
 - **Restore defaults** (Settings → General, at the bottom): puts the theme,
   engine choice and hidden engines, auto-save, Auto's tips, the Docling
-  fallback, the PDF check, layout width, text size, math formulas and the daily
-  update check back to how InkDoc starts out, after asking. Installed engines
+  fallback, the PDF check, Auto quality and its steps, layout width, text size,
+  math formulas and the daily update check back to how InkDoc starts out, after
+  asking. Installed engines
   and add-ons and their settings, the save folder and converted files are kept.
   The API has a matching `POST /settings/reset`.
 

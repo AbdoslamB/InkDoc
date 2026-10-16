@@ -735,6 +735,60 @@ html[data-layout-width="full"] {
   border-top: 1px solid var(--divider);
 }
 
+/* Auto quality -> Steps (General): one switch per step of Balanced and
+   Thorough, built by app.js. Collapsed until opened, like GLM-OCR's Advanced. */
+.auto-steps {
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.auto-steps > summary {
+  cursor: pointer;
+  color: var(--muted);
+  user-select: none;
+}
+
+.auto-steps-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+}
+
+.auto-step + .auto-step {
+  margin-top: 10px;
+}
+
+.auto-step-level {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+/* Under the step's name: past the switch (34px) and the label's gap (8px). */
+.auto-step .settings-caption,
+.auto-step-needs {
+  margin-top: 2px;
+  padding-left: 42px;
+}
+
+.auto-step-needs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.auto-step-needs[hidden] {
+  display: none;
+}
+
+.auto-step-needs .btn {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
 /* Restore defaults: the last section of General. */
 .settings-reset {
   border-top: 1px solid var(--divider);

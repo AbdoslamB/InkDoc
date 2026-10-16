@@ -161,6 +161,7 @@ node tests/layout_width_ui.test.js
 node tests/text_size_ui.test.js
 node tests/math_render_ui.test.js
 node tests/tables_ui.test.js
+node tests/auto_steps_ui.test.js
 
 # Optional: how engines read tables, before and after the table check
 # (synthetic test pages, plus your own PDFs with NAME.tables.json; see the script)

@@ -14,6 +14,9 @@ Stages, in the order a conversion meets them:
 - finder:       extra things the finder looks for on every text page
 - after_tables: additions once the tables are settled
 
+Steps can be switched off one by one (the `thorough_passes_off` setting,
+Settings -> General -> Auto quality -> Steps); a new step arrives switched on.
+
 Adding a step: a PassInfo below (its place in PASSES is its order), its work
 in its own module, and a call where its stage runs. Nothing here imports
 anything heavy.
@@ -98,8 +101,8 @@ PASSES: tuple[PassInfo, ...] = (
         "borderless_tables", "Tables without lines",
         "Finds borderless tables from the positions of the PDF's words; writes one only when GLM-OCR's "
         "reading of the same area agrees.",
-        LEVEL_THOROUGH, STAGE_FINDER, detector=DETECT_BORDERLESS, table_kinds=(TABLE_KIND_BORDERLESS,),
-        cost="medium",
+        LEVEL_THOROUGH, STAGE_FINDER, needs_all=("glm_ocr",), detector=DETECT_BORDERLESS,
+        table_kinds=(TABLE_KIND_BORDERLESS,), cost="medium",
     ),
     PassInfo(
         "figure_text", "Chart text",
@@ -118,6 +121,13 @@ PASS_NAMES: tuple[str, ...] = tuple(p.name for p in PASSES)
 
 def level_rank(level: Any) -> int:
     return _LEVEL_RANK.get(level, 0)
+
+
+def known_names(names: Any) -> tuple[str, ...]:
+    """The step names among `names`, once each, in run order; anything else is dropped."""
+    if not isinstance(names, (list, tuple, set, frozenset)):
+        return ()
+    return tuple(n for n in PASS_NAMES if n in names)
 
 
 def _needs_text(names: Iterable[str], joiner: str) -> str:
@@ -194,7 +204,7 @@ class PassLog:
 
 
 def catalogue() -> list[dict[str, Any]]:
-    """Every step, for the Settings page (Phase B) and the API documentation."""
+    """Every step, for the Settings page (GET /settings) and the API documentation."""
     return [
         {
             "name": p.name, "title": p.title, "description": p.description, "level": p.level,

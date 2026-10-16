@@ -27,7 +27,13 @@
     "built from this repository does, so it is 1.0.0. worker.py is hashed into the",
     "pack manifest and the launcher rejects a modified copy, so raise it (via",
     "MIN_PACK_VERSION in scripts/build_addon.py) when the add-on comes to depend on",
-    "worker behaviour an already-published pack lacks."
+    "worker behaviour an already-published pack lacks.",
+    "",
+    "layout_model has target 'inkdoc': it installs into InkDoc's own add-on folder",
+    "and InkDoc loads it (app/core/engines/layout_model.py). Its url, sha256, sizes",
+    "and sha256_files are written by scripts/build_layout_addon.py. pack_copy pins",
+    "the identical file the Docling engine pack ships, which is used instead when",
+    "present, so Docling users download nothing."
   ],
   "addons": {
     "code_enrichment": {
@@ -87,6 +93,29 @@
         "tokenizer_config.json": "37a0e94be9c9ab5197b2188e61cf764bbc015f45261013881fe37bd2fe8599e6",
         "vocab.json": "8922f7e91084b9862d270c16ce1027071214aa252a1567a4b410f952101005fc"
       }
+    },
+    "layout_model": {
+      "title": "Layout model",
+      "description": "Finds the tables on scanned pages, so GLM-OCR can read each one on its own (Auto quality: Thorough). Docling's layout model \"heron\", run by InkDoc on this computer.",
+      "target": "inkdoc",
+      "license": "Apache-2.0",
+      "model_dir": "docling-layout-heron-onnx",
+      "url": "",
+      "sha256": "",
+      "archive_format": "tar.gz",
+      "size_bytes": 0,
+      "uncompressed_size_bytes": 0,
+      "min_pack_version": "",
+      "min_app_version": "",
+      "source_repo": "docling-project/docling-layout-heron-onnx",
+      "source_revision": "40bde044036bb181c130ddf6c51792187268748f",
+      "pack_copy": {
+        "dir": "docling-project--docling-layout-heron-onnx",
+        "sha256_files": {
+          "model.onnx": "59c81a3a2923042d85034ffc487f8f47e4854117e879aef89b2b9f728fb4922a"
+        }
+      },
+      "sha256_files": {}
     }
   }
 }

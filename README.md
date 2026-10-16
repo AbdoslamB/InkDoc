@@ -253,6 +253,7 @@ Complex tables are where every engine slips: side-by-side tables merged into one
   - **Simplified characters:** `&`, dashes and quotes are restored.
   - **Mixed PDFs:** with GLM-OCR installed too, pages are split: Docling reads the text pages, GLM-OCR the scanned ones.
   - **Tables without lines:** found from word positions and rebuilt only when GLM-OCR's reading of that area agrees.
+  - **Tables on scanned pages:** with GLM-OCR and the layout model (Settings → Add-ons; the Docling engine already includes it), each table on a scanned page is found and read again on its own. A table GLM-OCR wrote as plain lines, merged with its neighbour or with a shifted header comes out as a table, but only when the second reading holds the same words. On InkDoc's table test pages scanned at 200 DPI, tables read exactly went from 4 to 9 of 13, with no invented cells.
 
   On an 8-page investment report with two columns, side-by-side tables, rating grids and charts, Thorough found 97.5% of the PDF's words and filled 292 table cells. GLM-OCR found 89.6% and filled 217, and left the ratings and chart values out. The rest was page footers.
 

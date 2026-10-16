@@ -122,6 +122,8 @@ Steps are what Balanced and Thorough add to an engine's result (for example the 
 3. **Call it** where its stage runs (`run_auto` or `_check_tables` in [`app/core/auto_engine.py`](app/core/auto_engine.py)), only when `plan.on("<name>")`, and record what it did with `log.ran(...)` or `log.skipped(...)`. That record is the response's `tables.passes`.
 4. **Test it**: the step's own behaviour, and its `tables.passes` entry (see `tests/test_thorough_passes.py`).
 
+A step that needs a model is still core code; the model is an add-on. Put the code that runs the model under `app/core/engines/` (it runs in the MarkItDown worker, so InkDoc's own process never loads its runtime), describe the model in [`app/core/addons.json`](app/core/addons.json), and name it in the step's `needs_all`. "Tables on scanned pages" is the example: `scanned_tables.py` is the step, `engines/layout_model.py` runs the `layout_model` add-on.
+
 ---
 
 ## 4. Optional Engine Packs (Docling) & Manifest Management
@@ -150,6 +152,14 @@ InkDoc supports optional deep layout parsing via isolated engine packs (IBM Docl
    ```bash
    python scripts/generate_engine_manifest.py --verify-manifest
    ```
+
+### The layout model add-on
+
+The `layout_model` entry in [`app/core/addons.json`](app/core/addons.json) ships unreleased, which is valid: with the Docling engine installed, InkDoc uses the identical copy that comes with it, and otherwise the add-on is not offered for download. To publish it:
+
+1. Build it: `python scripts/build_layout_addon.py --release-tag layout-addon-v1` (add `--model-dir <folder>` to use a local copy instead of downloading the pinned Hugging Face revision). It refuses any `model.onnx` but the one `pack_copy` pins, and writes `dist/addons/inkdoc-addon-layout_model.tar.gz` and `dist/addons/addons.json` with the asset URL derived from the tag. The archive is reproducible.
+2. Publish the archive on that release tag, not marked Latest (the in-app updater uses `/releases/latest`).
+3. Commit `dist/addons/addons.json` as `app/core/addons.json`. `scripts/verify_addon_catalogue.py` checks it in CI.
 
 ---
 
@@ -183,6 +193,7 @@ node tests/text_size_ui.test.js
 node tests/math_render_ui.test.js
 node tests/tables_ui.test.js
 node tests/auto_steps_ui.test.js
+node tests/layout_addon_ui.test.js
 
 # Optional: how engines read tables, before and after the table check
 # (synthetic test pages, plus your own PDFs with NAME.tables.json; see the script)

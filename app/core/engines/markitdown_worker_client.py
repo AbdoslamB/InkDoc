@@ -468,6 +468,16 @@ class MarkItDownWorker:
         )
         return json.loads(text)
 
+    def find_layout(self, source: str, pages: list[int], model_dir: str, sha256: str, job: Any = None) -> dict:
+        """Run the layout model (app/core/engines/layout_model.py) on `pages` of the PDF, in the worker."""
+        fields: dict[str, Any] = {
+            "source": str(source), "pages": [int(p) for p in pages], "model_dir": str(model_dir), "sha256": sha256,
+        }
+        _response, text = self._call(
+            "layout", fields, job, ".json", crashed="Finding tables on scanned pages stopped unexpectedly."
+        )
+        return json.loads(text)
+
     def _call(self, action: str, fields: dict, job: Any, suffix: str, *, crashed: str) -> tuple[dict, str]:
         """One request to the worker; (its response, the text it wrote to its result file)."""
         while True:
@@ -652,3 +662,16 @@ def find_tables_in_worker(
     from app.core.table_finder import find_tables
 
     return find_tables(source, pages, hints=hints, deep=deep, detectors=detectors)
+
+
+def find_layout_in_worker(source: str, pages: list[int], model_dir: str, sha256: str, job: Any = None) -> dict:
+    """The layout model's tables for `pages`: in the worker, or here if it can't be started."""
+    worker = MarkItDownWorker.get_instance()
+    if worker.usable():
+        try:
+            return worker.find_layout(source, pages, model_dir, sha256, job)
+        except WorkerUnavailableError as exc:
+            logger.warning("MarkItDown worker unavailable (%s); finding tables in InkDoc's own process.", exc)
+    from app.core.engines.layout_model import detect_tables
+
+    return detect_tables(source, pages, model_dir, sha256)

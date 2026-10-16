@@ -57,11 +57,12 @@ InkDoc builds this pack from the upstream projects and publishes it on its GitHu
 
 The Docling pack does not include EasyOCR. If you run InkDoc from source with your own `pip install docling`, the OCR engines and models Docling uses depend on your installation, and Docling may download models from Hugging Face itself.
 
-## 3. Code & Formula Recognition add-on (optional, re-hosted by InkDoc)
+## 3. Add-ons (optional, re-hosted by InkDoc)
 
 | Component | Used for | Upstream | Copyright holder | License | Distribution | Text |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | CodeFormulaV2 (weights) | Reading code blocks and formulas in Docling | [docling-project/CodeFormulaV2](https://huggingface.co/docling-project/CodeFormulaV2) @ `ecedbe1` | UNVERIFIED (not stated on the model card) | CDLA-Permissive-2.0 | Re-hosted on [`docling-addon-v1`](https://github.com/AbdoslamB/InkDoc/releases/tag/docling-addon-v1) | [Docling-models-CDLA-Permissive-2.0.txt](LICENSES/Docling-models-CDLA-Permissive-2.0.txt) |
+| Docling layout model "heron", ONNX export (weights) | Finding tables on scanned pages (layout model add-on) | [docling-project/docling-layout-heron-onnx](https://huggingface.co/docling-project/docling-layout-heron-onnx) @ `40bde04` | UNVERIFIED (not stated on the model card) | Apache-2.0 | Re-hosted on a `layout-addon-v*` release once published, with its license text in the archive; the Docling engine pack carries the same file | [Docling-layout-heron-Apache-2.0.txt](LICENSES/Docling-layout-heron-Apache-2.0.txt) |
 
 ## 4. GLM-OCR (optional download)
 

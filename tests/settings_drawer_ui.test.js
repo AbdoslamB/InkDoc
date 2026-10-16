@@ -110,13 +110,15 @@ function setup() {
         loadSettings: () => calls.push("loadSettings"),
         fetchUpdateStatus: () => calls.push("fetchUpdateStatus"),
         refreshAddonStatus: () => calls.push("refreshAddonStatus"),
+        refreshLayoutAddon: () => calls.push("refreshLayoutAddon"),
         refreshGlm: (force) => calls.push(`refreshGlm(${force})`),
         flushPrefs: () => calls.push("flushPrefs"),
         flushTextSize: () => calls.push("flushTextSize"),
     };
     const api = new Function("env", `
         const { window, document, settingsPopover, settingsBtn, appDialogOverlay, toastNotification,
-                loadSettings, fetchUpdateStatus, refreshAddonStatus, refreshGlm, flushPrefs, flushTextSize } = env;
+                loadSettings, fetchUpdateStatus, refreshAddonStatus, refreshLayoutAddon, refreshGlm, flushPrefs,
+                flushTextSize } = env;
         ${block}
         return { openSettings, closeSettings, isOpen: isSettingsOpen, section: () => settingsSection };
     `)(env);
@@ -160,7 +162,7 @@ function setup() {
     assert.deepStrictEqual(t.shownPane(), ["general"]);
     assert.deepStrictEqual(t.current(), ["general"]);
     assert.strictEqual(t.doc.activeElement, t.navItems[0], "focus moves to the current section");
-    assert.deepStrictEqual(t.calls, ["loadSettings", "fetchUpdateStatus", "refreshAddonStatus", "refreshGlm(true)"]);
+    assert.deepStrictEqual(t.calls, ["loadSettings", "fetchUpdateStatus", "refreshAddonStatus", "refreshLayoutAddon", "refreshGlm(true)"]);
 
     t.click(t.gear);
     assert.ok(!t.isOpen());
@@ -169,11 +171,11 @@ function setup() {
     assert.ok(!t.doc.rootClasses.has("settings-open"));
     assert.strictEqual(t.doc.activeElement, t.gear, "focus returns to the gear");
     // Changes made in Settings are saved as it closes, not after their pause.
-    assert.deepStrictEqual(t.calls.slice(4), ["flushPrefs", "flushTextSize"]);
+    assert.deepStrictEqual(t.calls.slice(5), ["flushPrefs", "flushTextSize"]);
 
     // Closing what is already closed saves nothing.
     t.closeSettings();
-    assert.strictEqual(t.calls.length, 6);
+    assert.strictEqual(t.calls.length, 7);
 }
 
 // The X and Escape close it and hand focus back.
@@ -377,11 +379,16 @@ function setup() {
 }
 
 // Every caller outside the drawer is about an engine, so it opens Engines.
+// openEngineCard opens the section its table names: Engines for an engine,
+// Add-ons for the layout model add-on.
 {
     const outside = source.slice(0, start) + source.slice(end);
-    const callers = outside.match(/openSettings\([^)]*\)/g) || [];
-    assert.ok(callers.length >= 6, `expected the engine prompts to call openSettings, found ${callers.length}`);
+    const callers = (outside.match(/openSettings\([^)]*\)/g) || []).filter((call) => call !== "openSettings(e, section)");
+    assert.ok(callers.length >= 5, `expected the engine prompts to call openSettings, found ${callers.length}`);
     callers.forEach((call) => assert.ok(call.includes('"engines"'), `${call} should open the Engines section`));
+    const cards = source.match(/const ENGINE_CARDS = \{([\s\S]*?)\};/)[1];
+    assert.ok(/docling: \["engines", /.test(cards) && /glm_ocr: \["engines", /.test(cards), "engines open Engines");
+    assert.ok(/layout_model: \["addons", "layoutAddonCard"\]/.test(cards), "the layout model opens its Add-ons card");
 }
 
 // Markup: one nav item and one pane per section (the stubs above use four;

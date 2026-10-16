@@ -140,7 +140,7 @@
                         </label>
                       </div>
                     </div>
-                    <p class="settings-caption" id="autoQualityCaption">Balanced checks every PDF's tables against the PDF itself: side-by-side tables, merged cells and shapes in cells. In Auto, a table an engine got wrong is rebuilt from the PDF and marked in the file. Thorough reads digital PDFs with Docling (layout-aware) instead of MarkItDown, adds the text of charts, rating grids drawn with markers and paragraphs the engine dropped, splits mixed PDFs by page and, with GLM-OCR installed, rebuilds tables without lines once GLM-OCR's reading agrees. Slower; other engines are only checked, never changed.</p>
+                    <p class="settings-caption" id="autoQualityCaption">Balanced checks every PDF's tables against the PDF itself: side-by-side tables, merged cells and shapes in cells. In Auto, a table an engine got wrong is rebuilt from the PDF and marked in the file. Thorough reads digital PDFs with Docling (layout-aware) instead of MarkItDown, adds the text of charts, rating grids drawn with markers and paragraphs the engine dropped, splits mixed PDFs by page and, with GLM-OCR installed, rebuilds tables without lines once GLM-OCR's reading agrees and reads each table on a scanned page again (with the layout model). Slower; other engines are only checked, never changed.</p>
                     <!-- One switch per step, built by app.js from GET /settings
                          (thorough_passes); hidden until that list arrives. -->
                     <details class="auto-steps" id="autoSteps" hidden>
@@ -492,7 +492,7 @@
               <section class="settings-pane" id="settingsPaneAddons" data-settings-pane="addons" aria-labelledby="settingsNavAddons" hidden>
                 <div class="settings-section">
                   <p class="settings-section-title">Add-ons</p>
-                  <p class="settings-caption addons-intro">Optional features. Built-in add-ons are part of InkDoc: nothing is downloaded, and they work offline.</p>
+                  <p class="settings-caption addons-intro">Optional features. Built-in add-ons are part of InkDoc: nothing is downloaded, and they work offline. Downloadable ones are fetched only when you install them, then run on this computer.</p>
 
                   <!-- Built-in add-on: math formulas (bundled KaTeX, loaded only for
                        documents that contain math). The switch is render_math. -->
@@ -508,6 +508,34 @@
                       </label>
                     </div>
                     <p class="settings-caption">Shows LaTeX, such as the formulas Docling and GLM-OCR read from PDFs, as formulas in the preview. Turn it off if ordinary text with $ signs is shown as math. Saved files are never changed.</p>
+                  </div>
+
+                  <!-- Downloadable add-on: the layout model for scanned tables
+                       (app/core/addons.json "layout_model"). The Docling engine
+                       carries the same model; while it is installed, nothing is
+                       downloaded. Filled in by app.js from GET /addons/layout_model. -->
+                  <div class="addon-card" id="layoutAddonCard">
+                    <div class="addon-card-head">
+                      <div>
+                        <p class="addon-card-title">Layout model</p>
+                        <p class="addon-card-meta" id="layoutAddonMeta">Download</p>
+                      </div>
+                      <span class="engine-badge engine-badge-not-installed" id="layoutAddonBadge">Checking…</span>
+                    </div>
+                    <p class="settings-caption">Finds the tables on scanned pages, so GLM-OCR can read each one on its own (Auto quality, Thorough: "Tables on scanned pages"). Docling's layout model "heron".</p>
+                    <p class="settings-caption" id="layoutAddonReason" hidden></p>
+                    <div class="engine-progress-wrapper" id="layoutAddonProgress" hidden>
+                      <div class="engine-progress-bar">
+                        <div class="engine-progress-fill" id="layoutAddonProgressFill" style="width: 0%;"></div>
+                      </div>
+                      <div class="engine-progress-text" id="layoutAddonProgressText">Preparing…</div>
+                    </div>
+                    <div class="engine-actions">
+                      <button type="button" class="btn btn-sm btn-primary" id="btnLayoutInstall" hidden>Install</button>
+                      <button type="button" class="btn btn-sm btn-secondary" id="btnLayoutVerify" hidden>Check files</button>
+                      <button type="button" class="btn btn-sm btn-danger" id="btnLayoutRemove" hidden>Remove</button>
+                      <button type="button" class="btn btn-sm btn-ghost" id="btnLayoutCancel" hidden>Cancel</button>
+                    </div>
                   </div>
                 </div>
               </section>

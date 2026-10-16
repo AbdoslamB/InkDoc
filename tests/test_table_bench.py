@@ -52,6 +52,25 @@ def test_a_stacked_header_is_not_penalised():
     assert tb.cell_accuracy(expected, stacked) == (4, 4)
 
 
+def test_a_scan_copy_has_no_text_layer(tmp_path):
+    from app.core.pdf_probe import probe_pdf
+    from tests._pdf_fixtures import write_pdf
+    from tests._table_fixtures import FIXTURES
+
+    pages, _ = FIXTURES["repeated_header_pages"]()
+    original = write_pdf(tmp_path / "doc.pdf", pages)
+    import pypdfium2 as pdfium
+
+    scan = tb.scan_copy(original, tmp_path / "scan.pdf")
+    probe = probe_pdf(str(scan))
+    assert probe.page_count == 2 and all(p.image_only and p.char_count == 0 for p in probe.pages)
+    doc = pdfium.PdfDocument(str(scan))
+    try:
+        assert [round(v) for v in doc[0].get_size()] == [612, 792], "same page size as the original"
+    finally:
+        doc.close()
+
+
 def test_summary_totals():
     rows = [tb.score(TRUTH, _md(LEFT, RIGHT)), tb.score(TRUTH, _md(LEFT))]
     s = tb.summarize(rows)

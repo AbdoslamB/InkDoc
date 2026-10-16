@@ -890,6 +890,12 @@ html[data-layout-width="full"] {
   color: var(--faint);
 }
 
+/* A downloadable add-on's card (the layout model) shows its buttons with the
+   hidden attribute, which .btn's display would otherwise override. */
+.addon-card .btn[hidden] {
+  display: none;
+}
+
 /* Preview text size (Display): A- and A+ only, with a live sample below. */
 .text-size {
   margin-top: 0;

@@ -12,6 +12,7 @@ Stages, in the order a conversion meets them:
 - polish:       right after converting
 - tables:       the table check (its finder runs in the MarkItDown worker)
 - finder:       extra things the finder looks for on every text page
+- scanned:      tables on pages without a text layer, read again by GLM-OCR
 - after_tables: additions once the tables are settled
 
 Steps can be switched off one by one (the `thorough_passes_off` setting,
@@ -39,9 +40,11 @@ STAGE_ROUTE = "route"
 STAGE_POLISH = "polish"
 STAGE_TABLES = "tables"
 STAGE_FINDER = "finder"
+STAGE_SCANNED = "scanned"
 STAGE_AFTER_TABLES = "after_tables"
 
-ENGINE_NAMES = {"docling": "Docling", "glm_ocr": "GLM-OCR"}
+# What a step can need: engines, and add-ons (app/core/addons.json).
+ENGINE_NAMES = {"docling": "Docling", "glm_ocr": "GLM-OCR", "layout_model": "the layout model"}
 
 # What the table finder looks for besides ruled tables (app/core/table_finder.py).
 DETECT_RATING_GRIDS = "rating_grids"
@@ -113,6 +116,13 @@ PASSES: tuple[PassInfo, ...] = (
         LEVEL_THOROUGH, STAGE_FINDER, needs_all=("glm_ocr",), detector=DETECT_BORDERLESS,
         table_kinds=(TABLE_KIND_BORDERLESS,), cost="medium",
         modules=("app.core.table_finder", "app.core.table_stage"),
+    ),
+    PassInfo(
+        "scanned_tables", "Tables on scanned pages",
+        "Finds each table on a page without a text layer with the layout model and has GLM-OCR read it "
+        "on its own; writes that reading when it agrees with GLM-OCR's reading of the whole page.",
+        LEVEL_THOROUGH, STAGE_SCANNED, needs_all=("glm_ocr", "layout_model"), cost="high",
+        modules=("app.core.scanned_tables",),
     ),
     PassInfo(
         "figure_text", "Chart text",

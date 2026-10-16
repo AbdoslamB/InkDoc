@@ -73,6 +73,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (engine === "docling") return "Docling";
     if (engine === "markit")  return "Markit";
     if (engine === "glm_ocr") return "GLM-OCR";
+    if (engine === "layout_model") return "the layout model";
     return "MarkItDown";
   }
 
@@ -783,6 +784,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return doclingState === "unknown" ? undefined : false;
     }
     if (engine === "glm_ocr") return glmStatus ? Boolean(glmStatus.usable) : undefined;
+    if (engine === "layout_model") return layoutAddonStatus ? Boolean(layoutAddonStatus.usable) : undefined;
     return true;
   }
 
@@ -809,15 +811,20 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // Settings on Engines, with that engine's card open and its buttons (Install,
-  // Download, Verify…) in the middle of the pane: GLM-OCR's card is the last and
-  // tallest, and at the bottom a toast would cover them.
-  const ENGINE_CARD_IDS = { docling: "engineCardDocling", glm_ocr: "engineCardGlmOcr" };
+  // Settings on the card of an engine or add-on, opened, with its buttons
+  // (Install, Download, Verify…) in the middle of the pane: GLM-OCR's card is the
+  // last and tallest, and at the bottom a toast would cover them.
+  const ENGINE_CARDS = {
+    docling: ["engines", "engineCardDocling"],
+    glm_ocr: ["engines", "engineCardGlmOcr"],
+    layout_model: ["addons", "layoutAddonCard"],
+  };
   function openEngineCard(e, engine) {
-    openSettings(e, "engines");
-    const card = document.getElementById(ENGINE_CARD_IDS[engine]);
+    const [section, cardId] = ENGINE_CARDS[engine] || ["engines", ""];
+    openSettings(e, section);
+    const card = document.getElementById(cardId);
     if (!card) return;
-    card.open = true;
+    if (card.tagName === "DETAILS") card.open = true;
     (card.querySelector(".engine-actions") || card).scrollIntoView({ block: "center" });
   }
 
@@ -1194,6 +1201,7 @@ document.addEventListener("DOMContentLoaded", () => {
     loadSettings();
     fetchUpdateStatus();
     refreshAddonStatus();
+    refreshLayoutAddon();
     refreshGlm(true);
   }
 
@@ -2577,6 +2585,161 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
   // ─── End Auto quality steps ──────────────────────────────────────────────
+
+  // ─── Layout model add-on ─────────────────────────────────────────────────
+  // Settings → Add-ons: the layout model for scanned tables ("layout_model" in
+  // app/core/addons.json), installed into InkDoc's own add-on folder. The Docling
+  // engine carries the same model; while it is installed nothing is downloaded.
+  // Its status also decides whether "Tables on scanned pages" is greyed out.
+  const LAYOUT_ADDON = "layout_model";
+  const layoutAddonBadge = document.getElementById("layoutAddonBadge");
+  const layoutAddonMeta = document.getElementById("layoutAddonMeta");
+  const layoutAddonReason = document.getElementById("layoutAddonReason");
+  const layoutAddonProgress = document.getElementById("layoutAddonProgress");
+  const layoutAddonProgressFill = document.getElementById("layoutAddonProgressFill");
+  const layoutAddonProgressText = document.getElementById("layoutAddonProgressText");
+  const layoutAddonButtons = {
+    install: document.getElementById("btnLayoutInstall"),
+    verify: document.getElementById("btnLayoutVerify"),
+    remove: document.getElementById("btnLayoutRemove"),
+    cancel: document.getElementById("btnLayoutCancel"),
+  };
+  let layoutAddonStatus = null;
+  let layoutAddonPoll = null;
+
+  function layoutAddonBusy(st) {
+    return ADDON_BUSY_STATES.includes(((st && st.progress) || {}).status);
+  }
+
+  function renderLayoutAddon(st) {
+    if (!layoutAddonBadge || !st) return;
+    layoutAddonStatus = st;
+    const busy = layoutAddonBusy(st);
+    const size = st.size_bytes ? formatBytes(st.size_bytes) : "";
+    let badge = ["Not available", "engine-badge-not-installed"];
+    if (busy) badge = [`${st.progress.status.charAt(0).toUpperCase()}${st.progress.status.slice(1)}…`, "engine-badge-busy"];
+    else if (st.installed) badge = ["Installed", "engine-badge-installed"];
+    else if (st.provided_by_pack) badge = ["Ready", "engine-badge-installed"];
+    else if (st.installable) badge = ["Not installed", "engine-badge-not-installed"];
+    layoutAddonBadge.textContent = badge[0];
+    layoutAddonBadge.className = `engine-badge ${badge[1]}`;
+    const where = st.provided_by_pack ? "Comes with the Docling engine" : (size ? `Download · ${size}` : "Download");
+    if (layoutAddonMeta) layoutAddonMeta.textContent = st.license ? `${where} · ${st.license}` : where;
+    if (layoutAddonReason) {
+      layoutAddonReason.textContent = st.reason || "";
+      layoutAddonReason.hidden = !st.reason || busy;
+    }
+    if (layoutAddonProgress) layoutAddonProgress.hidden = !busy;
+    if (busy) {
+      const prog = st.progress;
+      const pct = Math.round(prog.percent || 0);
+      if (layoutAddonProgressFill) layoutAddonProgressFill.style.width = `${pct}%`;
+      const done = formatBytes(prog.bytes_downloaded);
+      const total = formatBytes(prog.total_bytes);
+      if (layoutAddonProgressText) {
+        layoutAddonProgressText.textContent = `${pct}%${done && total ? ` — ${done} of ${total}` : ""}`;
+      }
+    }
+    const show = {
+      install: !busy && Boolean(st.installable),
+      verify: !busy && Boolean(st.installed || st.provided_by_pack),
+      remove: !busy && Boolean(st.installed),
+      cancel: busy,
+    };
+    Object.entries(layoutAddonButtons).forEach(([name, btn]) => { if (btn) btn.hidden = !show[name]; });
+    if (layoutAddonButtons.install) {
+      layoutAddonButtons.install.textContent = size ? `Install (${size})` : "Install";
+    }
+    updateAutoSteps();
+  }
+
+  async function refreshLayoutAddon() {
+    try {
+      const resp = await fetch(`${apiBase}/addons/${LAYOUT_ADDON}`);
+      if (!resp.ok) return null;
+      const st = await resp.json();
+      renderLayoutAddon(st);
+      return st;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async function pollLayoutAddon() {
+    const st = await refreshLayoutAddon();
+    if (!st || layoutAddonBusy(st)) return;
+    clearInterval(layoutAddonPoll);
+    layoutAddonPoll = null;
+    const prog = st.progress || {};
+    if (prog.status === "complete") showToast("Layout model installed.", "success");
+    else if (prog.status === "error") showToast(`Layout model install failed: ${prog.error_message || "unknown error"}`, "error");
+    else if (prog.status === "cancelled") showToast("Layout model install cancelled.", "info");
+  }
+
+  async function layoutAddonAction(action) {
+    return fetchWithToken(`${apiBase}/addons/${LAYOUT_ADDON}/${action}`, { method: "POST" });
+  }
+
+  if (layoutAddonButtons.install) {
+    layoutAddonButtons.install.addEventListener("click", async () => {
+      layoutAddonButtons.install.disabled = true;
+      try {
+        const resp = await layoutAddonAction("install");
+        if (resp.ok) {
+          clearInterval(layoutAddonPoll);
+          layoutAddonPoll = setInterval(pollLayoutAddon, 600);
+          pollLayoutAddon();
+        } else {
+          const err = await resp.json().catch(() => ({}));
+          showToast(`Couldn't start the download: ${err.detail || resp.status}`, "error");
+        }
+      } catch (e) {
+        showToast(`Couldn't start the download: ${e.message}`, "error");
+      } finally {
+        layoutAddonButtons.install.disabled = false;
+      }
+    });
+  }
+
+  if (layoutAddonButtons.cancel) {
+    layoutAddonButtons.cancel.addEventListener("click", () => { layoutAddonAction("cancel").catch(() => {}); });
+  }
+
+  if (layoutAddonButtons.verify) {
+    layoutAddonButtons.verify.addEventListener("click", async () => {
+      layoutAddonButtons.verify.disabled = true;
+      try {
+        const res = await (await layoutAddonAction("verify")).json();
+        if (res.valid) showToast("The layout model's files match their SHA-256 hashes.", "success");
+        else showToast(`The layout model's files failed the check: ${res.reason || "hash mismatch"}`, "error");
+      } catch (e) {
+        showToast(`Couldn't check the files: ${e.message}`, "error");
+      } finally {
+        layoutAddonButtons.verify.disabled = false;
+      }
+    });
+  }
+
+  if (layoutAddonButtons.remove) {
+    layoutAddonButtons.remove.addEventListener("click", async () => {
+      const confirmed = await confirmDialog({
+        title: "Remove the layout model?",
+        message: "Its files will be deleted. Tables on scanned pages are then read as GLM-OCR reads the whole page, unless the Docling engine is installed. You can install the model again later.",
+        confirmText: "Remove",
+        cancelText: "Cancel",
+        danger: true,
+      });
+      if (!confirmed) return;
+      try {
+        const resp = await layoutAddonAction("remove");
+        showToast(resp.ok ? "Layout model removed." : "Couldn't remove the layout model.", resp.ok ? "info" : "error");
+      } catch (e) {
+        showToast(`Couldn't remove the layout model: ${e.message}`, "error");
+      }
+      refreshLayoutAddon();
+    });
+  }
+  // ─── End layout model add-on ─────────────────────────────────────────────
 
   // ─── Layout width ────────────────────────────────────────────────────────
   // How much of a wide window InkDoc uses (Settings → General → Display). The

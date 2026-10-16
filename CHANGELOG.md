@@ -55,6 +55,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one switch per step of Balanced and Thorough, all on by default. A step that
   needs an engine you haven't installed is greyed out, with a button to
   install it. The API has a matching `thorough_passes_off` setting.
+- **Tables on scanned pages (Thorough).** With GLM-OCR and the layout model,
+  InkDoc finds each table on a scanned page and has GLM-OCR read it on its
+  own. That reading takes the place of what GLM-OCR wrote for the whole page
+  (often plain lines, side-by-side tables run together, or a shifted header)
+  only when it holds the same words and nothing is lost. Each rebuilt table is
+  marked in the file (`source=glm-ocr checked=layout,page-reading`). On
+  InkDoc's table test pages scanned at 200 DPI, tables read exactly went from
+  4 to 9 of 13, with no invented cells.
+- **Layout model add-on** (Settings → Add-ons): Docling's layout model
+  "heron" (Apache-2.0, about 157 MB), run by InkDoc on this computer. The
+  Docling engine already includes it, so with Docling installed nothing is
+  downloaded.
 - **Tables without lines (Thorough).** A borderless table that the engine
   wrote as loose text or dropped is found from the positions of the PDF's
   words. It is rebuilt only when GLM-OCR's own reading of that area agrees,

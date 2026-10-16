@@ -18,11 +18,13 @@ from app.core.auto_engine import run_auto
 from app.core.converter import ConversionOptions
 from app.core.queue_model import EngineKind, QueueItem, SourceKind
 from app.core.table_finder import find_tables
-from tests._pdf_fixtures import prose_page, write_pdf
+from tests._pdf_fixtures import image_page, prose_page, write_pdf
 from tests._table_fixtures import FIXTURES
 
 BOTH = {"docling", "glm_ocr"}
-STAGE_ORDER = [tp.STAGE_ROUTE, tp.STAGE_POLISH, tp.STAGE_TABLES, tp.STAGE_FINDER, tp.STAGE_AFTER_TABLES]
+EVERYTHING = BOTH | {"layout_model"}
+STAGE_ORDER = [tp.STAGE_ROUTE, tp.STAGE_POLISH, tp.STAGE_TABLES, tp.STAGE_FINDER, tp.STAGE_SCANNED,
+               tp.STAGE_AFTER_TABLES]
 
 
 def test_steps_are_unique_described_and_in_stage_order():
@@ -45,8 +47,8 @@ def test_fast_runs_nothing_and_balanced_only_the_table_check():
     assert tp.PassPlan("nonsense", BOTH).level == "fast"
 
 
-def test_thorough_with_both_engines_runs_every_step():
-    plan = tp.PassPlan("thorough", BOTH)
+def test_thorough_with_every_engine_and_add_on_runs_every_step():
+    plan = tp.PassPlan("thorough", EVERYTHING)
     assert all(plan.on(name) for name in tp.PASS_NAMES)
     assert plan.detectors() == [tp.DETECT_RATING_GRIDS, tp.DETECT_BORDERLESS, tp.DETECT_SEGMENTS]
     assert plan.table_kinds() == {tp.TABLE_KIND_LINES, tp.TABLE_KIND_HINT_SPLIT, tp.TABLE_KIND_RATING,
@@ -68,6 +70,12 @@ def test_steps_that_need_an_engine_say_which(available, layout, split, borderles
     assert plan.reason("borderless_tables") == borderless
     assert (tp.DETECT_BORDERLESS in plan.detectors()) == (not borderless)
     assert plan.on("polish") and plan.on("figure_text")  # no engine needed
+
+
+def test_tables_on_scanned_pages_need_glm_ocr_and_the_layout_model():
+    assert tp.PassPlan("thorough", BOTH).reason("scanned_tables") == "needs GLM-OCR and the layout model"
+    assert tp.PassPlan("thorough", {"glm_ocr", "layout_model"}).on("scanned_tables")
+    assert tp.ENGINE_NAMES["layout_model"] == "the layout model"
 
 
 def test_a_switched_off_step_costs_nothing_and_says_so():
@@ -144,10 +152,10 @@ def auto(monkeypatch, tmp_path):
 
     `doc` is a fixture name or a list of pages; `reply` the Markdown every
     engine returns, or {engine: Markdown}; `engines` the OCR engines installed
-    (Docling alone by default).
+    (Docling alone by default); `layout` whether the layout model add-on is.
     """
     asked: list[list[str]] = []
-    state: dict = {"reply": "", "engines": [D], "runs": 0}
+    state: dict = {"reply": "", "engines": [D], "layout": False, "runs": 0}
 
     def fake_convert(item, options, engine, fetched):
         options.engine_used = engine
@@ -160,15 +168,16 @@ def auto(monkeypatch, tmp_path):
 
     monkeypatch.setattr(auto_engine, "_convert_once", fake_convert)
     monkeypatch.setattr(auto_engine, "ocr_engines_usable", lambda: list(state["engines"]))
+    monkeypatch.setattr(auto_engine, "layout_model_usable", lambda: state["layout"])
     monkeypatch.setattr(auto_engine, "glm_estimate_seconds", lambda *a: 10.0)
     monkeypatch.setattr(auto_engine, "glm_estimate_for_pages", lambda n: 10.0 * n)
     monkeypatch.setattr(table_stage, "_find_in_worker", finder)
 
-    def run(doc, reply, level="thorough", off=(), engines=(D,), quality_check=False):
+    def run(doc, reply, level="thorough", off=(), engines=(D,), quality_check=False, layout=False):
         pages = FIXTURES[doc]()[0] if isinstance(doc, str) else doc
         state["runs"] += 1
         pdf = str(write_pdf(tmp_path / f"doc{state['runs']}.pdf", pages))
-        state.update(reply=reply, engines=list(engines))
+        state.update(reply=reply, engines=list(engines), layout=layout)
         item = QueueItem(source=pdf, kind=SourceKind.FILE, display_name="doc.pdf", engine=EngineKind.AUTO)
         options = ConversionOptions(
             engine=EngineKind.AUTO, auto_quality=level, passes_off=tuple(off), quality_check=quality_check
@@ -237,6 +246,47 @@ def test_the_polish_applies_to_the_result_auto_keeps(auto):
     assert options.auto_decision.escalated and options.engine_used == D
     assert "Fenner & Smith" in markdown and "&amp;" not in markdown
     assert passes["polish"]["changed"] == 1 and options.table_report.characters_restored == 1
+
+
+# GLM-OCR's reading of a scanned page with two tables side by side: one table.
+MERGED_SCAN = "\n".join([
+    "## Quarterly summary", "",
+    "| Region | Q1 | Product | Units |", "|---|---|---|---|",
+    "| North | 120 | Alpha | 12 |", "| South | 98 | Beta | 7 |", "",
+    "Figures are unaudited.",
+])
+LEFT = [["Region", "Q1"], ["North", "120"], ["South", "98"]]
+RIGHT = [["Product", "Units"], ["Alpha", "12"], ["Beta", "7"]]
+
+
+def test_tables_on_a_scanned_page_are_read_one_by_one(auto, monkeypatch, tmp_path):
+    import app.core.engines.glm_ocr_engine as glm_ocr_engine
+    import app.core.engines.markitdown_worker_client as worker_client
+
+    asked: list[tuple] = []
+
+    def find_layout(path, pages, model_dir, sha256, job=None):
+        asked.append((pages, model_dir, sha256))
+        boxes = [[50.0, 100.0, 250.0, 200.0], [300.0, 100.0, 500.0, 200.0]]
+        return {"pages": [{"page": 1, "skipped": "", "tables": [{"bbox": b, "score": 0.9} for b in boxes]}],
+                "error": ""}
+
+    monkeypatch.setattr(auto_engine, "layout_model_location", lambda: (tmp_path, {"model.onnx": "ab" * 32}))
+    monkeypatch.setattr(worker_client, "find_layout_in_worker", find_layout)
+    monkeypatch.setattr(glm_ocr_engine, "read_table_region", lambda path, page, bbox: LEFT if bbox[0] < 200 else RIGHT)
+    run, _asked = auto
+    markdown, options, passes = run([image_page("ccitt")], MERGED_SCAN, engines=(G,), layout=True)
+    assert options.engine_used == G
+    assert asked == [([1], str(tmp_path), "ab" * 32)], "only the scanned page GLM-OCR read"
+    assert markdown.count("<!-- inkdoc:table page=1 source=glm-ocr checked=layout,page-reading -->") == 2
+    assert "| Region | Q1 | Product | Units |" not in markdown and markdown.endswith("Figures are unaudited.")
+    assert passes["scanned_tables"] == {"name": "scanned_tables", "ran": True, "changed": 2, "skipped": ""}
+    assert {"page": 1, "tables": 2, "issue": "scanned", "source": "glm_ocr"} in options.table_report.repaired
+
+    # Without the layout model the page stays as GLM-OCR read it.
+    markdown, _options, passes = run([image_page("ccitt")], MERGED_SCAN, engines=(G,), layout=False)
+    assert markdown == MERGED_SCAN
+    assert passes["scanned_tables"]["skipped"] == "needs GLM-OCR and the layout model"
 
 
 def test_a_failing_addition_costs_nothing_but_itself(auto, monkeypatch):

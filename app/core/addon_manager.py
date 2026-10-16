@@ -1,9 +1,18 @@
-"""Optional downloadable add-ons that extend an installed engine pack.
+"""Optional downloadable add-ons: model weights InkDoc does not bundle.
 
-The first and only add-on is the Docling code/formula recognition model. It is
-not bundled with the engine pack because it is 640 MB of weights that most users
-will never exercise -- the pack is already a ~1 GB download -- so it is fetched
-separately, and only by people who turn the feature on.
+Each catalogue entry names its `target`, where it installs:
+
+- "docling_pack": into the Docling engine pack's models directory, for models
+  Docling itself loads. The Docling code/formula recognition model is one: 640
+  MB of weights most users never exercise, fetched separately, and only by
+  people who turn the feature on.
+- "inkdoc": into InkDoc's own add-on folder, beside the engines folder
+  (%LOCALAPPDATA%\\InkDoc\\addons\\<model_dir> on Windows), for models InkDoc
+  loads itself. The layout model for scanned tables is one. Such an entry may
+  name a `pack_copy`: the same model inside the Docling pack, pinned by its
+  file hashes, used instead when it is there, so Docling users download nothing.
+
+The sections below are about the "docling_pack" target.
 
 Why this is not part of EngineManager
 -------------------------------------
@@ -36,6 +45,7 @@ from disk and never cached in settings, so the two can never disagree.
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import logging
@@ -96,6 +106,16 @@ class AddonInfo:
     min_pack_version: str
     min_app_version: str
     sha256_files: dict[str, str] = field(default_factory=dict)
+    target: str = "docling_pack"        # where it installs: one of TARGETS
+    license: str = ""                   # shown on its card
+    # Target "inkdoc" only: {"dir": <folder in the Docling pack's models>,
+    # "sha256_files": {<file>: <digest>}}, the same model shipped with Docling.
+    pack_copy: dict[str, Any] = field(default_factory=dict)
+
+
+TARGET_DOCLING_PACK = "docling_pack"
+TARGET_INKDOC = "inkdoc"
+TARGETS = (TARGET_DOCLING_PACK, TARGET_INKDOC)
 
 
 # Catalogue states, kept as an enum so status, the CI guard and the installer all
@@ -133,8 +153,11 @@ def validate_addon_entry(addon: AddonInfo) -> tuple[CatalogueState, list[str]]:
         defects.append("model_dir is empty")
     if addon.archive_format not in ("tar.gz", "zip"):
         defects.append(f"archive_format {addon.archive_format!r} is not tar.gz or zip")
-    if not addon.min_pack_version:
+    if addon.target not in TARGETS:
+        defects.append(f"target {addon.target!r} is not one of {', '.join(TARGETS)}")
+    if addon.target == TARGET_DOCLING_PACK and not addon.min_pack_version:
         defects.append("min_pack_version is empty, so any pack would satisfy it")
+    defects.extend(_pack_copy_defects(addon))
 
     has_url = bool(addon.url.strip())
     has_sha = bool(addon.sha256.strip())
@@ -190,6 +213,24 @@ def validate_addon_entry(addon: AddonInfo) -> tuple[CatalogueState, list[str]]:
         (CatalogueState.DEFECTIVE, defects) if defects
         else (CatalogueState.PUBLISHED, [])
     )
+
+
+def _pack_copy_defects(addon: AddonInfo) -> list[str]:
+    """What is wrong with an entry's pack_copy; checked whether or not it is published."""
+    if not addon.pack_copy:
+        return []
+    if addon.target != TARGET_INKDOC:
+        return ["pack_copy is only meaningful for target 'inkdoc'"]
+    folder = str(addon.pack_copy.get("dir", ""))
+    digests = addon.pack_copy.get("sha256_files") or {}
+    defects = []
+    if not folder or Path(folder).name != folder:
+        defects.append(f"pack_copy dir {folder!r} must be one folder name")
+    if not digests:
+        defects.append("pack_copy has no sha256_files, so the Docling pack's copy could not be checked")
+    elif not all(isinstance(d, str) and is_valid_sha256(d) for d in digests.values()):
+        defects.append("pack_copy sha256_files has a malformed digest")
+    return defects
 
 
 def version_tuple(value: str | None) -> tuple[int, ...]:
@@ -255,6 +296,9 @@ class AddonManager:
                     min_pack_version=str(entry.get("min_pack_version", "")),
                     min_app_version=str(entry.get("min_app_version", "")),
                     sha256_files=dict(entry.get("sha256_files") or {}),
+                    target=str(entry.get("target", TARGET_DOCLING_PACK)),
+                    license=str(entry.get("license", "")),
+                    pack_copy=dict(entry.get("pack_copy") or {}),
                 )
         except FileNotFoundError:
             # Never expected: the catalogue ships in the source tree and is
@@ -307,11 +351,56 @@ class AddonManager:
 
         return EngineManager.get_instance().get_engine_dir("docling") / "models"
 
+    def _addons_dir(self) -> Path:
+        """InkDoc's own add-on folder, beside the engines folder (target "inkdoc")."""
+        from app.core.engine_manager import EngineManager
+
+        return EngineManager.get_instance().get_engines_base_dir().parent / "addons"
+
+    def _root(self, addon: AddonInfo) -> Path:
+        return self._addons_dir() if addon.target == TARGET_INKDOC else self._models_dir()
+
     def _model_path(self, addon: AddonInfo) -> Path:
-        return self._models_dir() / addon.model_dir
+        return self._root(addon) / addon.model_dir
 
     def _meta_path(self, addon: AddonInfo) -> Path:
-        return self._models_dir() / f"{_META_PREFIX}{addon.name}.json"
+        return self._root(addon) / f"{_META_PREFIX}{addon.name}.json"
+
+    def _pack_copy_path(self, addon: AddonInfo) -> Path | None:
+        """The Docling pack's copy of an "inkdoc" add-on: its folder when the pack is
+        installed and holds every pinned file, else None. Existence only; whoever
+        loads the files hashes them."""
+        if not addon.pack_copy:
+            return None
+        from app.core.engine_manager import EngineManager
+
+        try:
+            if not EngineManager.get_instance().is_pack_installed("docling"):
+                return None
+            folder = self._models_dir() / str(addon.pack_copy["dir"])
+            files = addon.pack_copy.get("sha256_files") or {}
+            if files and all((folder / rel).is_file() for rel in files):
+                return folder
+        except Exception as exc:
+            logger.debug("Could not look for the Docling pack's copy of '%s': %s", addon.name, exc)
+        return None
+
+    def model_location(self, name: str) -> tuple[Path, dict[str, str]] | None:
+        """Where a usable "inkdoc" add-on's files are, with the digests to check them against.
+
+        InkDoc's own install first, else the Docling pack's copy; None when
+        neither can be used. Hashing is left to whoever loads the files: this is
+        also on the status path, which must stay fast.
+        """
+        addon = self.get_addon(name)
+        if addon is None or addon.target != TARGET_INKDOC or not self.get_status(name)["usable"]:
+            return None
+        if self.is_installed(name):
+            return self._model_path(addon), dict(addon.sha256_files)
+        folder = self._pack_copy_path(addon)
+        if folder is None:
+            return None
+        return folder, dict(addon.pack_copy.get("sha256_files") or {})
 
     def pack_docling_version(self) -> str:
         """Docling version inside the installed pack, read from its dist-info.
@@ -408,6 +497,8 @@ class AddonManager:
         addon = self.get_addon(name)
         if not addon:
             return self._unknown_status(name)
+        if addon.target == TARGET_INKDOC:
+            return self._inkdoc_status(addon)
 
         mgr = EngineManager.get_instance()
         pack_installed = False
@@ -472,6 +563,55 @@ class AddonManager:
             ),
             "reason": reason,
             "progress": self.get_progress(name),
+            "target": addon.target,
+            "license": addon.license,
+            "provided_by_pack": False,
+        }
+
+    def _inkdoc_status(self, addon: AddonInfo) -> dict[str, Any]:
+        """Status of an add-on in InkDoc's own folder: no engine pack involved,
+        except that the pack's pinned copy of the same model makes it usable."""
+        from app._version import get_version
+
+        installed = self.is_installed(addon.name)
+        in_pack = self._pack_copy_path(addon) is not None
+        app_ok = version_at_least(get_version(), addon.min_app_version)
+        state, defects = self.catalogue_state(addon.name)
+        published = state is CatalogueState.PUBLISHED
+
+        if state is CatalogueState.DEFECTIVE:
+            reason = "This add-on's catalogue entry is invalid; it cannot be installed."
+        elif not app_ok:
+            reason = f"Requires InkDoc {addon.min_app_version} or newer"
+        elif state is CatalogueState.UNRELEASED and not (installed or in_pack):
+            reason = "This add-on has not been published yet." + (
+                " The Docling engine comes with it." if addon.pack_copy else ""
+            )
+        else:
+            reason = ""
+
+        return {
+            "name": addon.name,
+            "title": addon.title,
+            "description": addon.description,
+            "installed": installed,
+            "available": published,
+            "catalogue_state": state.value,
+            "catalogue_defects": defects,
+            "pack_installed": False,
+            "pack_version": None,
+            "min_pack_version": "",
+            "size_bytes": addon.size_bytes,
+            "usable": app_ok and (installed or in_pack) and state is not CatalogueState.DEFECTIVE,
+            "pack_drift": "",
+            "worker_verified": False,
+            # Nothing to download while the Docling pack provides the model.
+            "installable": published and app_ok and not installed and not in_pack,
+            "reason": reason,
+            "progress": self.get_progress(addon.name),
+            "target": addon.target,
+            "license": addon.license,
+            "provided_by_pack": in_pack and not installed,
         }
 
     def _unknown_status(self, name: str) -> dict[str, Any]:
@@ -501,6 +641,9 @@ class AddonManager:
             "installable": False,
             "reason": "Unknown add-on",
             "progress": self.get_progress(name),
+            "target": "",
+            "license": "",
+            "provided_by_pack": False,
         }
 
     def get_progress(self, name: str) -> dict[str, Any]:
@@ -556,7 +699,8 @@ class AddonManager:
             )
             raise SecurityError(progress.error_message)
 
-        models_dir = self._models_dir()
+        models_dir = self._root(addon)
+        models_dir.mkdir(parents=True, exist_ok=True)
         model_path = self._model_path(addon)
         # Everything lands beside the model directory so the final move is a
         # rename within one filesystem rather than a copy across devices.
@@ -623,60 +767,19 @@ class AddonManager:
             model_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(staged_model), str(model_path))
 
-            # Confirm the pack can actually load what was just extracted, before
-            # the completion marker goes down. A directory of the right name with
-            # the right hashes still does not prove Docling will accept it: the
-            # pack's Docling version decides the folder name it looks for and the
-            # loader decides whether the contents are usable. Doing this here
-            # means a successful install is a verified install, and the status
-            # path never has to launch an interpreter to find out.
-            worker_capability: dict[str, Any] = {}
-            verified = False
-            try:
-                probe = self.probe_worker_capability()
-                worker_capability = probe.get("code_formula") or {}
-                verified = bool(worker_capability.get("loadable"))
-                if not verified:
-                    raise AddonError(
-                        "The model was downloaded and verified, but this engine pack "
-                        "cannot load it: "
-                        + (worker_capability.get("detail") or "unknown reason")
-                    )
-                logger.info(
-                    "Add-on '%s' confirmed loadable by the worker (Docling %s, model_dir %s)",
-                    addon.name,
-                    probe.get("docling_version", "?"),
-                    worker_capability.get("model_dir", "?"),
-                )
-            except AddonError:
-                raise
-            except Exception as exc:
-                # The probe itself failed to run. That is not evidence the model
-                # is bad, so do not delete it -- but it is not a verified install
-                # either, and recording that lets the UI offer re-verification
-                # rather than claiming a confirmation that never happened.
-                logger.warning(
-                    "Could not confirm add-on '%s' with the worker: %s", addon.name, exc
-                )
+            record: dict[str, Any] = {
+                "addon": addon.name,
+                "model_dir": addon.model_dir,
+                "sha256": addon.sha256,
+                "min_pack_version": addon.min_pack_version,
+                "installed_at": time.time(),
+            }
+            # An "inkdoc" add-on is loaded by InkDoc itself, which hashes it first.
+            if addon.target == TARGET_DOCLING_PACK:
+                record.update(self._confirm_with_worker(addon))
 
             # Last, so an interrupted install never looks complete.
-            self._meta_path(addon).write_text(
-                json.dumps(
-                    {
-                        "addon": addon.name,
-                        "model_dir": addon.model_dir,
-                        "sha256": addon.sha256,
-                        "min_pack_version": addon.min_pack_version,
-                        "installed_at": time.time(),
-                        "docling_version": self.pack_docling_version(),
-                        "worker_verified": verified,
-                        "worker_model_dir": worker_capability.get("model_dir", ""),
-                    },
-                    indent=2,
-                )
-                + chr(10),
-                encoding="utf-8",
-            )
+            self._meta_path(addon).write_text(json.dumps(record, indent=2) + chr(10), encoding="utf-8")
 
             progress.status = "complete"
             progress.percent = 100.0
@@ -697,6 +800,51 @@ class AddonManager:
             shutil.rmtree(tmp_dir, ignore_errors=True)
             shutil.rmtree(staging_dir, ignore_errors=True)
             self._cancel_events.pop(name, None)
+
+    def _confirm_with_worker(self, addon: AddonInfo) -> dict[str, Any]:
+        """Have the pack worker load a just-installed "docling_pack" add-on.
+
+        A directory of the right name with the right hashes still does not prove
+        Docling will accept it: the pack's Docling version decides the folder
+        name it looks for and the loader decides whether the contents are usable.
+        Doing this at install means a successful install is a verified install,
+        and the status path never has to launch an interpreter to find out.
+        Returns the fields for the install record; raises AddonError when the
+        worker says it cannot load the model.
+        """
+        worker_capability: dict[str, Any] = {}
+        verified = False
+        try:
+            probe = self.probe_worker_capability()
+            worker_capability = probe.get("code_formula") or {}
+            verified = bool(worker_capability.get("loadable"))
+            if not verified:
+                raise AddonError(
+                    "The model was downloaded and verified, but this engine pack "
+                    "cannot load it: "
+                    + (worker_capability.get("detail") or "unknown reason")
+                )
+            logger.info(
+                "Add-on '%s' confirmed loadable by the worker (Docling %s, model_dir %s)",
+                addon.name,
+                probe.get("docling_version", "?"),
+                worker_capability.get("model_dir", "?"),
+            )
+        except AddonError:
+            raise
+        except Exception as exc:
+            # The probe itself failed to run. That is not evidence the model
+            # is bad, so do not delete it -- but it is not a verified install
+            # either, and recording that lets the UI offer re-verification
+            # rather than claiming a confirmation that never happened.
+            logger.warning(
+                "Could not confirm add-on '%s' with the worker: %s", addon.name, exc
+            )
+        return {
+            "docling_version": self.pack_docling_version(),
+            "worker_verified": verified,
+            "worker_model_dir": worker_capability.get("model_dir", ""),
+        }
 
     # ─── Verify and remove ───────────────────────────────────────────────────
 
@@ -725,13 +873,18 @@ class AddonManager:
         addon = self.get_addon(name)
         if not addon:
             return {"valid": False, "reason": f"Unknown add-on: '{name}'"}
-        if not self.is_installed(name):
+        if self.is_installed(name):
+            root, digests = self._model_path(addon), addon.sha256_files
+        elif (pack_copy := self._pack_copy_path(addon)) is not None:
+            # The Docling pack's copy, against the digests the catalogue pins for it.
+            root, digests = pack_copy, dict(addon.pack_copy["sha256_files"])
+        else:
             return {"valid": False, "reason": "Add-on is not installed"}
         try:
-            self._verify_tree(addon, self._model_path(addon))
+            self._verify_tree(dataclasses.replace(addon, sha256_files=digests), root)
         except Exception as exc:
             return {"valid": False, "reason": str(exc)}
-        return {"valid": True, "addon": addon.name, "path": str(self._model_path(addon))}
+        return {"valid": True, "addon": addon.name, "path": str(root)}
 
     def remove(self, name: str) -> dict[str, Any]:
         addon = self.get_addon(name)

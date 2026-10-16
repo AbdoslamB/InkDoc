@@ -129,6 +129,31 @@ def test_the_table_finder_gives_the_same_result_in_the_worker(worker, tmp_path):
     assert [t["kind"] for b in found["pages"][0]["bands"] for t in b["tables"]] == ["rating_grids"]
 
 
+def test_the_layout_model_runs_in_the_worker(worker, tmp_path):
+    from app.core.addon_manager import AddonManager
+    from app.core.engines.layout_model import ADDON, MODEL_FILE, detect_tables
+    from tests._pdf_fixtures import write_pdf
+    from tests._table_fixtures import side_by_side
+
+    pages, _ = side_by_side(True)
+    pdf = str(write_pdf(tmp_path / "pair.pdf", pages))
+    # No model there: an answer that says so, not a crashed worker.
+    missing = worker.find_layout(pdf, [1], str(tmp_path / "no-model"), "0" * 64)
+    assert missing["pages"] == [] and missing["error"]
+
+    location = AddonManager().model_location(ADDON)
+    if location is None:
+        pytest.skip("the layout model is not on this computer")
+    folder, digests = location
+    found = worker.find_layout(pdf, [1], str(folder), digests[MODEL_FILE])
+
+    def same(result: dict) -> dict:
+        return {k: v for k, v in result.items() if k != "elapsed_ms"}
+
+    assert same(found) == same(detect_tables(pdf, [1], str(folder), digests[MODEL_FILE]))
+    assert len(found["pages"][0]["tables"]) == 2
+
+
 def test_errors_keep_markitdown_s_own_message(worker, tmp_path):
     src = tmp_path / "blob.unknownext"
     src.write_bytes(os.urandom(2048))

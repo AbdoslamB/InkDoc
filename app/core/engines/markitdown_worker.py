@@ -14,6 +14,8 @@ Protocol, one JSON object per line:
             {"id": 8, "action": "tables", "source": "...", "output": "...",
              "pages": [3, 4], "hints": {"5": [[["h1", "h2"], ["a", "b"]]]},
              "detectors": ["rating_grids", "segments"], "time_budget_s": 20}
+            {"id": 9, "action": "layout", "source": "...", "output": "...",
+             "pages": [2], "model_dir": "...", "sha256": "...", "time_budget_s": 60}
             {"action": "shutdown"}
     stdout  {"status": "ready", "pid": 1234, "markitdown": "0.1.7"}   once, when warm
             {"status": "error", "error": "..."}                         instead, if it can't load
@@ -26,7 +28,8 @@ at once, as they did inside InkDoc's own process.
 
 "tables" runs the table finder (app/core/table_finder.py) on the given pages
 and writes its JSON to "output" the same way: pdfplumber is loaded here
-already, so InkDoc's own process never has to.
+already, so InkDoc's own process never has to. "layout" does the same with the
+layout model (app/core/engines/layout_model.py), so onnxruntime stays here too.
 """
 from __future__ import annotations
 
@@ -163,6 +166,23 @@ def _tables(request: dict, send) -> None:
         send({"id": rid, "ok": False, "error": str(exc), "type": type(exc).__name__})
 
 
+def _layout(request: dict, send) -> None:
+    rid = request.get("id")
+    try:
+        from app.core.engines.layout_model import DEFAULT_TIME_BUDGET_S, detect_tables
+
+        pages = [p for p in request.get("pages") or [] if isinstance(p, int)]
+        budget = request.get("time_budget_s")
+        budget = float(budget) if isinstance(budget, (int, float)) and budget > 0 else DEFAULT_TIME_BUDGET_S
+        result = detect_tables(
+            str(request["source"]), pages, str(request["model_dir"]), str(request["sha256"]), time_budget_s=budget
+        )
+        _write_result(str(request["output"]), json.dumps(result))
+        send({"id": rid, "ok": True, "none": False})
+    except Exception as exc:
+        send({"id": rid, "ok": False, "error": str(exc), "type": type(exc).__name__})
+
+
 def main(argv: list[str]) -> int:
     try:
         ipc = claim_stdout()
@@ -217,6 +237,8 @@ def main(argv: list[str]) -> int:
             pool.submit(_convert, request, send)
         elif action == "tables":
             pool.submit(_tables, request, send)
+        elif action == "layout":
+            pool.submit(_layout, request, send)
         elif action == "shutdown":
             break
 

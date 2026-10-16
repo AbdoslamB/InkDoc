@@ -68,16 +68,18 @@ def verify(catalogue_path: Path, require_published: bool) -> tuple[bool, list[st
                 )
             else:
                 messages.append(
-                    f"[ OK ] {name}: unreleased -- reported unavailable, "
-                    "install is refused, enrichment toggles stay disabled"
+                    f"[ OK ] {name}: unreleased -- not offered for download, install is refused"
                 )
             continue
 
         addon = mgr.get_addon(name)
+        where = (
+            f"requires pack {addon.min_pack_version}+" if addon.target == "docling_pack"
+            else "installs into InkDoc's add-on folder"
+        )
         messages.append(
             f"[ OK ] {name}: published -- {addon.size_bytes / 1e6:.1f} MB, "
-            f"{len(addon.sha256_files)} hashed files, requires pack "
-            f"{addon.min_pack_version}+"
+            f"{len(addon.sha256_files)} hashed files, {where}"
         )
 
     return ok, messages

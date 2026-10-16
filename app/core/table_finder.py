@@ -50,6 +50,12 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TIME_BUDGET_S = 20.0
 MAX_PAGES = 60
+# A page drawn with more than this many edges (4 per box, 1 per line or curve), or
+# with more characters, is skipped as "too_complex": pdfplumber's table search
+# compares every vertical edge with every horizontal one, so a crafted page could
+# hold a conversion for hours. A 60x15 grid of boxed cells is about 3,600 edges.
+MAX_PAGE_EDGES = 10_000
+MAX_PAGE_CHARS = 60_000
 LINE_TOLERANCE_PT = 3.0        # words whose tops differ by less are on one line
 GUTTER_RATIO = 1.8             # a gap this many times the typical column gap...
 GUTTER_MIN_PT = 20.0           # ...and at least this wide separates two tables
@@ -848,6 +854,12 @@ def page_segments(words: list[dict]) -> list[dict]:
     return out
 
 
+def _too_complex(page: Any) -> bool:
+    """More drawing or text than any table page has (MAX_PAGE_EDGES, MAX_PAGE_CHARS)."""
+    edges = 4 * len(page.rects) + len(page.lines) + len(page.curves)
+    return edges > MAX_PAGE_EDGES or len(page.chars) > MAX_PAGE_CHARS
+
+
 def _page_tables(
     page: Any, number: int, hints: list[list[list[str]]] | None = None,
     detectors: frozenset[str] = frozenset(),
@@ -855,6 +867,8 @@ def _page_tables(
     rotation = int(getattr(page, "rotation", 0) or 0) % 360
     if rotation:
         return {"page": number, "skipped": "rotated", "bands": []}
+    if _too_complex(page):
+        return {"page": number, "skipped": "too_complex", "bands": []}
     tables = [t for t in (_table_dict(page, raw) for raw in page.find_tables()) if t is not None]
     extra: dict[str, Any] = {}
     if hints or detectors:

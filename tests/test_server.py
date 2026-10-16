@@ -248,6 +248,12 @@ def test_upload_size_limit():
         resp = client.post("/convert/file", files=payload)
         assert resp.status_code == 413, f"Expected 413, got {resp.status_code}: {resp.text}"
         assert "exceeds maximum allowed size" in resp.text
+
+        # A refused upload ends its job instead of leaving it "running".
+        payload = {"file": ("big.txt", io.BytesIO(b"This text is definitely longer than 10 bytes"), "text/plain")}
+        resp = client.post("/convert/file?job_id=job-too-big-01", files=payload)
+        assert resp.status_code == 413
+        assert client.get("/convert/progress/job-too-big-01").json()["status"] == "error"
     finally:
         srv.MAX_FILE_SIZE_BYTES = original_max
     print("[OK] test_upload_size_limit passed")

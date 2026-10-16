@@ -317,6 +317,12 @@ def finish_tables(
             f"Rotated page{'s' if len(skipped) != 1 else ''} {', '.join(map(str, skipped[:10]))} "
             "not checked for tables."
         )
+    dense = [p["page"] for p in found.get("pages", []) if p.get("skipped") == "too_complex"]
+    if dense:
+        summary.details.append(
+            f"Page{'s' if len(dense) != 1 else ''} {', '.join(map(str, dense[:10]))} "
+            "not checked for tables: too many drawn lines or characters."
+        )
     return (result if summary.repaired else insp.markdown), summary
 
 

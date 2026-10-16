@@ -76,6 +76,23 @@ def test_rotated_pages_are_skipped(tmp_path):
     assert find_tables(str(pdf), [1])["pages"] == [{"page": 1, "skipped": "rotated", "bands": []}]
 
 
+
+def test_pages_drawn_too_densely_are_skipped_before_the_table_search(tmp_path, monkeypatch):
+    # pdfplumber compares every vertical edge with every horizontal one, so a
+    # crafted page could hold the check for hours; such a page is skipped.
+    import app.core.table_finder as finder
+
+    pages, _ = side_by_side(True)
+    pdf = write_pdf(tmp_path / "dense.pdf", pages)
+    assert finder.find_tables(str(pdf), [1])["pages"][0]["bands"], "an ordinary table page is read"
+
+    monkeypatch.setattr(finder, "MAX_PAGE_EDGES", 3)
+    assert finder.find_tables(str(pdf), [1])["pages"] == [{"page": 1, "skipped": "too_complex", "bands": []}]
+    monkeypatch.setattr(finder, "MAX_PAGE_EDGES", 10_000)
+    monkeypatch.setattr(finder, "MAX_PAGE_CHARS", 3)
+    assert finder.find_tables(str(pdf), [1])["pages"][0]["skipped"] == "too_complex"
+
+
 def test_never_raises_and_respects_its_limits(tmp_path):
     missing = find_tables(str(tmp_path / "nope.pdf"), [1])
     assert missing["pages"] == [] and missing["error"]

@@ -1716,7 +1716,13 @@ async def convert_file(
     _guard_engine_availability(engine_kind)
     job = _start_job(job_id)
 
-    tmp_path = await _save_upload_to_temp(file, ext)
+    try:
+        tmp_path = await _save_upload_to_temp(file, ext)
+    except HTTPException:
+        # Too large: end the job now, as /convert/batch does, so its progress
+        # doesn't report a conversion running until the registry expires it.
+        job.finish("error")
+        raise
     try:
         item = QueueItem(
             source=tmp_path,

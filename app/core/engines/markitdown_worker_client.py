@@ -626,6 +626,17 @@ class MarkItDownWorker:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def _from_here(path: str) -> str:
+    """A relative path as seen from InkDoc's working directory, not the worker's.
+
+    The worker runs in its private results folder, so a relative path given by a
+    script calling convert_item() would point somewhere else there.
+    """
+    if path and not os.path.isabs(path) and os.path.exists(path):
+        return os.path.abspath(path)
+    return path
+
+
 def convert_with_markitdown(
     source: str,
     options: Any,
@@ -636,7 +647,7 @@ def convert_with_markitdown(
     worker = MarkItDownWorker.get_instance()
     if worker.usable():
         try:
-            return worker.convert(source, options, stream_info, url)
+            return worker.convert(_from_here(source), options, stream_info, url)
         except WorkerUnavailableError as exc:
             logger.warning("MarkItDown worker unavailable (%s); converting in InkDoc's own process.", exc)
     from app.core.converter import run_markitdown
@@ -656,7 +667,7 @@ def find_tables_in_worker(
     worker = MarkItDownWorker.get_instance()
     if worker.usable():
         try:
-            return worker.find_tables(source, pages, job, hints=hints, deep=deep, detectors=detectors)
+            return worker.find_tables(_from_here(source), pages, job, hints=hints, deep=deep, detectors=detectors)
         except WorkerUnavailableError as exc:
             logger.warning("MarkItDown worker unavailable (%s); finding tables in InkDoc's own process.", exc)
     from app.core.table_finder import find_tables
@@ -669,7 +680,7 @@ def find_layout_in_worker(source: str, pages: list[int], model_dir: str, sha256:
     worker = MarkItDownWorker.get_instance()
     if worker.usable():
         try:
-            return worker.find_layout(source, pages, model_dir, sha256, job)
+            return worker.find_layout(_from_here(source), pages, model_dir, sha256, job)
         except WorkerUnavailableError as exc:
             logger.warning("MarkItDown worker unavailable (%s); finding tables in InkDoc's own process.", exc)
     from app.core.engines.layout_model import detect_tables

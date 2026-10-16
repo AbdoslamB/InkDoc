@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 import dataclasses
 import hmac
+import json
 import logging
 import os
 import re
@@ -62,10 +63,13 @@ try:
     )
     from app.core.download_utils import SecurityError
     from app.core.engine_manager import (
+        HIDEABLE_ENGINES,
         LAYOUT_WIDTHS,
         PREVIEW_TEXT_SIZES,
         EngineManager,
         EngineStatus,
+        SettingsWriteError,
+        sanitize_ui_preferences,
     )
     from app.core.engines.docling_engine import get_docling_version, is_docling_available
     from app.core.engines.markit_engine import get_markit_version, is_markit_available
@@ -499,8 +503,9 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 
 def _shutdown_engine_processes() -> None:
-    """Stop llama-server and the Docling worker when the server stops (window
-    closed, Ctrl+C in --headless). Only instances that exist are touched."""
+    """Stop llama-server, the Docling worker and the MarkItDown worker when the
+    server stops (window closed, Ctrl+C in --headless). Only instances that
+    exist are touched."""
     try:
         from app.core.engines.glm_ocr_server import GlmOcrServer
 
@@ -517,6 +522,14 @@ def _shutdown_engine_processes() -> None:
             client.shutdown()
     except Exception as exc:
         logger.debug("Docling worker shutdown: %s", exc)
+    try:
+        from app.core.engines.markitdown_worker_client import MarkItDownWorker
+
+        worker = MarkItDownWorker._instance
+        if worker is not None:
+            worker.shutdown()
+    except Exception as exc:
+        logger.debug("MarkItDown worker shutdown: %s", exc)
 
 
 app = FastAPI(
@@ -778,6 +791,43 @@ class SettingsPayload(BaseModel):
             "bundled KaTeX (default true). Never changes saved files or API output."
         ),
     )
+    theme: Literal["dark", "light"] | None = Field(
+        default=None,
+        description="Interface theme: 'dark' (the default) or 'light'. Applied before first paint.",
+    )
+    preferred_engine: Literal["auto", "markitdown", "docling", "markit", "glm_ocr"] | None = Field(
+        default=None,
+        description=(
+            "The engine selected on the main screen (default 'auto'). While it is not "
+            "usable, the page uses Auto for the session and keeps this choice."
+        ),
+    )
+    hidden_engines: list[Literal["markitdown", "docling", "markit", "glm_ocr"]] | None = Field(
+        default=None,
+        max_length=len(HIDEABLE_ENGINES),
+        description=(
+            "Engines whose button is hidden on the main screen. Hiding never uninstalls "
+            "an engine, and Auto and explicit API requests ignore this list."
+        ),
+    )
+    auto_save: bool | None = Field(
+        default=None,
+        description=(
+            "The Auto-save switch (default false). The page sends it with each conversion "
+            "as save_to_downloads; the conversion endpoints never read this setting."
+        ),
+    )
+    auto_hint_hidden: bool | None = Field(
+        default=None,
+        description="\"Don't show again\" on Auto's install tip.",
+    )
+    legacy_prefs_imported: bool | None = Field(
+        default=None,
+        description=(
+            "Set by the page once preferences kept in browser storage by InkDoc 1.2 and "
+            "earlier have been moved into settings.json."
+        ),
+    )
 
 
 # Resource and DoS protection limits
@@ -868,38 +918,77 @@ async def _save_upload_to_temp(file: UploadFile, ext: str) -> str:
     return tmp_path
 
 
-def _initial_layout_width() -> str:
+def _initial_layout_width(settings: dict[str, Any]) -> str:
     """The saved layout width, or "standard" for anything unexpected.
 
     It is written into a script on the page, so only one of the known values
     may ever come out of here, whatever a hand-edited settings.json holds.
     """
-    try:
-        value = EngineManager.get_instance().get_settings().get("layout_width")
-    except Exception:
-        return "standard"
+    value = settings.get("layout_width")
     return value if value in LAYOUT_WIDTHS else "standard"
 
 
-def _initial_preview_text_size() -> int:
+def _initial_preview_text_size(settings: dict[str, Any]) -> int:
     """The saved preview text size, or 100 for anything unexpected (see above)."""
-    try:
-        value = EngineManager.get_instance().get_settings().get("preview_text_size")
-    except Exception:
-        return 100
+    value = settings.get("preview_text_size")
     # bool is an int in Python; True must not pass for 1.
     if isinstance(value, bool) or value not in PREVIEW_TEXT_SIZES:
         return 100
     return int(value)
 
 
-def _initial_render_math() -> str:
+def _initial_render_math(settings: dict[str, Any]) -> str:
     """'off' only when math rendering was switched off; anything else is 'on'."""
+    return "off" if settings.get("render_math") is False else "on"
+
+
+# The keys of window.__INKDOC_PREFS__: the saved preferences app.js needs at
+# startup that are not a data-* attribute on <html>.
+_PAGE_PREFS = ("preferred_engine", "auto_save", "auto_hint_hidden", "legacy_prefs_imported")
+
+
+def _script_json(value: Any) -> str:
+    """JSON that is safe inside an inline <script>.
+
+    The values written today are all from fixed sets, so this changes nothing;
+    it keeps a future free-text preference from closing the script (the one
+    that holds the session token) or breaking it with a line separator.
+    """
+    # ensure_ascii (json.dumps' default) already writes U+2028 and U+2029 as
+    # \u escapes, so only "<" (as in </script>) needs replacing.
+    return json.dumps(value, separators=(",", ":")).replace("<", "\\u003c")
+
+
+def _initial_page_state() -> str:
+    """Script statements that put the saved settings on the page before first paint.
+
+    One read of the in-memory settings per page load. Every value written is
+    one of a fixed set, never text copied from settings.json.
+    """
     try:
-        value = EngineManager.get_instance().get_settings().get("render_math")
+        settings = EngineManager.get_instance().get_settings()
     except Exception:
-        return "on"
-    return "off" if value is False else "on"
+        settings = {}
+    ui = sanitize_ui_preferences(settings)
+    prefs = _script_json({key: ui[key] for key in _PAGE_PREFS})
+    root = "document.documentElement.dataset"
+    script = (
+        f"{root}.layoutWidth = '{_initial_layout_width(settings)}';"
+        f"{root}.textSize = '{_initial_preview_text_size(settings)}';"
+        f"{root}.renderMath = '{_initial_render_math(settings)}';"
+        f"{root}.theme = '{ui['theme']}';"
+        f"{root}.hiddenEngines = '{' '.join(ui['hidden_engines'])}';"
+        f"window.__INKDOC_PREFS__ = {prefs};"
+    )
+    if not ui["legacy_prefs_imported"]:
+        # Until app.js moves it into settings.json (once), a theme chosen in
+        # InkDoc 1.2 or earlier is still in this browser's storage. Read it here
+        # as well, so that one page load is painted in the right theme too.
+        script += (
+            "try{var t=localStorage.getItem('inkdoc-theme')||localStorage.getItem('markitdown-theme');"
+            f"if(t==='light'||t==='dark'){root}.theme=t;}}catch(e){{}}"
+        )
+    return script
 
 
 def _serve_bench_html() -> HTMLResponse:
@@ -923,19 +1012,14 @@ def _serve_bench_html() -> HTMLResponse:
             if custom_titlebar
             else ""
         )
-        # The layout width and preview text size likewise, or the page would
-        # render at the defaults and then jump.
-        layout_width = _initial_layout_width()
-        text_size = _initial_preview_text_size()
-        render_math = _initial_render_math()
+        # The saved settings likewise (theme, layout width, text size, hidden
+        # engines...), or the page would render at the defaults and then jump.
         token_injection = (
             f'<script id="inkdoc-session-token" nonce="{nonce}">'
             f'window.__INKDOC_SESSION_TOKEN__ = "{SESSION_TOKEN}";'
             f'window.__INKDOC_CUSTOM_TITLEBAR__ = {"true" if custom_titlebar else "false"};'
             f'{titlebar_class}'
-            f"document.documentElement.dataset.layoutWidth = '{layout_width}';"
-            f"document.documentElement.dataset.textSize = '{text_size}';"
-            f"document.documentElement.dataset.renderMath = '{render_math}';"
+            f'{_initial_page_state()}'
             f'</script>'
         )
         if "<head>" in html_content:
@@ -1363,7 +1447,43 @@ def update_settings(payload: SettingsPayload, request: Request):
                 ),
             )
 
-    return EngineManager.get_instance().update_settings(updates)
+    if "hidden_engines" in updates:
+        # One entry per engine, in a fixed order, whatever order the page sent.
+        updates["hidden_engines"] = [
+            name for name in HIDEABLE_ENGINES if name in updates["hidden_engines"]
+        ]
+
+    try:
+        return EngineManager.get_instance().update_settings(updates, strict=True)
+    except SettingsWriteError as exc:
+        raise _settings_write_failed() from exc
+
+
+def _settings_write_failed() -> HTTPException:
+    # The cause (and the file's path) is in the server log; the page only needs
+    # to say that the change won't survive a restart.
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="InkDoc couldn't write its settings file, so this change will be lost when InkDoc restarts.",
+    )
+
+
+@api_router.post("/settings/reset", tags=["Settings"])
+def reset_settings(request: Request):
+    """Restore the default preferences. Requires session token.
+
+    Resets the theme, the engine choice and which engines are hidden, auto-save,
+    Auto's tip, the Docling fallback, the PDF check, layout width, text size,
+    math formulas and the daily update check. Keeps installed engines and
+    add-ons and their setup, the save folder, and every file. Returns the same
+    body as GET /settings.
+    """
+    require_session_token(request)
+    try:
+        EngineManager.get_instance().reset_preferences()
+    except SettingsWriteError as exc:
+        raise _settings_write_failed() from exc
+    return get_settings()
 
 
 # ─── Update Management Endpoints ──────────────────────────────────────────────
@@ -1857,6 +1977,22 @@ def cancel_conversion(job_id: str):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid job_id.")
     running = JOBS.cancel(job_id)
     return {"status": "cancelling" if running else "not_running", "job_id": job_id}
+
+
+@api_router.post("/convert/warmup", tags=["Conversion"])
+def warmup_conversion(request: Request):
+    """Start the MarkItDown worker ahead of a conversion. Requires session token.
+
+    The UI sends this when a conversion looks imminent (a file dragged over the
+    window, the file picker opened, the URL box focused), so the worker is warm
+    by the time the file arrives. Returns at once; calling it again is harmless.
+    `status` is `ready`, `starting` or `unavailable` (conversions then run in
+    InkDoc's own process).
+    """
+    require_session_token(request)
+    from app.core.engines.markitdown_worker_client import MarkItDownWorker
+
+    return {"status": MarkItDownWorker.get_instance().warm()}
 
 
 # Mount API routes at root, /InkDoc, and /MarkItDown (alias)

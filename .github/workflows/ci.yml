@@ -107,6 +107,18 @@ jobs:
         if: runner.os == 'Linux'
         run: node tests/math_render_ui.test.js
 
+      - name: Test saved preferences UI
+        if: runner.os == 'Linux'
+        run: node tests/preferences_ui.test.js
+
+      - name: Test engine visibility UI
+        if: runner.os == 'Linux'
+        run: node tests/engine_visibility_ui.test.js
+
+      - name: Test Restore defaults UI
+        if: runner.os == 'Linux'
+        run: node tests/reset_defaults_ui.test.js
+
       # installer.iss is otherwise only compiled by release.yml, after the tag is
       # pushed, so a mistake in its Pascal [Code] cost a version number. Compile
       # it here against a stand-in bundle (only the script is being checked).

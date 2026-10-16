@@ -15,7 +15,7 @@ const helperBlock = slice("  // ─── Pure helpers", "  // ─── End of 
 const EXPORTS = [
     "getEngineDisplayName", "qualityAction", "getNextEngine", "formatDuration", "formatSize",
     "formatJobProgress", "glmAccelLabel", "formatGlmProgress", "glmDownloadWarning", "glmLongJobPrompt",
-    "initialEngine", "readStorage",
+    "normalizePrefs", "legacyPrefsFrom", "readStorage",
 ];
 const h = new Function("window", `${helperBlock}\nreturn { ${EXPORTS.join(", ")} };`)({ localStorage: { getItem: () => null, setItem() {} } });
 
@@ -28,10 +28,11 @@ assert.strictEqual(h.getNextEngine("markitdown", true), "docling");
 assert.deepStrictEqual(h.qualityAction({ suggestion: "glm_ocr" }), { label: "Re-convert with GLM-OCR", engine: "glm_ocr" });
 assert.deepStrictEqual(h.qualityAction({ suggestion: "install_glm_ocr" }), { label: "Download GLM-OCR", install: true });
 {
-    const stored = new Function("window", `${helperBlock}\nreturn { initialEngine, readStorage };`)({
+    const stored = new Function("window", `${helperBlock}\nreturn { legacyPrefsFrom, readStorage };`)({
         localStorage: { getItem: (k) => (k === "inkdoc-engine" ? "glm_ocr" : null), setItem() {} },
     });
-    assert.strictEqual(stored.initialEngine(stored.readStorage), "glm_ocr", "a stored GLM-OCR choice is kept");
+    assert.strictEqual(stored.legacyPrefsFrom(stored.readStorage).preferred_engine, "glm_ocr", "a GLM-OCR choice from 1.2 is kept");
+    assert.strictEqual(h.normalizePrefs({ preferred_engine: "glm_ocr" }).preferred_engine, "glm_ocr", "and a saved one");
 }
 
 // ─── Formatting ──────────────────────────────────────────────────────────────

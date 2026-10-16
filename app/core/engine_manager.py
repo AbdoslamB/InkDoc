@@ -5,6 +5,7 @@ and status tracking for optional engine packages (IBM Docling).
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import logging
@@ -108,10 +109,117 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # Built-in add-on (Settings → Add-ons): draw LaTeX math in the preview with
     # the bundled KaTeX. Off means the preview is parsed exactly as before.
     "render_math": True,
+    # Interface preferences that used to live in browser storage, which the
+    # desktop app's web view clears on every launch. The page reads them from
+    # the server before first paint (server._serve_bench_html).
+    "theme": "dark",
+    # The engine the user picked. The page falls back to Auto for the session
+    # while it is not usable, without changing this.
+    "preferred_engine": "auto",
+    # Engines whose button is hidden on the main screen. Hiding never uninstalls
+    # anything, and Auto ignores this list.
+    "hidden_engines": [],
+    # Also save each conversion to the save folder. Sent with every request as
+    # save_to_downloads; the server itself never reads it.
+    "auto_save": False,
+    # "Don't show again" on Auto's install tip.
+    "auto_hint_hidden": False,
+    # Set once the page has moved any of the above out of browser storage
+    # (InkDoc 1.2 and earlier kept them there). Never reset.
+    "legacy_prefs_imported": False,
 }
 
 LAYOUT_WIDTHS = ("standard", "wide", "full")
 PREVIEW_TEXT_SIZES = (85, 90, 100, 110, 120, 135, 150)
+THEMES = ("dark", "light")
+ENGINE_CHOICES = ("auto", "markitdown", "docling", "markit", "glm_ocr")
+# Auto is the fallback and always stays on the main screen.
+HIDEABLE_ENGINES = ("markitdown", "docling", "markit", "glm_ocr")
+
+# What "Restore defaults" (POST /settings/reset) puts back. Deliberately left
+# alone: the save folder (set only by the desktop folder dialog), the setup of
+# installed engines and add-ons (Docling enrichment, GLM-OCR GPU and download
+# source), glm_ocr_catalogue_seen (blocks catalogue rollback), measured speeds,
+# legacy_prefs_imported and any key this version does not know.
+RESETTABLE_SETTINGS = (
+    "theme",
+    "preferred_engine",
+    "hidden_engines",
+    "auto_save",
+    "auto_hint_hidden",
+    "fallback_to_markitdown",
+    "quality_check_enabled",
+    "layout_width",
+    "preview_text_size",
+    "render_math",
+    "check_for_updates_daily",
+)
+
+
+class SettingsWriteError(Exception):
+    """settings.json could not be written; the change only lasts until restart."""
+
+
+# On Windows an antivirus scan, the search indexer or a sync client can hold the
+# just-written file (or settings.json) for a moment, and os.replace() then fails
+# with "Access is denied". A short retry turns that into a delay of a few tens
+# of milliseconds instead of a lost setting. Kept short: it runs inside a
+# request (only writers wait for it; readers of the settings never do).
+SETTINGS_REPLACE_ATTEMPTS = 8
+SETTINGS_REPLACE_DELAY_S = 0.05
+
+
+def _replace_settings_file(src: str, dst: Path) -> None:
+    for attempt in range(SETTINGS_REPLACE_ATTEMPTS):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt + 1 == SETTINGS_REPLACE_ATTEMPTS:
+                raise
+            time.sleep(SETTINGS_REPLACE_DELAY_S)
+
+
+def _copy_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    """A copy whose lists and dicts (hidden_engines, glm_ocr_measured_spp) are its
+    own, so a caller can't change the stored settings by editing what it got."""
+    return {
+        key: copy.deepcopy(value) if isinstance(value, (list, dict)) else value
+        for key, value in settings.items()
+    }
+
+
+def default_settings() -> dict[str, Any]:
+    """A fresh copy of the defaults. Deep, so a list or dict default (hidden_engines,
+    glm_ocr_measured_spp) is never shared with the stored settings."""
+    return copy.deepcopy(DEFAULT_SETTINGS)
+
+
+def sanitize_ui_preferences(settings: dict[str, Any]) -> dict[str, Any]:
+    """The interface preferences reduced to known values.
+
+    These go into a script on the page and into the desktop window's colour,
+    so whatever a hand-edited settings.json holds, only one of the allowed
+    values may come out of here.
+    """
+    theme = settings.get("theme")
+    engine = settings.get("preferred_engine")
+    stored_hidden = settings.get("hidden_engines")
+    hidden = (
+        [name for name in HIDEABLE_ENGINES if name in stored_hidden]
+        if isinstance(stored_hidden, list)
+        else []
+    )
+    if engine not in ENGINE_CHOICES or engine in hidden:
+        engine = "auto"
+    return {
+        "theme": theme if theme in THEMES else "dark",
+        "preferred_engine": engine,
+        "hidden_engines": hidden,
+        "auto_save": settings.get("auto_save") is True,
+        "auto_hint_hidden": settings.get("auto_hint_hidden") is True,
+        "legacy_prefs_imported": settings.get("legacy_prefs_imported") is True,
+    }
 
 GLM_OCR_ENGINE = "glm_ocr"
 
@@ -190,6 +298,9 @@ class EngineManager:
         self._progress: dict[str, InstallProgress] = {}
         self._settings_cache: dict[str, Any] | None = None
         self._settings_lock = threading.Lock()
+        # Serialises writes of settings.json. Held while the file is written,
+        # which _settings_lock never is, so readers don't wait on the disk.
+        self._settings_write_lock = threading.Lock()
 
     @classmethod
     def get_instance(cls) -> EngineManager:
@@ -237,46 +348,62 @@ class EngineManager:
         """Read and cache user settings (thread-safe)."""
         with self._settings_lock:
             if self._settings_cache is not None:
-                return dict(self._settings_cache)
+                return _copy_settings(self._settings_cache)
 
             path = self.get_settings_file_path()
             if path.is_file():
                 try:
                     stored = json.loads(path.read_text(encoding="utf-8"))
                     # A file written before a key existed must still report it.
-                    merged = dict(DEFAULT_SETTINGS)
+                    merged = default_settings()
                     merged.update(stored if isinstance(stored, dict) else {})
                     self._settings_cache = merged
-                    return dict(merged)
+                    return _copy_settings(merged)
                 except Exception as exc:
                     logger.warning("Failed to parse settings at %s: %s", path, exc)
 
-            default_settings = dict(DEFAULT_SETTINGS)
-            self._settings_cache = default_settings
-            return dict(default_settings)
+            defaults = default_settings()
+            self._settings_cache = defaults
+            return _copy_settings(defaults)
 
-    def update_settings(self, updates: dict[str, Any]) -> dict[str, Any]:
-        """Update and persist user settings thread-safely and atomically."""
+    def update_settings(self, updates: dict[str, Any], *, strict: bool = False) -> dict[str, Any]:
+        """Update and persist user settings thread-safely and atomically.
+
+        A failed write is logged and the change kept for this session only. With
+        strict=True it also raises SettingsWriteError, so a request from the
+        Settings page can say the change will not last; every other caller keeps
+        the old behaviour.
+
+        The change is made under _settings_lock; the file is written after it is
+        released, so get_settings() (every conversion, every page load) never
+        waits on the disk, an antivirus scan or the retry in
+        _replace_settings_file. Writers take _settings_write_lock in turn and
+        each writes the newest settings, so the file always ends up current.
+        """
         with self._settings_lock:
             # Refresh from current cache or disk
             if self._settings_cache is not None:
                 current = dict(self._settings_cache)
             else:
+                current = default_settings()
                 path = self.get_settings_file_path()
                 if path.is_file():
                     try:
-                        current = json.loads(path.read_text(encoding="utf-8"))
+                        stored = json.loads(path.read_text(encoding="utf-8"))
+                        current.update(stored if isinstance(stored, dict) else {})
                     except Exception as exc:
                         logger.warning("Failed to parse settings at %s: %s", path, exc)
-                        current = dict(DEFAULT_SETTINGS)
-                else:
-                    current = dict(DEFAULT_SETTINGS)
 
             current.update(updates)
             self._settings_cache = current
+            result = _copy_settings(current)
 
+        with self._settings_write_lock:
             path = self.get_settings_file_path()
             try:
+                with self._settings_lock:
+                    # The newest settings, which may include a later change.
+                    payload = json.dumps(self._settings_cache, indent=2)
                 path.parent.mkdir(parents=True, exist_ok=True)
                 tmp_fd, tmp_path_str = tempfile.mkstemp(
                     prefix="settings_",
@@ -285,10 +412,10 @@ class EngineManager:
                 )
                 try:
                     with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-                        json.dump(current, f, indent=2)
+                        f.write(payload)
                         f.flush()
                         os.fsync(f.fileno())
-                    os.replace(tmp_path_str, path)
+                    _replace_settings_file(tmp_path_str, path)
                 except Exception:
                     if os.path.exists(tmp_path_str):
                         try:
@@ -298,8 +425,19 @@ class EngineManager:
                     raise
             except Exception as exc:
                 logger.error("Failed to save settings to %s: %s", path, exc)
+                if strict:
+                    raise SettingsWriteError(str(exc)) from exc
 
-            return dict(current)
+        return result
+
+    def reset_preferences(self) -> dict[str, Any]:
+        """Put every key in RESETTABLE_SETTINGS back to its default, in one write.
+
+        Nothing else changes: installed engines and add-ons, their setup and the
+        save folder are kept. Raises SettingsWriteError if the file can't be written.
+        """
+        defaults = default_settings()
+        return self.update_settings({key: defaults[key] for key in RESETTABLE_SETTINGS}, strict=True)
 
     # ─── Engine Status & Platform Queries ────────────────────────────────────
 

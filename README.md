@@ -162,7 +162,7 @@ gh attestation verify inkdoc-setup.exe --repo AbdoslamB/inkdoc
       <br />
       <b>Single Source of Truth Interface</b>
       <br />
-      The native desktop executable (Edge WebView2 on Windows, WebKit on macOS/Linux) and the local web workbench (<code>http://127.0.0.1:13118/InkDoc</code>) run the <b>exact same user interface</b> without code divergence. On large screens, <b>Settings → General → Layout width</b> (Standard, Wide or Full) gives tables, code and images more room, and <b>A− / A+</b> set the preview's text size. LaTeX formulas from Docling and GLM-OCR are drawn as real math (bundled KaTeX, works offline; switch it off in <b>Settings → Add-ons</b>).
+      The native desktop executable (Edge WebView2 on Windows, WebKit on macOS/Linux) and the local web workbench (<code>http://127.0.0.1:13118/InkDoc</code>) run the <b>exact same user interface</b> without code divergence. On large screens, <b>Settings → General → Layout width</b> (Standard, Wide or Full) gives tables, code and images more room, and <b>A− / A+</b> set the preview's text size. LaTeX formulas from Docling and GLM-OCR are drawn as real math (bundled KaTeX, works offline; switch it off in <b>Settings → Add-ons</b>). Engines you don't use can be hidden from the main screen (<b>Settings → Engines → Show on main screen</b>) without uninstalling them or changing Auto, your theme, engine and other preferences are remembered between launches, and <b>Settings → General → Restore defaults</b> puts them back without touching engines, add-ons or files. MarkItDown runs in a background process that starts when you're about to convert and closes when idle, so InkDoc stays light while you aren't converting.
     </td>
   </tr>
   <tr>
@@ -171,7 +171,7 @@ gh attestation verify inkdoc-setup.exe --repo AbdoslamB/inkdoc
       <br />
       <b>Zero-Friction Auto-Save</b>
       <br />
-      Documents convert asynchronously and are <b>automatically saved to <code>~/Downloads</code></b>, or to a folder you pick in Settings, the moment they finish, with collision-safe numbered suffixes (e.g., <code>report (1).md</code>). No manual export required. If the chosen folder is missing or read-only, the file goes to Downloads and InkDoc tells you.
+      With <b>Auto-save</b> on (Settings → General; remembered between launches), documents convert asynchronously and are <b>automatically saved to <code>~/Downloads</code></b>, or to a folder you pick in Settings, the moment they finish, with collision-safe numbered suffixes (e.g., <code>report (1).md</code>). No manual export required. If the chosen folder is missing or read-only, the file goes to Downloads and InkDoc tells you.
     </td>
     <td width="50%" valign="top">
       <img src="assets/readme/feature-api.svg" width="44" alt="" />
@@ -411,6 +411,9 @@ node tests/settings_drawer_ui.test.js
 node tests/layout_width_ui.test.js
 node tests/text_size_ui.test.js
 node tests/math_render_ui.test.js
+node tests/preferences_ui.test.js
+node tests/engine_visibility_ui.test.js
+node tests/reset_defaults_ui.test.js
 
 # 4. Verify code style and formatting with Ruff
 ruff check .

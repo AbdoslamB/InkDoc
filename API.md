@@ -157,7 +157,12 @@ curl http://localhost:13118/convert/progress/my-job-0001
 ```
 `status` is `running`, `done`, `error` or `cancelled`. Phases are `queued`, `fetching`, `routing`, `starting`, `converting`, `checking`, `retrying` and `saving`. Engines that know their page count (GLM-OCR) also report `page` (pages finished), `pages` and, after the first page, `seconds_remaining_est`; GLM-OCR checks for cancellation between pages. Entries are kept in memory for one hour; an unknown id returns `404`.
 
-`POST /convert/cancel/{job_id}` stops the job before its next phase. Nothing is saved, and the conversion request itself ends with `409 {"detail": "conversion_cancelled"}`. A cancel that arrives before its request is remembered and applied when the request does.
+`POST /convert/cancel/{job_id}` stops the job before its next phase. Nothing is saved, and the conversion request itself ends with `409 {"detail": "conversion_cancelled"}`. A cancel that arrives before its request is remembered and applied when the request does. A MarkItDown conversion that is the only one running stops at once: its worker process is ended (and has exited, releasing the document, before the request answers). With other MarkItDown conversions running, it finishes in the worker and its result is discarded, as before.
+
+### `POST /convert/warmup`
+Start the MarkItDown worker ahead of a conversion. Requires `X-InkDoc-Token`. Returns at once with `{"status": "ready" | "starting" | "unavailable"}`; calling it again is harmless.
+
+MarkItDown runs in a separate worker process that InkDoc starts on demand and stops after 5 minutes without work, so InkDoc's own process never holds MarkItDown's ~95 MB of libraries. The first MarkItDown conversion after a pause waits for that start (1–3 s). The UI calls this endpoint when a conversion looks imminent (a file dragged over the window, the file picker opened, the URL box focused); API clients can call it before a batch. `unavailable` means the worker could not be started, and conversions then run in InkDoc's own process, with the same results. Conversion requests and responses are unchanged either way.
 
 ---
 
@@ -282,13 +287,26 @@ Query or update application engine preferences.
     "glm_ocr_download_source": "auto",
     "layout_width": "standard",
     "preview_text_size": 100,
-    "render_math": true
+    "render_math": true,
+    "theme": "dark",
+    "preferred_engine": "auto",
+    "hidden_engines": [],
+    "auto_save": false,
+    "auto_hint_hidden": false
   }
   ```
   `quality_check_enabled` (default `true`) turns the missing-text check on or off for requests that do not pass `check_quality`. `glm_ocr_download_source` is `auto` (official source first, InkDoc mirror as fallback) or `mirror_only`. `layout_width` (default `standard`) is how much of a wide window the UI uses: `standard` (up to 1400px), `wide` (up to 1920px) or `full`; any other value is refused with `422`. The UI applies it from the next page load. `preview_text_size` (default `100`) is the document preview's text size in percent: `85`, `90`, `100`, `110`, `120`, `135` or `150`; anything else is refused with `422`. `render_math` (default `true`) draws LaTeX math in the UI preview with the bundled KaTeX; it never changes conversion output, saved files or API responses.
+
+  Interface preferences, applied by the UI before first paint: `theme` (`dark`, the default, or `light`); `preferred_engine` (`auto`, the default, `markitdown`, `docling`, `markit` or `glm_ocr`), the engine selected on the main screen; `hidden_engines`, the engines whose button is hidden on the main screen (any of `markitdown`, `docling`, `markit`, `glm_ocr`; never `auto`; stored once each, in a fixed order); `auto_save` (default `false`), the Auto-save switch; `auto_hint_hidden` (default `false`), "Don't show again" on Auto's install tip. Any other value is refused with `422`. None of them changes what the conversion endpoints do: Auto and explicit `engine` values ignore `hidden_engines`, and only a request's own `save_to_downloads` saves a file. `legacy_prefs_imported` is set by the UI once it has moved these out of the browser storage InkDoc 1.2 used.
+
+  If `settings.json` can't be written (after a short retry, for example while an antivirus scan holds the file), `POST /settings` answers `503` with a message saying the change will be lost when InkDoc restarts; it still applies until then. A successful `POST /settings` returns the stored settings, without the `save_folder` and `addon_reconciliation` fields that `GET` adds.
+
 * **Save folder** (`GET` only): the response includes `save_folder`, for example
   `{"path": "C:\\Users\\you\\Downloads", "chosen": "D:\\Notes", "custom": true, "problem": "This folder was not found. Files are saved to Downloads until it is back."}`.
   `path` is where auto-save writes now; `chosen` is the folder picked in Settings (`""` for Downloads). The save folder can only be changed in the desktop app's folder dialog: `POST /settings` ignores `save_dir`, and no other request can set it.
+
+### `POST /settings/reset`
+Restore the default preferences. Requires `X-InkDoc-Token`. Resets `theme`, `preferred_engine`, `hidden_engines`, `auto_save`, `auto_hint_hidden`, `fallback_to_markitdown`, `quality_check_enabled`, `layout_width`, `preview_text_size`, `render_math` and `check_for_updates_daily` in one write, and returns the same body as `GET /settings`. Installed engines and add-ons and their settings (Docling enrichment, GLM-OCR GPU and download source), the save folder and all files are kept. `503` as above if the file can't be written.
 
 ---
 

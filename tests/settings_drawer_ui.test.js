@@ -111,10 +111,12 @@ function setup() {
         fetchUpdateStatus: () => calls.push("fetchUpdateStatus"),
         refreshAddonStatus: () => calls.push("refreshAddonStatus"),
         refreshGlm: (force) => calls.push(`refreshGlm(${force})`),
+        flushPrefs: () => calls.push("flushPrefs"),
+        flushTextSize: () => calls.push("flushTextSize"),
     };
     const api = new Function("env", `
         const { window, document, settingsPopover, settingsBtn, appDialogOverlay, toastNotification,
-                loadSettings, fetchUpdateStatus, refreshAddonStatus, refreshGlm } = env;
+                loadSettings, fetchUpdateStatus, refreshAddonStatus, refreshGlm, flushPrefs, flushTextSize } = env;
         ${block}
         return { openSettings, closeSettings, isOpen: isSettingsOpen, section: () => settingsSection };
     `)(env);
@@ -166,6 +168,12 @@ function setup() {
     assert.strictEqual(t.gear.getAttribute("aria-expanded"), "false");
     assert.ok(!t.doc.rootClasses.has("settings-open"));
     assert.strictEqual(t.doc.activeElement, t.gear, "focus returns to the gear");
+    // Changes made in Settings are saved as it closes, not after their pause.
+    assert.deepStrictEqual(t.calls.slice(4), ["flushPrefs", "flushTextSize"]);
+
+    // Closing what is already closed saves nothing.
+    t.closeSettings();
+    assert.strictEqual(t.calls.length, 6);
 }
 
 // The X and Escape close it and hand focus back.

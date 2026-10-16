@@ -179,14 +179,16 @@ const MISSING = {
     assert.ok(resultStart > 0 && perFileToast > resultStart && fallbackCall > perFileToast,
         "noteSaveFallback must run after the per-file toast");
 
-    // Settings shows the folder every time the popover opens (loadSettings runs then).
+    // Settings shows the folder every time the popover opens (loadSettings runs
+    // then, and hands the body to applySettings, which Restore defaults also uses).
     const loadStart = source.indexOf("  async function loadSettings() {");
-    const loadEnd = source.indexOf("\n  }\n", loadStart) >= 0
-        ? source.indexOf("\n  }\n", loadStart)
-        : source.indexOf("\r\n  }\r\n", loadStart);
-    assert.ok(loadStart > 0 && loadEnd > loadStart, "could not locate loadSettings");
-    assert.ok(source.slice(loadStart, loadEnd).includes("renderSaveFolder(s.save_folder);"),
-        "loadSettings must render the save folder");
+    const applyStart = source.indexOf("  function applySettings(s) {", loadStart);
+    const applyEnd = source.indexOf("  function syncPrefs(s) {", applyStart);
+    assert.ok(loadStart > 0 && applyStart > loadStart && applyEnd > applyStart, "could not locate loadSettings");
+    assert.ok(source.slice(loadStart, applyStart).includes("applySettings(await resp.json());"),
+        "loadSettings must apply what it read");
+    assert.ok(source.slice(applyStart, applyEnd).includes("renderSaveFolder(s.save_folder);"),
+        "applySettings must render the save folder");
 
     console.log("[OK] save_folder_ui.test.js passed");
 })().catch((err) => {

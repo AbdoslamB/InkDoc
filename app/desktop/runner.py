@@ -190,6 +190,17 @@ def verify_inkdoc_server(host: str, port: int) -> bool:
 # can resize would be a far worse bug than a title bar that does not match.
 USE_CUSTOM_TITLEBAR = sys.platform == "win32"
 
+# The window's colour before the page paints: each theme's --paper (style.css),
+# so a light-theme user doesn't see a dark window first.
+_WINDOW_BACKGROUND = {"dark": "#101614", "light": "#f1f3f0"}
+
+
+def _window_background(settings: dict) -> str:
+    """The saved theme's paper colour; dark for anything unexpected."""
+    theme = settings.get("theme")
+    return _WINDOW_BACKGROUND[theme] if theme in ("dark", "light") else _WINDOW_BACKGROUND["dark"]
+
+
 _WS_THICKFRAME = 0x00040000
 _WS_MINIMIZEBOX = 0x00020000
 _GWL_STYLE = -16
@@ -713,17 +724,11 @@ def run_desktop(
 
     app_url = f"http://{host}:{target_port}/InkDoc"
 
-    def start_markitdown_prewarm() -> None:
-        # Only our own embedded server converts in this process; when we attached
-        # to an already-running instance there is nothing here to warm.
-        if server_thread is None:
-            return
-        from app.core.converter import prewarm_markitdown
-
-        threading.Thread(target=prewarm_markitdown, daemon=True, name="InkDocPrewarm").start()
-
+    # markitdown is not loaded here at startup any more: it runs in a worker
+    # process that starts on the first conversion, or when the page signals one
+    # is coming (POST /convert/warmup), and stops when idle
+    # (app/core/engines/markitdown_worker_client.py).
     if headless:
-        start_markitdown_prewarm()
         print(f"InkDoc headless server running at {app_url}")
         print("Press Ctrl+C to stop.")
         try:
@@ -806,7 +811,7 @@ def run_desktop(
         width=1240,
         height=820,
         min_size=(960, 640),
-        background_color="#101614",  # Matches dark theme paper color to avoid white flash
+        background_color=_window_background(settings),  # no flash of the other theme
         text_select=True,
         frameless=USE_CUSTOM_TITLEBAR,
         # Only elements marked .pywebview-drag-region move the window. easy_drag would
@@ -819,18 +824,6 @@ def run_desktop(
     # open_external_link() is also used for regular in-page links.
     window.expose(*_page_functions(window_controls))
     _desktop_window = window
-
-    # Warm markitdown only after the page has loaded, so the ~2s import does not
-    # compete with the server for the GIL while it is still serving the UI.
-    prewarm_started = False
-
-    def on_loaded():
-        nonlocal prewarm_started
-        if not prewarm_started:
-            prewarm_started = True
-            start_markitdown_prewarm()
-
-    window.events.loaded += on_loaded
 
     if USE_CUSTOM_TITLEBAR:
         window.events.shown += lambda: _setup_window_chrome(

@@ -48,6 +48,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from app.core.engines.process_guard import WindowsJob, linux_parent_death_preexec
+
 logger = logging.getLogger(__name__)
 
 IDLE_TIMEOUT_SECONDS = 300.0
@@ -307,90 +309,10 @@ def image_to_data_uri(png_bytes: bytes) -> str:
 
 
 # ─── Process containment ─────────────────────────────────────────────────────
-class _WindowsJob:
-    """A Job Object with kill-on-close: the child dies when InkDoc does, even on a crash."""
-
-    def __init__(self) -> None:
-        import ctypes
-        from ctypes import wintypes
-
-        self._k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        self._k32.CreateJobObjectW.restype = wintypes.HANDLE
-        self.handle = self._k32.CreateJobObjectW(None, None)
-        if not self.handle:
-            raise OSError("CreateJobObjectW failed")
-
-        class IO_COUNTERS(ctypes.Structure):
-            _fields_ = [(n, ctypes.c_ulonglong) for n in (
-                "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
-                "ReadTransferCount", "WriteTransferCount", "OtherTransferCount")]
-
-        class BASIC(ctypes.Structure):
-            _fields_ = [
-                ("PerProcessUserTimeLimit", ctypes.c_longlong), ("PerJobUserTimeLimit", ctypes.c_longlong),
-                ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
-                ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
-                ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD),
-                ("SchedulingClass", wintypes.DWORD),
-            ]
-
-        class EXTENDED(ctypes.Structure):
-            _fields_ = [
-                ("BasicLimitInformation", BASIC), ("IoInfo", IO_COUNTERS),
-                ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
-                ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t),
-            ]
-
-        info = EXTENDED()
-        info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-        ok = self._k32.SetInformationJobObject(
-            self.handle, 9, ctypes.byref(info), ctypes.sizeof(info)  # JobObjectExtendedLimitInformation
-        )
-        if not ok:
-            self._k32.CloseHandle(self.handle)
-            raise OSError("SetInformationJobObject failed")
-
-    def assign(self, proc: subprocess.Popen) -> None:
-        import ctypes
-        from ctypes import wintypes
-
-        self._k32.OpenProcess.restype = wintypes.HANDLE
-        h = self._k32.OpenProcess(0x0100 | 0x0001, False, proc.pid)  # SET_QUOTA | TERMINATE
-        if not h:
-            raise OSError("OpenProcess failed")
-        try:
-            if not self._k32.AssignProcessToJobObject(self.handle, h):
-                raise OSError(f"AssignProcessToJobObject failed ({ctypes.get_last_error()})")
-        finally:
-            self._k32.CloseHandle(h)
-
-    def close(self) -> None:
-        if self.handle:
-            self._k32.CloseHandle(self.handle)
-            self.handle = None
-
-
-def _linux_parent_death_preexec() -> Callable[[], None] | None:
-    """preexec_fn asking the kernel to SIGKILL the child when InkDoc exits.
-
-    libc and prctl are resolved here, in the parent, so the child only calls an
-    already-loaded function pointer between fork and exec.
-    """
-    if not sys.platform.startswith("linux"):
-        return None
-    try:
-        import ctypes
-        import signal
-
-        prctl = ctypes.CDLL("libc.so.6", use_errno=True).prctl
-        sigkill = int(signal.SIGKILL)
-
-        def _preexec() -> None:
-            prctl(1, sigkill, 0, 0, 0)  # PR_SET_PDEATHSIG
-
-        return _preexec
-    except Exception:
-        return None
+# Moved to app/core/engines/process_guard.py so the MarkItDown worker shares
+# them; the old names stay for this module's callers.
+_WindowsJob = WindowsJob
+_linux_parent_death_preexec = linux_parent_death_preexec
 
 
 def reap_stale_process(run_dir: Path, runtime_root: Path) -> bool:

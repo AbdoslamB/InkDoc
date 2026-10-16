@@ -4,7 +4,12 @@
 document.addEventListener("DOMContentLoaded", () => {
   // ─── Pure helpers (no DOM; sliced out and tested by tests/auto_engine_ui.test.js) ──
   const ENGINES = ["auto", "markitdown", "docling", "markit", "glm_ocr"];
+  // Auto is the fallback and always stays on the main screen.
+  const HIDEABLE_ENGINES = ["markitdown", "docling", "markit", "glm_ocr"];
   const HIDE_AUTO_HINT_KEY = "inkdoc-hide-auto-hint";
+  // Where InkDoc 1.2 and earlier kept preferences (browser storage, which the
+  // desktop window clears at every launch). Read once, moved to settings.json.
+  const LEGACY_PREF_KEYS = ["inkdoc-theme", "markitdown-theme", "inkdoc-engine", "markitdown-engine", HIDE_AUTO_HINT_KEY];
 
   // Storage can throw (private windows, browsers set to block site data), and
   // a failed read must never stop the app from starting.
@@ -16,18 +21,51 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function writeStorage(key, value) {
+  function removeStorage(key) {
     try {
-      window.localStorage.setItem(key, value);
+      window.localStorage.removeItem(key);
     } catch (_) {
-      // Not remembered this time; nothing else depends on it.
+      // Nothing to clean up, or no access; either way nothing depends on it.
     }
   }
 
-  // New users start on Auto. Anyone with a saved choice keeps it.
-  function initialEngine(read) {
-    const saved = read("inkdoc-engine") || read("markitdown-engine");
-    return ENGINES.includes(saved) ? saved : "auto";
+  // The saved preferences with every value checked; anything unexpected is the
+  // default. New users start on Auto, in the dark theme, with every engine shown.
+  function normalizePrefs(raw) {
+    const p = raw && typeof raw === "object" ? raw : {};
+    const hidden = Array.isArray(p.hidden_engines)
+      ? HIDEABLE_ENGINES.filter((e) => p.hidden_engines.includes(e))
+      : [];
+    let engine = ENGINES.includes(p.preferred_engine) ? p.preferred_engine : "auto";
+    if (hidden.includes(engine)) engine = "auto";
+    return {
+      theme: p.theme === "light" ? "light" : "dark",
+      preferred_engine: engine,
+      hidden_engines: hidden,
+      auto_save: p.auto_save === true,
+      auto_hint_hidden: p.auto_hint_hidden === true,
+      legacy_prefs_imported: p.legacy_prefs_imported === true,
+    };
+  }
+
+  // The preferences InkDoc 1.2 and earlier left in browser storage, as a patch
+  // for settings.json; only valid values.
+  function legacyPrefsFrom(read) {
+    const patch = {};
+    const theme = read("inkdoc-theme") || read("markitdown-theme");
+    if (theme === "dark" || theme === "light") patch.theme = theme;
+    const engine = read("inkdoc-engine") || read("markitdown-engine");
+    if (ENGINES.includes(engine)) patch.preferred_engine = engine;
+    if (read(HIDE_AUTO_HINT_KEY) === "1") patch.auto_hint_hidden = true;
+    return patch;
+  }
+
+  // The engine to use now: the user's choice while it is shown and usable,
+  // otherwise Auto. isAvailable(engine) is true, false, or undefined while
+  // its status is still unknown (the choice is kept until it is known).
+  function effectiveEngine(preferred, isAvailable, hidden) {
+    if (!ENGINES.includes(preferred) || preferred === "auto" || hidden.includes(preferred)) return "auto";
+    return isAvailable(preferred) === false ? "auto" : preferred;
   }
 
   function getEngineDisplayName(engine) {
@@ -63,15 +101,27 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // The one-click fix a quality report suggests, as { label, engine } or
-  // { label, install: true }; null when there is nothing to offer.
-  function qualityAction(quality) {
+  // { label, install: true }; null when there is nothing to offer. An engine
+  // the user hid is never suggested for installing; re-converting with one
+  // that is installed is still offered (it changes nothing else).
+  function qualityAction(quality, hidden = []) {
     const s = quality && quality.suggestion;
     if (s === "docling" || s === "markitdown" || s === "markit" || s === "glm_ocr") {
       return { label: `Re-convert with ${getEngineDisplayName(s)}`, engine: s };
     }
-    if (s === "install_docling") return { label: "Install Docling", install: true };
-    if (s === "install_glm_ocr") return { label: "Download GLM-OCR", install: true };
+    if (s === "install_docling" && !hidden.includes("docling")) return { label: "Install Docling", install: true };
+    if (s === "install_glm_ocr" && !hidden.includes("glm_ocr")) return { label: "Download GLM-OCR", install: true };
     return null;
+  }
+
+  // Auto's tip, or "" when it asks to install an engine the user hid.
+  function visibleHint(hint, hidden = []) {
+    if (!hint) return "";
+    if (hint.includes("Install it in Settings")) {
+      if (hint.startsWith("Docling") && hidden.includes("docling")) return "";
+      if (hint.startsWith("GLM-OCR") && hidden.includes("glm_ocr")) return "";
+    }
+    return hint;
   }
 
   // What the queue row's engine tag says. Auto items always show where they went.
@@ -109,19 +159,25 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // The install hint appears as a toast at most once per session, and never
   // again after "Don't show again". It always stays in the item's own notice.
-  function shouldShowHintToast(hint, session, read) {
+  function shouldShowHintToast(hint, session, dismissed) {
     if (!hint || session.hintShown) return false;
-    if (read(HIDE_AUTO_HINT_KEY) === "1") return false;
+    if (dismissed) return false;
     return true;
   }
 
-  // Concrete engines only: the Switch Engine button never cycles to Auto, and
-  // reaches GLM-OCR only when it is installed and passed its self-test.
-  function getNextEngine(current, glmUsable = false) {
-    if (current === "markitdown") return "docling";
-    if (current === "docling")    return "markit";
-    if (current === "markit" && glmUsable) return "glm_ocr";
-    return "markitdown";
+  // Concrete engines only: the Switch Engine button never cycles to Auto,
+  // reaches GLM-OCR only when it is installed and passed its self-test, and
+  // skips engines hidden from the main screen. null when there is none left.
+  const SWITCH_CYCLE = ["markitdown", "docling", "markit", "glm_ocr"];
+  function getNextEngine(current, glmUsable = false, hidden = []) {
+    const start = SWITCH_CYCLE.indexOf(current);
+    for (let i = 1; i <= SWITCH_CYCLE.length; i++) {
+      const next = SWITCH_CYCLE[(start + i) % SWITCH_CYCLE.length];
+      if (next === current || hidden.includes(next)) continue;
+      if (next === "glm_ocr" && !glmUsable) continue;
+      return next;
+    }
+    return null;
   }
 
   // "45 s", "6 min", "1 h 10 min" (matches auto_engine.format_duration).
@@ -219,8 +275,6 @@ document.addEventListener("DOMContentLoaded", () => {
   // ─── State ───────────────────────────────────────────────────────────────
   let queue = [];
   let activeItemId = null;
-  let autoSaveToDownloads = false;
-  let selectedEngine = initialEngine(readStorage);
   const hintSession = { hintShown: false };
   // Last /engines/glm_ocr/status payload; null until the first refresh.
   let glmStatus = null;
@@ -228,6 +282,124 @@ document.addEventListener("DOMContentLoaded", () => {
   // Base path resolution for /InkDoc, /MarkItDown, or root mounting
   const pathLower = window.location.pathname.toLowerCase();
   const apiBase = pathLower.startsWith("/inkdoc") ? "/InkDoc" : (pathLower.startsWith("/markitdown") ? "/MarkItDown" : "");
+
+  // ─── Preferences ─────────────────────────────────────────────────────────
+  // Theme, engine choice, hidden engines, auto-save and Auto's tip live in
+  // settings.json. The server puts the saved values on the page before first
+  // paint (data-theme and data-hidden-engines on <html>, __INKDOC_PREFS__), so
+  // nothing here waits for a request at startup. A change applies at once and
+  // is saved after a short pause: several clicks are one write, one save is in
+  // flight at a time, and the newest value wins. A failed save is reported
+  // once and not undone: an engine click must not be taken back after a file
+  // was dropped with it.
+  const PREFS_SAVE_DELAY_MS = 250;
+  const prefsFromServer = Boolean(window.__INKDOC_PREFS__) && typeof window.__INKDOC_PREFS__ === "object";
+  const prefs = normalizePrefs({
+    ...(prefsFromServer ? window.__INKDOC_PREFS__ : {}),
+    theme: document.documentElement.getAttribute("data-theme"),
+    hidden_engines: (document.documentElement.dataset.hiddenEngines || "").split(" "),
+  });
+  let prefsPending = {};
+  let prefsTimer = null;
+  let prefsInFlight = null; // the running save, a promise of true/false
+  let prefsWarned = false;
+
+  // Records a change and saves it shortly. The caller applies it to the page.
+  function savePrefs(patch) {
+    Object.assign(prefs, patch);
+    Object.assign(prefsPending, patch);
+    clearTimeout(prefsTimer);
+    prefsTimer = setTimeout(sendPrefs, PREFS_SAVE_DELAY_MS);
+  }
+
+  // Sends what is pending. keepalive lets the request outlive the page.
+  function sendPrefs(keepalive = false) {
+    clearTimeout(prefsTimer);
+    prefsTimer = null;
+    if (prefsInFlight && !keepalive) {
+      // One save at a time; this one goes when the running one is done.
+      prefsTimer = setTimeout(sendPrefs, PREFS_SAVE_DELAY_MS);
+      return prefsInFlight;
+    }
+    const body = prefsPending;
+    prefsPending = {};
+    if (Object.keys(body).length === 0) return Promise.resolve(true);
+    const run = fetchWithToken(`${apiBase}/settings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      keepalive,
+    })
+      .then(async (resp) => {
+        if (resp.ok) return true;
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(typeof err.detail === "string" ? err.detail : "");
+      })
+      .then(() => {
+        prefsWarned = false;
+        return true;
+      }, (err) => {
+        // Kept for the next save; anything changed since is newer and wins.
+        prefsPending = { ...body, ...prefsPending };
+        if (!prefsWarned && !keepalive) {
+          prefsWarned = true;
+          showToast((err && err.message) || "Couldn't save this setting. It will be back to how it was when InkDoc restarts.", "error");
+        }
+        return false;
+      })
+      .finally(() => {
+        if (prefsInFlight === run) prefsInFlight = null;
+      });
+    prefsInFlight = run;
+    return run;
+  }
+
+  // Settings closing, or the page going away: send now rather than after the
+  // pause. Resolves when what was sent (or a save already on its way) is done.
+  function flushPrefs(keepalive = false) {
+    if (prefsTimer || (keepalive && Object.keys(prefsPending).length)) return sendPrefs(keepalive);
+    return prefsInFlight || Promise.resolve(true);
+  }
+
+  // For Restore defaults: forget unsaved changes (the reset replaces them) and
+  // wait for a save already on its way, so it can't land after the reset.
+  async function settlePrefs() {
+    clearTimeout(prefsTimer);
+    prefsTimer = null;
+    prefsPending = {};
+    if (prefsInFlight) await prefsInFlight;
+  }
+
+  // True while a change is waiting to be saved, being saved, or failed to save
+  // (it goes again with the next change); a read from the server must not
+  // overwrite it then.
+  function prefsBusy() {
+    return Boolean(prefsTimer || prefsInFlight || Object.keys(prefsPending).length);
+  }
+
+  // Once per settings.json: move what InkDoc 1.2 and earlier kept in browser
+  // storage. The desktop window has nothing there (it was cleared at every
+  // launch), so this only records that it is done. The keys are removed only
+  // after the save, so a failed one is tried again on the next load.
+  function importLegacyPrefs() {
+    if (!prefsFromServer || prefs.legacy_prefs_imported) return null;
+    const patch = legacyPrefsFrom(readStorage);
+    if (patch.preferred_engine && prefs.hidden_engines.includes(patch.preferred_engine)) {
+      delete patch.preferred_engine;
+    }
+    savePrefs({ ...patch, legacy_prefs_imported: true });
+    return sendPrefs().then((ok) => {
+      if (ok) LEGACY_PREF_KEYS.forEach(removeStorage);
+      return { ok, patch };
+    });
+  }
+  // ─── End preferences ─────────────────────────────────────────────────────
+
+  let autoSaveToDownloads = prefs.auto_save;
+  // The engine the user chose (saved) and the one used now: Auto while the
+  // choice is hidden or not usable yet, without changing the saved choice.
+  let preferredEngine = prefs.preferred_engine;
+  let selectedEngine = preferredEngine;
 
   // ─── DOM Elements ────────────────────────────────────────────────────────
   const dropZoneSection       = document.getElementById("dropZoneSection");
@@ -522,10 +694,40 @@ document.addEventListener("DOMContentLoaded", () => {
     updateSpeedHint();
   }
 
-  function setEngine(engine) {
+  // The user picked an engine (pill, arrow keys, or a choice that implies one):
+  // used now and saved.
+  function chooseEngine(engine) {
+    preferredEngine = engine;
+    if (prefs.preferred_engine !== engine) savePrefs({ preferred_engine: engine });
+    selectEngine(engine);
+  }
+
+  // The engine used now. Automatic changes go through here only, so the
+  // user's saved choice survives an engine that is not ready yet.
+  function selectEngine(engine) {
+    if (selectedEngine === engine) return;
     selectedEngine = engine;
-    writeStorage("inkdoc-engine", engine);
     updateEngineUI();
+  }
+
+  // undefined while an engine's status has not been read yet.
+  function engineAvailable(engine) {
+    if (engine === "docling") {
+      if (doclingState === "installed") return true;
+      return doclingState === "unknown" ? undefined : false;
+    }
+    if (engine === "glm_ocr") return glmStatus ? Boolean(glmStatus.usable) : undefined;
+    return true;
+  }
+
+  // Back to the user's choice once it is usable (and shown), Auto until then.
+  function restorePreferredEngine() {
+    selectEngine(effectiveEngine(preferredEngine, engineAvailable, prefs.hidden_engines));
+  }
+
+  // A pill on the main screen: not hidden by the user, and offered here.
+  function isPillShown(btn) {
+    return Boolean(btn) && !btn.classList.contains("is-hidden") && !prefs.hidden_engines.includes(btn.dataset.engine);
   }
 
   // "~12 s per page on this computer (CPU)" under the pills while GLM-OCR is selected.
@@ -567,7 +769,7 @@ document.addEventListener("DOMContentLoaded", () => {
           );
           return;
         }
-        setEngine(btn.dataset.engine);
+        chooseEngine(btn.dataset.engine);
       });
     }
   });
@@ -581,7 +783,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const keys = ["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"];
       if (!keys.includes(e.key)) return;
       const choices = allEnginePills.filter(
-        (btn) => btn && !btn.classList.contains("is-hidden") && !btn.classList.contains("is-installable")
+        (btn) => isPillShown(btn) && !btn.classList.contains("is-installable")
       );
       if (choices.length === 0) return;
       e.preventDefault();
@@ -590,10 +792,62 @@ document.addEventListener("DOMContentLoaded", () => {
       else if (e.key === "End") idx = choices.length - 1;
       else if (e.key === "ArrowRight" || e.key === "ArrowDown") idx = (idx + 1) % choices.length;
       else idx = (idx - 1 + choices.length) % choices.length;
-      setEngine(choices[idx].dataset.engine);
+      chooseEngine(choices[idx].dataset.engine);
       choices[idx].focus();
     });
   }
+
+  // ─── Engine visibility ───────────────────────────────────────────────────
+  // "Show on main screen" in each engine card (Settings → Engines). Hiding
+  // only takes the pill off the main screen: the engine stays installed, Auto
+  // still uses it, and its card keeps every control. The pills and the
+  // "Hidden" chips follow data-hidden-engines on <html> through CSS, which the
+  // server also sets before first paint, so nothing flickers.
+  const engineVisibilitySwitches = Array.from(document.querySelectorAll("input[data-engine-visibility]"));
+
+  function applyHiddenEngines(list) {
+    prefs.hidden_engines = HIDEABLE_ENGINES.filter((e) => list.includes(e));
+    const value = prefs.hidden_engines.join(" ");
+    if (document.documentElement.dataset.hiddenEngines !== value) {
+      document.documentElement.dataset.hiddenEngines = value;
+    }
+    engineVisibilitySwitches.forEach((input) => {
+      input.checked = !prefs.hidden_engines.includes(input.dataset.engineVisibility);
+    });
+  }
+
+  function setEngineHidden(engine, hidden) {
+    const list = prefs.hidden_engines.filter((e) => e !== engine);
+    if (hidden) list.push(engine);
+    applyHiddenEngines(list);
+    savePrefs({ hidden_engines: prefs.hidden_engines });
+    // Hiding the chosen engine is choosing Auto; anything else just re-checks.
+    if (hidden && preferredEngine === engine) chooseEngine("auto");
+    else restorePreferredEngine();
+    refreshSwitchEngineButton();
+  }
+
+  // An engine that can't be used on this computer at all: nothing to show or hide.
+  function setVisibilitySwitchAvailable(engine, available, reason = "") {
+    const input = engineVisibilitySwitches.find((el) => el.dataset.engineVisibility === engine);
+    if (!input) return;
+    input.disabled = !available;
+    const label = input.closest ? input.closest(".toggle-switch") : null;
+    if (label) label.title = available ? "" : reason;
+  }
+
+  // A just-installed engine the user had hidden: offer to show it.
+  function showOnMainScreenAction(engine) {
+    return prefs.hidden_engines.includes(engine)
+      ? [{ label: "Show on main screen", onClick: () => setEngineHidden(engine, false) }]
+      : [];
+  }
+
+  engineVisibilitySwitches.forEach((input) => {
+    input.addEventListener("change", () => setEngineHidden(input.dataset.engineVisibility, !input.checked));
+  });
+  applyHiddenEngines(prefs.hidden_engines);
+  // ─── End engine visibility ───────────────────────────────────────────────
 
   // Initialize
   updateEngineUI();
@@ -876,6 +1130,9 @@ document.addEventListener("DOMContentLoaded", () => {
   // dragged a file in): focus then stays where they put it.
   function closeSettings({ restoreFocus = true } = {}) {
     if (!isSettingsOpen()) return;
+    // Changes made in Settings are saved now rather than after their pause.
+    flushPrefs();
+    flushTextSize();
     settingsPopover.classList.remove("open", "keyboard-nav");
     document.documentElement.classList.remove("settings-open");
     settingsScrim.hidden = true;
@@ -992,7 +1249,7 @@ document.addEventListener("DOMContentLoaded", () => {
           clearInterval(pollInterval);
           pollInterval = null;
         }
-        showToast("Docling engine pack installed and ready!", "success");
+        showToast("Docling engine pack installed and ready!", "success", { actions: showOnMainScreenAction("docling") });
         await refreshEngines();
         return;
       }
@@ -1078,9 +1335,8 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!docling || docling.status === "unsupported" || !docling.supported) {
         // Contract: not installable on this platform -> hidden in conversion selector
         if (pillDocling) pillDocling.classList.add("is-hidden");
-        if (selectedEngine === "docling") {
-          setEngine("markitdown");
-        }
+        doclingState = "unsupported";
+        setVisibilitySwitchAvailable("docling", false, "Docling is not available for this computer.");
         if (engineCardDocling) {
           engineCardDocling.style.display = "block";
           if (doclingStatusBadge) {
@@ -1111,6 +1367,7 @@ document.addEventListener("DOMContentLoaded", () => {
       // Supported on this platform
       if (engineCardDocling) engineCardDocling.style.display = "block";
       if (pillDocling) pillDocling.classList.remove("is-hidden");
+      setVisibilitySwitchAvailable("docling", true);
 
       if (docling.version && doclingVersionInfo) {
         doclingVersionInfo.textContent = `v${docling.version}`;
@@ -1175,14 +1432,13 @@ document.addEventListener("DOMContentLoaded", () => {
         if (btnDoclingVerify) btnDoclingVerify.style.display = "none";
         if (btnDoclingRemove) btnDoclingRemove.style.display = "none";
         if (doclingProgressContainer) doclingProgressContainer.style.display = "none";
-
-        if (selectedEngine === "docling") {
-          setEngine("markitdown");
-        }
       }
     } catch (_) {
       // Existing behaviour: a failed engine refresh is silent.
     } finally {
+      // Docling's state may have changed either way: Auto while the chosen
+      // engine can't be used, the choice again once it can.
+      restorePreferredEngine();
       // The add-on's installability is derived from pack state, so it has to be
       // re-read whenever that changes. refreshEngines returns early on several
       // paths, so this belongs in finally rather than at the end of the body.
@@ -1287,7 +1543,8 @@ document.addEventListener("DOMContentLoaded", () => {
             ? "GLM-OCR didn't pass its self-test. Click to open Settings."
             : "GLM-OCR isn't downloaded. Click to open Settings and download it.");
     }
-    if (selectedEngine === "glm_ocr" && !st.usable) setEngine("markitdown");
+    restorePreferredEngine();
+    setVisibilitySwitchAvailable("glm_ocr", offer, st.reason || "GLM-OCR is not available for this computer.");
 
     if (glmOptions) glmOptions.style.display = st.installed ? "block" : "none";
     if (btnGlmInstall) { btnGlmInstall.disabled = false; btnGlmInstall.textContent = "Download GLM-OCR"; }
@@ -1398,7 +1655,8 @@ document.addEventListener("DOMContentLoaded", () => {
         const done = prog.operation === "selftest" ? "GLM-OCR self-test finished." :
           prog.operation === "gpu" ? "GPU runtime installed and tested." :
           prog.operation === "update" ? "GLM-OCR updated." : "GLM-OCR is downloaded and ready.";
-        showToast(done, "success");
+        const fresh = !["selftest", "gpu", "update"].includes(prog.operation);
+        showToast(done, "success", { actions: fresh ? showOnMainScreenAction("glm_ocr") : [] });
       } else if (prog.status === "error") {
         const actions = prog.can_try_mirror && (glmStatus && glmStatus.download_source) !== "mirror_only"
           ? [{ label: "Try the InkDoc mirror", onClick: () => retryGlmFromMirror() }]
@@ -1527,7 +1785,8 @@ document.addEventListener("DOMContentLoaded", () => {
       try {
         await postGlm("remove");
         showToast("GLM-OCR removed.", "info");
-        if (selectedEngine === "glm_ocr") setEngine("markitdown");
+        // Removing the chosen engine is choosing Auto.
+        if (preferredEngine === "glm_ocr") chooseEngine("auto");
       } catch (err) {
         showToast(`Could not remove GLM-OCR: ${err.message}`, "error");
       }
@@ -1920,33 +2179,54 @@ document.addEventListener("DOMContentLoaded", () => {
   async function loadSettings() {
     try {
       const resp = await fetch(`${apiBase}/settings`);
-      if (resp.ok) {
-        const s = await resp.json();
-        if (doclingFallbackToggle) {
-          doclingFallbackToggle.checked = Boolean(s.fallback_to_markitdown ?? s.docling_fallback);
-        }
-        if (dailyUpdateToggle) {
-          dailyUpdateToggle.checked = Boolean(s.check_for_updates_daily);
-        }
-        if (qualityCheckToggle) {
-          qualityCheckToggle.checked = s.quality_check_enabled !== false;
-        }
-        // Guarded by .disabled so this cannot race refreshAddonStatus() into
-        // showing a checked toggle the add-on state says is unusable. Whichever
-        // of the two lands last, the result is the same.
-        if (doclingCodeEnrichmentToggle && !doclingCodeEnrichmentToggle.disabled) {
-          doclingCodeEnrichmentToggle.checked = Boolean(s.docling_code_enrichment);
-        }
-        if (doclingFormulaEnrichmentToggle && !doclingFormulaEnrichmentToggle.disabled) {
-          doclingFormulaEnrichmentToggle.checked = Boolean(s.docling_formula_enrichment);
-        }
-        if (s.layout_width !== undefined) syncLayoutWidth(s.layout_width);
-        if (s.preview_text_size !== undefined) syncTextSize(s.preview_text_size);
-        if (s.render_math !== undefined) syncRenderMath(s.render_math);
-        // Last, so nothing in the save folder row can stop the toggles above.
-        renderSaveFolder(s.save_folder);
-      }
+      if (resp.ok) applySettings(await resp.json());
     } catch (_) {}
+  }
+
+  // A GET /settings body (or POST /settings/reset's, which is the same) onto
+  // every control. The checks below are guarded so a partial body still works.
+  function applySettings(s) {
+    if (doclingFallbackToggle) {
+      doclingFallbackToggle.checked = Boolean(s.fallback_to_markitdown ?? s.docling_fallback);
+    }
+    if (dailyUpdateToggle) {
+      dailyUpdateToggle.checked = Boolean(s.check_for_updates_daily);
+    }
+    if (qualityCheckToggle) {
+      qualityCheckToggle.checked = s.quality_check_enabled !== false;
+    }
+    // Guarded by .disabled so this cannot race refreshAddonStatus() into
+    // showing a checked toggle the add-on state says is unusable. Whichever
+    // of the two lands last, the result is the same.
+    if (doclingCodeEnrichmentToggle && !doclingCodeEnrichmentToggle.disabled) {
+      doclingCodeEnrichmentToggle.checked = Boolean(s.docling_code_enrichment);
+    }
+    if (doclingFormulaEnrichmentToggle && !doclingFormulaEnrichmentToggle.disabled) {
+      doclingFormulaEnrichmentToggle.checked = Boolean(s.docling_formula_enrichment);
+    }
+    if (s.layout_width !== undefined) syncLayoutWidth(s.layout_width);
+    if (s.preview_text_size !== undefined) syncTextSize(s.preview_text_size);
+    if (s.render_math !== undefined) syncRenderMath(s.render_math);
+    if (s.theme !== undefined) syncPrefs(s);
+    // Last, so nothing in the save folder row can stop the toggles above.
+    renderSaveFolder(s.save_folder);
+  }
+
+  // Theme, engine, hidden engines, auto-save and Auto's tip from the server:
+  // another window may have changed them. Never over a change of this page's
+  // that is still being saved.
+  function syncPrefs(s) {
+    if (prefsBusy()) return;
+    const next = normalizePrefs(s);
+    if (next.theme !== prefs.theme) setThemeNow(next.theme);
+    applyHiddenEngines(next.hidden_engines);
+    prefs.preferred_engine = preferredEngine = next.preferred_engine;
+    restorePreferredEngine();
+    prefs.auto_save = autoSaveToDownloads = next.auto_save;
+    if (autoSaveToggle) autoSaveToggle.checked = next.auto_save;
+    prefs.auto_hint_hidden = next.auto_hint_hidden;
+    prefs.legacy_prefs_imported = next.legacy_prefs_imported;
+    refreshSwitchEngineButton();
   }
 
   // Both enrichment toggles persist the same way and differ only in their key
@@ -2136,6 +2416,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let textSizeSaved = textSize; // what settings.json is known to hold
   let textSizeTimer = null;
   let textSizeSaving = false;
+  let textSizeRequest = null; // the save on its way, for Restore defaults to wait on
 
   // aria-disabled rather than disabled at the ends: a disabled button would
   // drop keyboard focus the moment it reached the limit.
@@ -2159,9 +2440,9 @@ document.addEventListener("DOMContentLoaded", () => {
     textSizeTimer = setTimeout(saveTextSize, TEXT_SIZE_SAVE_DELAY_MS);
   }
 
-  async function saveTextSize() {
+  async function saveTextSize(keepalive = false) {
     textSizeTimer = null;
-    if (textSizeSaving) {
+    if (textSizeSaving && !keepalive) {
       textSizeTimer = setTimeout(saveTextSize, TEXT_SIZE_SAVE_DELAY_MS);
       return;
     }
@@ -2170,13 +2451,16 @@ document.addEventListener("DOMContentLoaded", () => {
     textSizeSaving = true;
     let saved = false;
     try {
-      const resp = await fetchWithToken(`${apiBase}/settings`, {
+      textSizeRequest = fetchWithToken(`${apiBase}/settings`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ preview_text_size: value }),
+        keepalive,
       });
+      const resp = await textSizeRequest;
       saved = resp.ok;
     } catch (_) {}
+    textSizeRequest = null;
     textSizeSaving = false;
     if (saved) {
       textSizeSaved = value;
@@ -2193,9 +2477,79 @@ document.addEventListener("DOMContentLoaded", () => {
     textSize = textSizeSaved = applyTextSize(Number(value));
   }
 
+  // Settings closing or the page going away: save a waiting change now.
+  // Resolves when that save (or one already on its way) is done.
+  function flushTextSize(keepalive = false) {
+    if (!textSizeTimer) return textSizeRequest ? textSizeRequest.catch(() => {}) : Promise.resolve();
+    clearTimeout(textSizeTimer);
+    return saveTextSize(keepalive);
+  }
+
+  // Restore defaults replaces a waiting change, so it is never sent, and waits
+  // for one already on its way, so it can't land after the reset.
+  async function settleTextSize() {
+    clearTimeout(textSizeTimer);
+    textSizeTimer = null;
+    if (textSizeRequest) await textSizeRequest.catch(() => {});
+  }
+
   if (btnTextSmaller) btnTextSmaller.addEventListener("click", () => stepTextSize(-1));
   if (btnTextLarger) btnTextLarger.addEventListener("click", () => stepTextSize(1));
   // ─── End preview text size ───────────────────────────────────────────────
+
+  // ─── Restore defaults ────────────────────────────────────────────────────
+  // Settings → General, last. The server holds the list of what is reset
+  // (POST /settings/reset) and keeps engines, add-ons, their setup, the save
+  // folder and every file. Changes not yet saved are dropped first and a save
+  // already on its way is waited for, so neither can land after the reset.
+  // aria-disabled rather than disabled while it runs, so keyboard focus stays.
+  const btnResetDefaults = document.getElementById("btnResetDefaults");
+  let resettingDefaults = false;
+
+  async function restoreDefaults() {
+    if (resettingDefaults) return;
+    const ok = await confirmDialog({
+      title: "Restore default settings?",
+      message: "InkDoc's appearance and preferences go back to how they were when it was installed.",
+      details: [
+        "Reset: theme, engine choice and hidden engines, auto-save, Auto's tips, Docling fallback, PDF check, layout width, text size, math formulas and the daily update check.",
+        "Kept: installed engines and add-ons and their settings, your save folder, and every converted file.",
+      ],
+      confirmText: "Restore defaults",
+      danger: false,
+    });
+    if (!ok || resettingDefaults) return;
+    resettingDefaults = true;
+    if (btnResetDefaults) btnResetDefaults.setAttribute("aria-disabled", "true");
+    try {
+      await settlePrefs();
+      await settleTextSize();
+      const resp = await fetchWithToken(`${apiBase}/settings/reset`, { method: "POST" });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        showToast(typeof err.detail === "string" ? err.detail : "Couldn't restore the default settings.", "error");
+        return;
+      }
+      const settings = await resp.json();
+      // Nothing left in browser storage for an import to bring back.
+      LEGACY_PREF_KEYS.forEach(removeStorage);
+      try {
+        applySettings(settings);
+      } catch (_) {
+        // A control that can't be updated keeps its old look until Settings
+        // reopens; the reset itself is saved.
+      }
+      showToast("Default settings restored.", "success");
+    } catch (_) {
+      showToast("Couldn't restore the default settings.", "error");
+    } finally {
+      resettingDefaults = false;
+      if (btnResetDefaults) btnResetDefaults.removeAttribute("aria-disabled");
+    }
+  }
+
+  if (btnResetDefaults) btnResetDefaults.addEventListener("click", restoreDefaults);
+  // ─── End restore defaults ────────────────────────────────────────────────
 
   // ─── Update Management UI ─────────────────────────────────────────────────
   function formatBytes(bytes) {
@@ -2591,9 +2945,8 @@ document.addEventListener("DOMContentLoaded", () => {
         });
         if (resp.ok) {
           showToast("Docling engine pack removed.", "info");
-          if (selectedEngine === "docling") {
-            setEngine("markitdown");
-          }
+          // Removing the chosen engine is choosing Auto.
+          if (preferredEngine === "docling") chooseEngine("auto");
           await refreshEngines();
         } else {
           showToast("Failed to remove Docling pack.", "error");
@@ -2605,13 +2958,28 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ─── Health Check ────────────────────────────────────────────────────────
+  // A theme and engine chosen in InkDoc 1.2 or earlier, moved into settings.json
+  // by importLegacyPrefs(): use them now. The head script already painted the theme.
+  function adoptLegacyPrefs(imported) {
+    if (!imported) return;
+    if (prefs.theme !== requestedTheme) setThemeNow(prefs.theme);
+    if (prefs.preferred_engine !== preferredEngine) {
+      preferredEngine = prefs.preferred_engine;
+      restorePreferredEngine();
+    }
+  }
+
   async function checkServerHealth() {
     try {
       const resp = await fetch(`${apiBase}/health`);
       if (resp.ok) {
         connectionErrorBar.classList.remove("visible");
+        adoptLegacyPrefs(importLegacyPrefs());
         await refreshEngines();
-        await loadSettings();
+        // The saved preferences came with the page; the rest of the settings
+        // only fill controls in the Settings drawer, which reads them when it
+        // opens. A page served without them (no session script) asks now.
+        if (!prefsFromServer) await loadSettings();
         await fetchUpdateStatus();
       } else {
         connectionErrorBar.classList.add("visible");
@@ -2755,9 +3123,17 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     if (maximizeBtn) maximizeBtn.addEventListener("click", toggleMaximize);
     if (closeBtn) {
-      closeBtn.addEventListener("click", () =>
-        withWindowApi((api) => api.close_window().catch(() => {}))
-      );
+      // The web view goes the moment the window closes, taking any change still
+      // in its short save pause with it (pagehide can't get a request out of a
+      // closing pywebview window). Send those first, waiting at most 600 ms;
+      // with nothing waiting the window closes at once, as before.
+      closeBtn.addEventListener("click", async () => {
+        await Promise.race([
+          Promise.all([flushPrefs(true), flushTextSize(true)]).catch(() => {}),
+          new Promise((resolve) => setTimeout(resolve, 600)),
+        ]);
+        withWindowApi((api) => api.close_window().catch(() => {}));
+      });
     }
 
     // Double-clicking the title bar toggles maximise, as every platform expects.
@@ -2767,26 +3143,34 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ─── Theme Toggle ────────────────────────────────────────────────────────
-  const savedTheme = readStorage("inkdoc-theme") || readStorage("markitdown-theme") || "dark";
-  document.documentElement.setAttribute("data-theme", savedTheme);
+  // The server puts the saved theme on <html> before first paint; it is saved
+  // in settings.json (browser storage doesn't survive the desktop window).
   // The theme the last click asked for. A View Transition applies it a frame
   // later, so a quick second click must not read it back from the page.
   let requestedTheme = document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";
+  let themeRun = 0; // the newest switch; only it may clean up after itself
 
   function applyTheme(theme) {
     document.documentElement.setAttribute("data-theme", theme);
-    writeStorage("inkdoc-theme", theme);
     // The maximise button is drawn natively, so it can't pick up the new
     // palette from CSS on its own.
     if (window.__inkdocSyncTitlebar) window.__inkdocSyncTitlebar();
   }
 
-  // The new theme grows as a circle from the button, as on the website, where
-  // the web engine supports View Transitions. Without them, or with reduced
-  // motion, it switches at once as before.
+  // Without the circle: Restore defaults, another window's change, an import.
+  function setThemeNow(theme) {
+    requestedTheme = theme === "light" ? "light" : "dark";
+    prefs.theme = requestedTheme;
+    applyTheme(requestedTheme);
+  }
+
+  // Switching to light, the light theme grows as a circle from the button;
+  // switching to dark, the light theme shrinks back into it. Where the web
+  // engine has no View Transitions, or with reduced motion, it switches at once.
   themeToggle.addEventListener("click", () => {
     requestedTheme = requestedTheme === "dark" ? "light" : "dark";
     const next = requestedTheme;
+    savePrefs({ theme: next });
     const root = document.documentElement;
     const reduceMotion = typeof window.matchMedia === "function"
       && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -2799,9 +3183,24 @@ document.addEventListener("DOMContentLoaded", () => {
     const x = r.left + r.width / 2;
     const y = r.top + r.height / 2;
     const radius = Math.hypot(Math.max(x, window.innerWidth - x), Math.max(y, window.innerHeight - y));
+    const toDark = next === "dark";
+    const run = ++themeRun;
     // Pause the colour fades, or the circle would reveal half-faded colours.
+    // theme-to-dark puts the old (light) view above the new one (style.css).
     root.classList.add("theme-switching");
-    const finish = () => root.classList.remove("theme-switching");
+    if (toDark) root.classList.add("theme-to-dark");
+    else root.classList.remove("theme-to-dark");
+    let circle = null;
+    // A newer click starts its own transition and skips this one; this one's
+    // end must not take the classes away from it. The circle is cancelled
+    // either way: held at its end (below), it would otherwise clip the next
+    // switch's views, which have the same pseudo-element names.
+    const finish = () => {
+      if (circle) circle.cancel();
+      if (run !== themeRun) return;
+      root.classList.remove("theme-switching");
+      root.classList.remove("theme-to-dark");
+    };
 
     let transition;
     try {
@@ -2813,11 +3212,21 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     // Short on purpose: while a View Transition plays, the engine sends clicks
     // and drops to the page background, where they are ignored.
+    const small = `circle(0px at ${x}px ${y}px)`;
+    const full = `circle(${radius}px at ${x}px ${y}px)`;
     transition.ready
       .then(() => {
-        root.animate(
-          { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${radius}px at ${x}px ${y}px)`] },
-          { duration: 350, easing: "cubic-bezier(.2,.8,.2,1)", pseudoElement: "::view-transition-new(root)" }
+        circle = root.animate(
+          { clipPath: toDark ? [full, small] : [small, full] },
+          {
+            duration: 350,
+            // The same curve played backwards when shrinking.
+            easing: toDark ? "cubic-bezier(.8,0,.8,.2)" : "cubic-bezier(.2,.8,.2,1)",
+            // A shrunk light view is held at nothing until the transition
+            // ends, so it can't show again for a frame.
+            fill: toDark ? "forwards" : "none",
+            pseudoElement: toDark ? "::view-transition-old(root)" : "::view-transition-new(root)",
+          }
         );
       })
       .catch(() => {});
@@ -2825,8 +3234,11 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // ─── Auto-save Toggle ────────────────────────────────────────────────────
+  // Saved like the theme; each conversion request carries it.
+  autoSaveToggle.checked = autoSaveToDownloads;
   autoSaveToggle.addEventListener("change", (e) => {
     autoSaveToDownloads = e.target.checked;
+    savePrefs({ auto_save: autoSaveToDownloads });
     showToast(
       autoSaveToDownloads
         ? `Converted files will also be saved to ${saveFolderState ? saveFolderState.path : "Downloads"}`
@@ -2834,6 +3246,39 @@ document.addEventListener("DOMContentLoaded", () => {
       "info"
     );
   });
+
+  // The page closing (where the web view reports it): send waiting changes.
+  window.addEventListener("pagehide", () => {
+    flushPrefs(true);
+    flushTextSize(true);
+  });
+
+  // ─── MarkItDown warm-up ──────────────────────────────────────────────────
+  // MarkItDown runs in a worker process that starts on demand and stops after
+  // a few idle minutes, so InkDoc doesn't hold ~95 MB it isn't using. A sign
+  // that a file or URL is on its way (a drag over the window, the file or
+  // folder button, the URL box) starts it now, so the conversion doesn't wait
+  // for it. Once per WARMUP_INTERVAL_MS at most; the server ignores repeats.
+  // Docling and GLM-OCR don't use it.
+  const WARMUP_INTERVAL_MS = 20000;
+  let lastWarmup = -Infinity;
+
+  function warmMarkItDown() {
+    if (selectedEngine === "docling" || selectedEngine === "glm_ocr") return;
+    const now = Date.now();
+    if (now - lastWarmup < WARMUP_INTERVAL_MS) return;
+    lastWarmup = now;
+    fetchWithToken(`${apiBase}/convert/warmup`, { method: "POST" }).catch(() => {});
+  }
+
+  window.addEventListener("dragenter", warmMarkItDown, { passive: true });
+  [btnBrowseFiles, btnBrowseFolder].forEach((btn) => {
+    if (!btn) return;
+    btn.addEventListener("pointerdown", warmMarkItDown, { passive: true });
+    btn.addEventListener("focus", warmMarkItDown);
+  });
+  if (urlInput) urlInput.addEventListener("focus", warmMarkItDown);
+  // ─── End MarkItDown warm-up ──────────────────────────────────────────────
 
   // ─── File Browsing ───────────────────────────────────────────────────────
   btnBrowseFiles.addEventListener("click", () => fileInput.click());
@@ -3205,14 +3650,15 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function maybeShowHintToast(hint) {
-    if (!shouldShowHintToast(hint, hintSession, readStorage)) return false;
+  function maybeShowHintToast(rawHint) {
+    const hint = visibleHint(rawHint, prefs.hidden_engines);
+    if (!shouldShowHintToast(hint, hintSession, prefs.auto_hint_hidden)) return false;
     hintSession.hintShown = true;
     showToast(hint, "info", {
       duration: 9000,
       actions: [
         { label: hint.includes("Docling") ? "Install Docling" : "Open Settings", onClick: (e) => openSettings(e, "engines") },
-        { label: "Don't show again", onClick: () => writeStorage(HIDE_AUTO_HINT_KEY, "1") },
+        { label: "Don't show again", onClick: () => savePrefs({ auto_hint_hidden: true }) },
       ],
     });
     return true;
@@ -3949,7 +4395,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function qualityNoticeActions(item) {
-    const action = qualityAction(item.quality);
+    const action = qualityAction(item.quality, prefs.hidden_engines);
     if (!action) return [];
     if (action.install) return [{ label: action.label, onClick: (e) => openSettings(e, "engines") }];
     if (!(item.fileRef || item.sourceUrl)) return [];
@@ -4002,16 +4448,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     previewFilename.textContent = item.name;
 
-    // Update re-convert button tooltip
-    if (btnSwitchEngine) {
-      if (item.fileRef || item.sourceUrl) {
-        btnSwitchEngine.style.display = "inline-flex";
-        const nextEng = getNextEngine(item.engine, glmIsUsable());
-        btnSwitchEngine.title = `Re-convert with ${getEngineDisplayName(nextEng)}`;
-      } else {
-        btnSwitchEngine.style.display = "none";
-      }
-    }
+    refreshSwitchEngineButton(item);
 
     // Always reset the notice bar first
     hideConversionNotice();
@@ -4127,7 +4564,7 @@ document.addEventListener("DOMContentLoaded", () => {
         `Docling was unable to parse this document${item.fallbackReason ? " (" + item.fallbackReason + ")" : ""}. Conversion automatically fell back to MarkItDown.`,
         { details }
       );
-    } else if (item.auto && item.auto.hint) {
+    } else if (item.auto && visibleHint(item.auto.hint, prefs.hidden_engines)) {
       showConversionNotice("info", "Tip", item.auto.hint, {
         actions: [{ label: item.auto.hint.includes("Docling") ? "Install Docling" : "Open Settings", onClick: (e) => openSettings(e, "engines") }],
         details,
@@ -4165,11 +4602,25 @@ document.addEventListener("DOMContentLoaded", () => {
   // ─── Switch Engine (Re-convert) ──────────────────────────────────────────
   // Files and URLs go through the same request and result handling, so a URL
   // re-convert reports its engine, fallback, Auto choice and warnings too.
+  // Engines hidden from the main screen are skipped; with none left, the
+  // button goes away.
+  function nextEngineFor(item) {
+    return getNextEngine(item.engine, glmIsUsable(), prefs.hidden_engines);
+  }
+
+  function refreshSwitchEngineButton(item = queue.find((i) => i.id === activeItemId)) {
+    if (!btnSwitchEngine) return;
+    const nextEng = item && (item.fileRef || item.sourceUrl) ? nextEngineFor(item) : null;
+    btnSwitchEngine.style.display = nextEng ? "inline-flex" : "none";
+    if (nextEng) btnSwitchEngine.title = `Re-convert with ${getEngineDisplayName(nextEng)}`;
+  }
+
   if (btnSwitchEngine) {
     btnSwitchEngine.addEventListener("click", () => {
       const item = queue.find((i) => i.id === activeItemId);
       if (!item) return;
-      reconvertItem(item, getNextEngine(item.engine, glmIsUsable()));
+      const nextEng = nextEngineFor(item);
+      if (nextEng) reconvertItem(item, nextEng);
     });
   }
 

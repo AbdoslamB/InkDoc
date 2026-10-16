@@ -39,6 +39,14 @@ _repo_root = os.path.dirname(os.path.abspath(__file__))
 if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
+# The MarkItDown worker (app/core/engines/markitdown_worker.py) is this same
+# executable, started by InkDoc itself. Checked before the desktop app is
+# imported, so the worker never loads the GUI or the web server.
+if __name__ == "__main__" and sys.argv[1:2] == ["--markitdown-worker"]:
+    from app.core.engines.markitdown_worker import main as _markitdown_worker
+
+    sys.exit(_markitdown_worker(sys.argv[2:]))
+
 from app.desktop.runner import main
 
 if __name__ == "__main__":

@@ -19,6 +19,9 @@
   --faint: #6b766f;
   --rule: #242c27;
   --rule-subtle: #1c2420;
+  /* Lines between unrelated groups of settings: subtle, but visible on the
+     drawer (about 1.5:1, as in the light theme; --rule is 1.18:1 here). */
+  --divider: #343d38;
   --mark: #3dab86;
   --mark-hover: #56c49c;
   --mark-pressed: #2e8a6a;
@@ -56,6 +59,7 @@
   --faint: #8a948c;
   --rule: #c5cec6;
   --rule-subtle: #dbe2dc;
+  --divider: #c5cec6;
   --mark: #0f6e56;
   --mark-hover: #0c5a47;
   --mark-pressed: #094536;
@@ -166,6 +170,16 @@ body {
 html.theme-switching,
 html.theme-switching * {
   transition: none !important;
+}
+
+/* Switching to dark, the old (light) view shrinks back into the button, so it
+   has to be drawn above the new one; by default the new view is on top. */
+html.theme-to-dark::view-transition-old(root) {
+  z-index: 2;
+}
+
+html.theme-to-dark::view-transition-new(root) {
+  z-index: 1;
 }
 
 /* Layout width (Settings → General → Display). The server puts the saved
@@ -708,16 +722,31 @@ html[data-layout-width="full"] {
    radio buttons, hidden with .sr-only, so arrow keys and screen readers
    treat it as one group. */
 .settings-display {
-  border-top: 1px solid var(--rule);
+  border-top: 1px solid var(--divider);
 }
 
 /* Unrelated groups within a section (Preferences: saving, Docling fallback,
-   PDF check) get a thin line between them, inset by the section's padding so
-   it reads lighter than the full-width line between sections. */
+   PDF check; Display: width, text size; Updates: status, daily check) get a
+   thin line between them, inset by the section's padding so it reads lighter
+   than the full-width line between sections. */
 .settings-group + .settings-group {
   margin-top: 12px;
   padding-top: 12px;
-  border-top: 1px solid var(--rule);
+  border-top: 1px solid var(--divider);
+}
+
+/* Restore defaults: the last section of General. */
+.settings-reset {
+  border-top: 1px solid var(--divider);
+}
+
+.settings-reset .btn {
+  gap: 6px;
+}
+
+.btn[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: progress;
 }
 
 .layout-width-row {
@@ -809,7 +838,7 @@ html[data-layout-width="full"] {
 
 /* Preview text size (Display): A- and A+ only, with a live sample below. */
 .text-size {
-  margin-top: 14px;
+  margin-top: 0;
 }
 
 .text-size-row {
@@ -1280,7 +1309,7 @@ html[data-layout-width="full"] {
 .engine-enrichment {
   margin-top: 14px;
   padding-top: 12px;
-  border-top: 1px solid var(--rule-subtle);
+  border-top: 1px solid var(--divider);
 }
 
 .engine-enrichment-title {
@@ -1684,6 +1713,43 @@ html[data-layout-width="full"] {
 
 .engine-pill.is-hidden {
   display: none !important;
+}
+
+/* Engines the user hid (Settings → Engines → "Show on main screen"). Driven by
+   data-hidden-engines on <html>, which the server sets before first paint, so
+   a hidden pill never flashes in. Exact ids: a change restyles only these.
+   Kept apart from .is-hidden (not offered here), which status checks set. */
+html[data-hidden-engines~="markitdown"] #pillMarkitdown,
+html[data-hidden-engines~="docling"] #pillDocling,
+html[data-hidden-engines~="markit"] #pillMarkit,
+html[data-hidden-engines~="glm_ocr"] #pillGlmOcr {
+  display: none !important;
+}
+
+/* The "Hidden" chip in a collapsed engine card's header, same mechanism. */
+.engine-hidden-chip {
+  display: none;
+  color: var(--faint);
+  background: transparent;
+  border: 1px solid var(--divider);
+}
+
+html[data-hidden-engines~="markitdown"] #engineCardMarkitdown .engine-hidden-chip,
+html[data-hidden-engines~="docling"] #engineCardDocling .engine-hidden-chip,
+html[data-hidden-engines~="markit"] #engineCardMarkit .engine-hidden-chip,
+html[data-hidden-engines~="glm_ocr"] #engineCardGlmOcr .engine-hidden-chip {
+  display: inline-block;
+}
+
+/* "Show on main screen": the first row of each engine card. */
+.engine-visibility {
+  margin: 4px 0 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.engines-intro {
+  margin: 0 0 4px;
 }
 
 /* ── Pill Engine Icons (Clean, no surrounding box) ── */
@@ -3488,7 +3554,9 @@ input[type="url"] {
 }
 
 .glm-advanced {
-  margin-top: 10px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--divider);
   font-size: 12px;
 }
 
@@ -3538,4 +3606,9 @@ input[type="url"] {
 
 .app-dialog-details li + li {
   margin-top: 4px;
+}
+
+/* Docling enrichment: the formula switch below the code switch. */
+.engine-enrichment-second {
+  margin-top: 8px;
 }

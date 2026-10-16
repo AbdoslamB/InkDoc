@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Show or hide engines** (Settings → Engines): each engine card starts with a
+  **Show on main screen** switch. Turning it off removes that engine's button
+  from the main screen and marks the card **Hidden**; the engine stays
+  installed, **Auto** still uses it, and its card keeps every control. Auto is
+  always shown. Tips to install an engine you hid are no longer shown, and
+  **Switch engine** skips hidden engines.
+- **Restore defaults** (Settings → General, at the bottom): puts the theme,
+  engine choice and hidden engines, auto-save, Auto's tips, the Docling
+  fallback, the PDF check, layout width, text size, math formulas and the daily
+  update check back to how InkDoc starts out, after asking. Installed engines
+  and add-ons and their settings, the save folder and converted files are kept.
+  The API has a matching `POST /settings/reset`.
+
+### Changed
+- **Less memory while idle.** MarkItDown now runs in a separate process that
+  starts when you are about to convert (dragging a file over the window,
+  opening the file or folder picker, clicking into the URL box, or the first
+  conversion) and closes after 5 idle minutes. InkDoc itself no longer loads
+  MarkItDown and its ~20 libraries, which it used to load at startup and could
+  never release. Measured on Windows 11 for the whole app (InkDoc and its
+  WebView2 processes, unique memory): **247 MB → 166 MB** at idle after
+  startup, and **270 MB → 167 MB** once the separate process has closed after
+  converting. While it runs it uses about 125 MB, all of it returned when it
+  closes. Conversions give the same results as before; the first one after a
+  pause can take 1–3 s longer while the process starts, unless one of the
+  signs above started it already. A file that crashes MarkItDown no longer
+  takes InkDoc down with it, and cancelling a MarkItDown conversion that is
+  the only one running now stops it at once. If the separate process can't
+  start, InkDoc converts in its own process as before.
+- Switching to the dark theme now shrinks the light theme back into the theme
+  button, the reverse of the circle that grows when switching to light.
+- If the chosen engine can't be used yet (not installed, being updated, or
+  hidden), InkDoc uses **Auto** until it can, and goes back to your choice once
+  it is ready. Before, it switched to MarkItDown and forgot the choice.
+- The lines between groups of settings are easier to see in the dark theme,
+  and Display, Updates and the GLM-OCR options are now divided the same way.
+
+### Fixed
+- The desktop app now remembers the **theme**, the **engine** you picked,
+  **Auto-save** and Auto's **Don't show again** between launches. They were
+  kept in browser storage, which the desktop window clears at every launch;
+  they are now saved with the other settings and applied before the window
+  first draws, so a light theme no longer opens dark first. Choices made in
+  earlier versions of the browser Web Bench are carried over once.
+- A setting that can't be written to disk (for example while an antivirus scan
+  holds the file) is retried briefly, and if it still fails InkDoc now says so
+  instead of losing it silently at the next launch.
+- Settings changed just before closing Settings, or just before closing the
+  window with InkDoc's own close button (Windows), are saved at once instead of
+  after a short pause that closing the window could cut off.
+
 ## [1.2.0] - 2026-10-14
 
 ### Changed

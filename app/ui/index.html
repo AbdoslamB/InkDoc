@@ -125,26 +125,28 @@
 
                 <div class="settings-section settings-display">
                   <p class="settings-section-title">Display</p>
-                  <div class="layout-width-row">
-                    <span class="layout-width-label" id="layoutWidthLabel">Layout width</span>
-                    <div class="segmented" id="layoutWidthGroup" role="radiogroup" aria-labelledby="layoutWidthLabel">
-                      <label class="segmented-option" title="Up to 1,400 px wide, as before">
-                        <input type="radio" class="sr-only" name="layoutWidth" value="standard" checked>
-                        <span>Standard</span>
-                      </label>
-                      <label class="segmented-option" title="Up to 1,920 px wide">
-                        <input type="radio" class="sr-only" name="layoutWidth" value="wide">
-                        <span>Wide</span>
-                      </label>
-                      <label class="segmented-option" title="The whole window">
-                        <input type="radio" class="sr-only" name="layoutWidth" value="full">
-                        <span>Full</span>
-                      </label>
+                  <div class="settings-group">
+                    <div class="layout-width-row">
+                      <span class="layout-width-label" id="layoutWidthLabel">Layout width</span>
+                      <div class="segmented" id="layoutWidthGroup" role="radiogroup" aria-labelledby="layoutWidthLabel">
+                        <label class="segmented-option" title="Up to 1,400 px wide, as before">
+                          <input type="radio" class="sr-only" name="layoutWidth" value="standard" checked>
+                          <span>Standard</span>
+                        </label>
+                        <label class="segmented-option" title="Up to 1,920 px wide">
+                          <input type="radio" class="sr-only" name="layoutWidth" value="wide">
+                          <span>Wide</span>
+                        </label>
+                        <label class="segmented-option" title="The whole window">
+                          <input type="radio" class="sr-only" name="layoutWidth" value="full">
+                          <span>Full</span>
+                        </label>
+                      </div>
                     </div>
+                    <p class="settings-caption">Gives tables, code and images more room on large screens; text keeps a readable line length. Changes nothing in windows narrower than 1,400 px.</p>
                   </div>
-                  <p class="settings-caption">Gives tables, code and images more room on large screens; text keeps a readable line length. Changes nothing in windows narrower than 1,400 px.</p>
 
-                  <div class="text-size">
+                  <div class="settings-group text-size">
                     <div class="text-size-row">
                       <span class="layout-width-label" id="textSizeLabel">Preview text size</span>
                       <div class="text-size-buttons" role="group" aria-labelledby="textSizeLabel">
@@ -165,12 +167,26 @@
                     <p class="sr-only" id="textSizeStatus" role="status" aria-live="polite"></p>
                   </div>
                 </div>
+
+                <!-- Restore defaults: preferences only (the server holds the list,
+                     POST /settings/reset). Asks first. -->
+                <div class="settings-section settings-reset">
+                  <button type="button" class="btn btn-sm btn-secondary" id="btnResetDefaults">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <polyline points="1 4 1 10 7 10"></polyline>
+                      <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+                    </svg>
+                    Restore defaults
+                  </button>
+                  <p class="settings-caption">Resets appearance and preferences. Engines, add-ons, your save folder and converted files are kept.</p>
+                </div>
               </section>
 
               <section class="settings-pane" id="settingsPaneEngines" data-settings-pane="engines" aria-labelledby="settingsNavEngines" hidden>
                 <!-- Engine info & management cards -->
                 <div class="settings-section settings-engines">
                   <p class="settings-section-title">Processing Engines</p>
+                  <p class="settings-caption engines-intro">Turn off "Show on main screen" to hide an engine's button. Hidden engines stay installed, and Auto still uses them.</p>
 
                   <!-- MarkItDown (Bundled) -->
                   <details class="engine-card" id="engineCardMarkitdown">
@@ -182,12 +198,18 @@
                       </span>
                       <span class="engine-card-name">MarkItDown</span>
                       <span class="engine-badge engine-badge-builtin">Built-in</span>
+                      <span class="engine-badge engine-hidden-chip">Hidden</span>
                       <span class="engine-card-version" id="versionMarkitdown">—</span>
                       <svg class="engine-card-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                         <polyline points="6 9 12 15 18 9"></polyline>
                       </svg>
                     </summary>
                     <div class="engine-card-content">
+                      <label class="toggle-switch engine-visibility" title="Show this engine's button on the main screen">
+                        <input type="checkbox" data-engine-visibility="markitdown" aria-label="Show on main screen: MarkItDown" checked>
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Show on main screen</span>
+                      </label>
                       <p class="engine-card-desc">Fast, zero-config converter for everyday documents: PDF, Word, Excel, PowerPoint, images, audio transcription, HTML &amp; CSV.</p>
                     </div>
                   </details>
@@ -204,12 +226,18 @@
                       </span>
                       <span class="engine-card-name">Markit</span>
                       <span class="engine-badge engine-badge-builtin">Built-in</span>
+                      <span class="engine-badge engine-hidden-chip">Hidden</span>
                       <span class="engine-card-version" id="versionMarkit">—</span>
                       <svg class="engine-card-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                         <polyline points="6 9 12 15 18 9"></polyline>
                       </svg>
                     </summary>
                     <div class="engine-card-content">
+                      <label class="toggle-switch engine-visibility" title="Show this engine's button on the main screen">
+                        <input type="checkbox" data-engine-visibility="markit" aria-label="Show on main screen: Markit" checked>
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Show on main screen</span>
+                      </label>
                       <p class="engine-card-desc">Broad format specialist. Use for EPUB ebooks, YAML configs, Jupyter Notebooks (.ipynb), XML &amp; other formats not covered by MarkItDown.</p>
                     </div>
                   </details>
@@ -226,11 +254,17 @@
                       </span>
                       <span class="engine-card-name">IBM Docling</span>
                       <span class="engine-badge" id="doclingStatusBadge">Checking…</span>
+                      <span class="engine-badge engine-hidden-chip">Hidden</span>
                       <svg class="engine-card-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                         <polyline points="6 9 12 15 18 9"></polyline>
                       </svg>
                     </summary>
                     <div class="engine-card-content">
+                      <label class="toggle-switch engine-visibility" title="Show this engine's button on the main screen">
+                        <input type="checkbox" data-engine-visibility="docling" aria-label="Show on main screen: Docling" checked>
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Show on main screen</span>
+                      </label>
                       <p class="engine-card-desc">IBM AI deep document parser. Best for complex multi-column layouts, scanned pages &amp; table structure extraction.</p>
                   
                       <div class="engine-meta-grid">
@@ -306,7 +340,7 @@
                           <span class="toggle-slider"></span>
                           <span class="toggle-label">Code Enrichment</span>
                         </label>
-                        <label class="toggle-switch" style="margin-top: 8px;" title="Recognise mathematical formulas and convert them to LaTeX">
+                        <label class="toggle-switch engine-enrichment-second" title="Recognise mathematical formulas and convert them to LaTeX">
                           <input type="checkbox" id="doclingFormulaEnrichmentToggle" disabled>
                           <span class="toggle-slider"></span>
                           <span class="toggle-label">Formula Enrichment</span>
@@ -330,11 +364,17 @@
                       </span>
                       <span class="engine-card-name">GLM-OCR</span>
                       <span class="engine-badge" id="glmStatusBadge">Checking…</span>
+                      <span class="engine-badge engine-hidden-chip">Hidden</span>
                       <svg class="engine-card-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                         <polyline points="6 9 12 15 18 9"></polyline>
                       </svg>
                     </summary>
                     <div class="engine-card-content">
+                      <label class="toggle-switch engine-visibility" title="Show this engine's button on the main screen">
+                        <input type="checkbox" data-engine-visibility="glm_ocr" aria-label="Show on main screen: GLM-OCR" checked>
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Show on main screen</span>
+                      </label>
                       <p class="engine-card-desc">Best-in-class OCR for scans, photos of documents, math and complex tables. Runs locally. <span id="glmSizeDesc">~1.45 GB download.</span></p>
                       <p class="settings-caption glm-privacy">Downloads come from Hugging Face or GitHub. Your documents are processed on this computer and never uploaded.</p>
                       <p class="settings-caption" id="glmRequirement">Needs about 3 GB of free memory while converting. Slower than other engines on a CPU: expect several seconds to a minute per page.</p>
@@ -452,75 +492,79 @@
                     <span class="update-version-badge" id="appCurrentVersionBadge">v—</span>
                   </div>
 
-                  <div class="update-card" id="updateCard">
-                    <div class="update-status-row">
-                      <div class="update-status-info">
-                        <span class="update-status-title" id="updateStatusTitle">InkDoc is up to date</span>
-                        <span class="update-status-subtitle" id="updateStatusSubtitle">Last checked: Never</span>
-                      </div>
-                      <button type="button" class="btn btn-sm btn-secondary" id="btnCheckUpdates">
-                        <svg class="spin-icon" id="iconCheckUpdatesSpin" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="display: none;">
-                          <line x1="12" y1="2" x2="12" y2="6"></line>
-                          <line x1="12" y1="18" x2="12" y2="22"></line>
-                          <line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line>
-                          <line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line>
-                          <line x1="2" y1="12" x2="6" y2="12"></line>
-                          <line x1="18" y1="12" x2="22" y2="12"></line>
-                          <line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line>
-                          <line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line>
-                        </svg>
-                        <span id="btnCheckUpdatesText">Check for updates</span>
-                      </button>
-                    </div>
-
-                    <!-- Update Available / Download Details -->
-                    <div class="update-details" id="updateDetails" style="display: none;">
-                      <div class="update-release-meta">
-                        <span class="update-new-version" id="updateNewVersion">v— available</span>
-                        <span class="update-asset-size" id="updateAssetSize">—</span>
-                      </div>
-
-                      <!-- Release notes collapsible -->
-                      <details class="update-notes-accordion" id="updateNotesAccordion" style="display: none;">
-                        <summary class="update-notes-summary">Release Notes</summary>
-                        <div class="update-notes-content" id="updateNotesContent"></div>
-                      </details>
-
-                      <!-- Download progress -->
-                      <div class="engine-progress-wrapper" id="updateProgressWrapper" style="display: none;">
-                        <div class="engine-progress-bar">
-                          <div class="engine-progress-fill" id="updateProgressFill" style="width: 0%;"></div>
+                  <div class="settings-group">
+                    <div class="update-card" id="updateCard">
+                      <div class="update-status-row">
+                        <div class="update-status-info">
+                          <span class="update-status-title" id="updateStatusTitle">InkDoc is up to date</span>
+                          <span class="update-status-subtitle" id="updateStatusSubtitle">Last checked: Never</span>
                         </div>
-                        <div class="engine-progress-text" id="updateProgressText">Downloading… 0%</div>
+                        <button type="button" class="btn btn-sm btn-secondary" id="btnCheckUpdates">
+                          <svg class="spin-icon" id="iconCheckUpdatesSpin" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="display: none;">
+                            <line x1="12" y1="2" x2="12" y2="6"></line>
+                            <line x1="12" y1="18" x2="12" y2="22"></line>
+                            <line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line>
+                            <line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line>
+                            <line x1="2" y1="12" x2="6" y2="12"></line>
+                            <line x1="18" y1="12" x2="22" y2="12"></line>
+                            <line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line>
+                            <line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line>
+                          </svg>
+                          <span id="btnCheckUpdatesText">Check for updates</span>
+                        </button>
                       </div>
 
-                      <!-- Update Action Buttons -->
-                      <div class="update-actions" id="updateActions">
-                        <button type="button" class="btn btn-sm btn-primary" id="btnDownloadUpdate">Download Update</button>
-                        <button type="button" class="btn btn-sm btn-primary" id="btnApplyUpdate" style="display: none;">Install &amp; Restart</button>
-                        <button type="button" class="btn btn-sm btn-primary" id="btnRevealUpdate" style="display: none;">Reveal in Downloads</button>
-                        <button type="button" class="btn btn-sm btn-ghost" id="btnCancelUpdate" style="display: none;">Cancel</button>
-                      </div>
-                      <p class="settings-caption" id="updateActionHelp" style="display: none;"></p>
-                    </div>
+                      <!-- Update Available / Download Details -->
+                      <div class="update-details" id="updateDetails" style="display: none;">
+                        <div class="update-release-meta">
+                          <span class="update-new-version" id="updateNewVersion">v— available</span>
+                          <span class="update-asset-size" id="updateAssetSize">—</span>
+                        </div>
 
-                    <!-- Error Box -->
-                    <div class="update-error-box" id="updateErrorBox" style="display: none;">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <circle cx="12" cy="12" r="10"></circle>
-                        <line x1="12" y1="8" x2="12" y2="12"></line>
-                        <line x1="12" y1="16" x2="12.01" y2="16"></line>
-                      </svg>
-                      <span id="updateErrorMsg"></span>
+                        <!-- Release notes collapsible -->
+                        <details class="update-notes-accordion" id="updateNotesAccordion" style="display: none;">
+                          <summary class="update-notes-summary">Release Notes</summary>
+                          <div class="update-notes-content" id="updateNotesContent"></div>
+                        </details>
+
+                        <!-- Download progress -->
+                        <div class="engine-progress-wrapper" id="updateProgressWrapper" style="display: none;">
+                          <div class="engine-progress-bar">
+                            <div class="engine-progress-fill" id="updateProgressFill" style="width: 0%;"></div>
+                          </div>
+                          <div class="engine-progress-text" id="updateProgressText">Downloading… 0%</div>
+                        </div>
+
+                        <!-- Update Action Buttons -->
+                        <div class="update-actions" id="updateActions">
+                          <button type="button" class="btn btn-sm btn-primary" id="btnDownloadUpdate">Download Update</button>
+                          <button type="button" class="btn btn-sm btn-primary" id="btnApplyUpdate" style="display: none;">Install &amp; Restart</button>
+                          <button type="button" class="btn btn-sm btn-primary" id="btnRevealUpdate" style="display: none;">Reveal in Downloads</button>
+                          <button type="button" class="btn btn-sm btn-ghost" id="btnCancelUpdate" style="display: none;">Cancel</button>
+                        </div>
+                        <p class="settings-caption" id="updateActionHelp" style="display: none;"></p>
+                      </div>
+
+                      <!-- Error Box -->
+                      <div class="update-error-box" id="updateErrorBox" style="display: none;">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <circle cx="12" cy="12" r="10"></circle>
+                          <line x1="12" y1="8" x2="12" y2="12"></line>
+                          <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                        </svg>
+                        <span id="updateErrorMsg"></span>
+                      </div>
                     </div>
                   </div>
 
-                  <label class="toggle-switch" style="margin-top: 14px;" title="Check for application updates daily on launch">
-                    <input type="checkbox" id="dailyUpdateToggle">
-                    <span class="toggle-slider"></span>
-                    <span class="toggle-label">Check for updates daily</span>
-                  </label>
-                  <p class="settings-caption">Automatically checks GitHub Releases for new signed updates on startup (desktop only).</p>
+                  <div class="settings-group">
+                    <label class="toggle-switch" title="Check for application updates daily on launch">
+                      <input type="checkbox" id="dailyUpdateToggle">
+                      <span class="toggle-slider"></span>
+                      <span class="toggle-label">Check for updates daily</span>
+                    </label>
+                    <p class="settings-caption">Automatically checks GitHub Releases for new signed updates on startup (desktop only).</p>
+                  </div>
                 </div>
               </section>
 

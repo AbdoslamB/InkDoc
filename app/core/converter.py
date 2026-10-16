@@ -54,10 +54,12 @@ warnings.filterwarnings(
     module=r"pydub\.utils",
 )
 
-# markitdown is imported lazily: importing it loads magika and onnxruntime,
-# about 2s that would otherwise sit between launching the app and the window
-# appearing. prewarm_markitdown() pays that cost in the background instead.
-# tests/test_startup_imports.py keeps a module-level import from creeping back.
+# markitdown is never imported by InkDoc's own process. Loading it brings in
+# magika, onnxruntime, pandas and ~20 other libraries (about 95 MB that Python
+# never gives back), so conversions run in a separate worker process that
+# starts on demand and exits when idle (app/core/engines/markitdown_worker*.py).
+# Only that worker, or the in-process fallback when it can't start, calls
+# run_markitdown(). tests/test_startup_imports.py keeps an import from creeping back.
 if TYPE_CHECKING:
     from markitdown import MarkItDown
 
@@ -73,25 +75,27 @@ def sanitize_filename(name: str) -> str:
 
 
 def get_markitdown_version() -> str:
-    """Best-effort markitdown package version for display (About dialog)."""
+    """Best-effort markitdown package version for display (About dialog).
+
+    From the package metadata only: importing markitdown to ask it would load
+    it into this process, which is what the worker exists to avoid.
+    """
     try:
         return pkg_version("markitdown")
     except PackageNotFoundError:
-        from markitdown import __about__
-        return getattr(__about__, "__version__", "unknown")
+        return "bundled"
 
 
 def prewarm_markitdown() -> None:
-    """Import markitdown ahead of the first conversion.
+    """Start the MarkItDown worker ahead of a conversion. Returns at once.
 
-    Meant to run on a background thread once the UI is up. A conversion that
-    arrives while this is still running just waits on Python's import lock.
+    Called when the user shows they are about to convert something (POST
+    /convert/warmup). A conversion that arrives while it is starting waits for
+    that same start instead of launching another.
     """
-    try:
-        import markitdown  # noqa: F401
-    except Exception:
-        # The real conversion will raise and report the problem properly.
-        pass
+    from app.core.engines.markitdown_worker_client import MarkItDownWorker
+
+    MarkItDownWorker.get_instance().warm()
 
 
 def url_to_basename(url: str) -> str:
@@ -437,19 +441,35 @@ def convert_local(
         from app.core.engines.glm_ocr_engine import convert_with_glm_ocr
         return convert_with_glm_ocr(file_item, options)
 
+    from app.core.engines.markitdown_worker_client import convert_with_markitdown
+
+    stream_info_kwargs = dict(fetched.stream_info_kwargs) if fetched else _override_stream_info(file_item)
+    url = fetched.final_url if fetched is not None else None
+    return convert_with_markitdown(file_item.source, options, stream_info_kwargs, url)
+
+
+def run_markitdown(
+    source: str,
+    options: ConversionOptions,
+    stream_info_kwargs: dict[str, str],
+    url: str | None,
+) -> str:
+    """One MarkItDown conversion, in the current process.
+
+    Runs inside the MarkItDown worker, and in InkDoc's own process only when
+    the worker can't be started (convert_with_markitdown falls back to it).
+    """
     from markitdown import StreamInfo
 
     md = options.build_markitdown()
-    stream_info_kwargs = dict(fetched.stream_info_kwargs) if fetched else _override_stream_info(file_item)
-
     convert_kwargs: dict[str, Any] = {}
     if options.keep_data_uris:
         convert_kwargs["keep_data_uris"] = True
-    if fetched is not None:
-        convert_kwargs["url"] = fetched.final_url
+    if url is not None:
+        convert_kwargs["url"] = url
 
     stream_info = StreamInfo(**stream_info_kwargs) if stream_info_kwargs else None
-    result = md.convert_local(file_item.source, stream_info=stream_info, **convert_kwargs)
+    result = md.convert_local(source, stream_info=stream_info, **convert_kwargs)
     return result.text_content
 
 

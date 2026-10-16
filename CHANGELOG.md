@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-16
+
 ### Added
 - **Auto quality** (Settings → General): *Fast* (the default; conversions are
   exactly as before), *Balanced* or *Thorough*. The API has a matching
@@ -43,37 +45,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rating grids and charts, Thorough found 97.5% of the PDF's words and filled
   292 table cells. GLM-OCR found 89.6% and filled 217, and MarkItDown's
   tables came out interleaved.
-- **Page split for mixed PDFs (Thorough).** With both Docling and GLM-OCR
-  installed, a PDF with both text pages and scanned pages is read page by page.
-  Docling reads the text pages and GLM-OCR only the scanned ones, and the
-  results are joined in page order. The result's details list which engine read
-  which pages.
-- **What each step did** (API): `tables.passes` lists every step of the
-  chosen Auto quality level, whether it ran, what it changed, or why it was
-  skipped (for example "needs Docling and GLM-OCR").
-- **Switch single steps off** (Settings → General → Auto quality → Steps):
-  one switch per step of Balanced and Thorough, all on by default. A step that
-  needs an engine you haven't installed is greyed out, with a button to
-  install it. The API has a matching `thorough_passes_off` setting.
-- **Tables on scanned pages (Thorough).** With GLM-OCR and the layout model,
-  InkDoc finds each table on a scanned page and has GLM-OCR read it on its
-  own. That reading takes the place of what GLM-OCR wrote for the whole page
-  (often plain lines, side-by-side tables run together, or a shifted header)
-  only when it holds the same words; a note or source line next to the table
-  stays where it was. Each rebuilt table is
-  marked in the file (`source=glm-ocr checked=layout,page-reading`). On
-  InkDoc's table test pages scanned at 200 DPI, tables read exactly went from
-  4 to 9 of 13, with no invented cells.
-- **Layout model add-on** (Settings → Add-ons): Docling's layout model
-  "heron" (Apache-2.0, about 157 MB), run by InkDoc on this computer. The
-  Docling engine already includes it, so with Docling installed nothing is
-  downloaded.
-- **Tables without lines (Thorough).** A borderless table that the engine
-  wrote as loose text or dropped is found from the positions of the PDF's
-  words. It is rebuilt only when GLM-OCR's own reading of that area agrees,
-  and it keeps the PDF's exact text, so this step needs GLM-OCR installed.
-  Two-column articles, tables of contents and forms are not mistaken for
-  tables.
 - **Show or hide engines** (Settings → Engines): each engine card starts with a
   **Show on main screen** switch. Turning it off removes that engine's button
   from the main screen and marks the card **Hidden**; the engine stays
@@ -87,6 +58,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   asking. Installed engines
   and add-ons and their settings, the save folder and converted files are kept.
   The API has a matching `POST /settings/reset`.
+- **Tables on scanned pages (Thorough).** With GLM-OCR and the layout model,
+  InkDoc finds each table on a scanned page and has GLM-OCR read it on its
+  own. That reading takes the place of what GLM-OCR wrote for the whole page
+  (often plain lines, side-by-side tables run together, or a shifted header)
+  only when it holds the same words; a note or source line next to the table
+  stays where it was. Each rebuilt table is
+  marked in the file (`source=glm-ocr checked=layout,page-reading`). On
+  InkDoc's table test pages scanned at 200 DPI, tables read exactly went from
+  4 to 9 of 13, with no invented cells.
+- **Tables without lines (Thorough).** A borderless table that the engine
+  wrote as loose text or dropped is found from the positions of the PDF's
+  words. It is rebuilt only when GLM-OCR's own reading of that area agrees,
+  and it keeps the PDF's exact text, so this step needs GLM-OCR installed.
+  Two-column articles, tables of contents and forms are not mistaken for
+  tables.
+- **Page split for mixed PDFs (Thorough).** With both Docling and GLM-OCR
+  installed, a PDF with both text pages and scanned pages is read page by page.
+  Docling reads the text pages and GLM-OCR only the scanned ones, and the
+  results are joined in page order. The result's details list which engine read
+  which pages.
+- **Switch single steps off** (Settings → General → Auto quality → Steps):
+  one switch per step of Balanced and Thorough, all on by default. A step that
+  needs an engine you haven't installed is greyed out, with a button to
+  install it. The API has a matching `thorough_passes_off` setting.
+- **Layout model add-on** (Settings → Add-ons): Docling's layout model
+  "heron" (Apache-2.0, about 157 MB), run by InkDoc on this computer. The
+  Docling engine already includes it, so with Docling installed nothing is
+  downloaded.
+- **What each step did** (API): `tables.passes` lists every step of the
+  chosen Auto quality level, whether it ran, what it changed, or why it was
+  skipped (for example "needs Docling and GLM-OCR").
+- **Support InkDoc**: a small red heart at the foot of the Settings sidebar
+  and a "Buy me a coffee" link in Settings → About open
+  [Buy Me a Coffee](https://buymeacoffee.com/abdoslamb) in your browser. The
+  sidebar heart is hidden on About, which has its own link. Nothing is loaded
+  until you click. The website has the same heart in its header and footer.
 
 ### Changed
 - **Less memory while idle.** MarkItDown now runs in a separate process that
@@ -104,11 +111,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   takes InkDoc down with it, and cancelling a MarkItDown conversion that is
   the only one running now stops it at once. If the separate process can't
   start, InkDoc converts in its own process as before.
-- Switching to the dark theme now shrinks the light theme back into the theme
-  button, the reverse of the circle that grows when switching to light.
+- **Clearer Settings.** Shorter descriptions throughout, and the settings you
+  use most come first. General → Conversion now reads Auto-save, Auto quality,
+  then the missing-text check; Display starts with the text size. "Fall back to
+  MarkItDown if Docling fails" moved into the Docling engine card. The engine
+  cards follow the order of the main screen (MarkItDown, Docling, GLM-OCR,
+  Markit), with each engine's Install button above its technical details.
+  Docling's "Code Enrichment" and "Formula Enrichment" are now "Code
+  recognition" and "Formula recognition", and under Auto quality → Steps the
+  Balanced step comes first. Nothing works differently.
+- **What's new, at a glance.** When an update is available, Settings → Updates
+  lists five of the release's changes, the first ones of each heading (Added,
+  Changed, Fixed…), each in one sentence, at the bottom of the update card, with a
+  **Full release notes** link that opens the release page in your browser.
+  The card has more room around its parts, and long lines wrap instead of
+  making the panel scroll sideways. The notes are now the version's own
+  CHANGELOG section, on the release page too, instead of GitHub's generated
+  list, which was often a single link.
 - If the chosen engine can't be used yet (not installed, being updated, or
   hidden), InkDoc uses **Auto** until it can, and goes back to your choice once
   it is ready. Before, it switched to MarkItDown and forgot the choice.
+- Switching to the dark theme now shrinks the light theme back into the theme
+  button, the reverse of the circle that grows when switching to light.
 - The lines between groups of settings are easier to see in the dark theme,
   and Display, Updates and the GLM-OCR options are now divided the same way.
 
@@ -125,6 +149,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Settings changed just before closing Settings, or just before closing the
   window with InkDoc's own close button (Windows), are saved at once instead of
   after a short pause that closing the window could cut off.
+- In the desktop app, a middle click on a link in a converted document, and
+  any click on a link in an image map or an SVG drawing, is handled like a
+  click on an ordinary link: web links open in your browser, and other links,
+  such as links to files, are ignored instead of loading in InkDoc's window or
+  being handed to the system to open.
+- API: a file refused as too large no longer leaves its job reported as
+  running by `GET /convert/progress/{job_id}`.
 
 ## [1.2.0] - 2026-10-14
 
@@ -349,7 +380,8 @@ Initial release.
 - Windows installer (`inkdoc-setup.exe`), portable executable (`inkdoc.exe`) and
   portable ZIP; macOS (Apple Silicon) bundle; Linux (x86_64) bundle.
 
-[Unreleased]: https://github.com/AbdoslamB/InkDoc/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/AbdoslamB/InkDoc/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/AbdoslamB/InkDoc/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/AbdoslamB/InkDoc/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/AbdoslamB/InkDoc/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/AbdoslamB/InkDoc/compare/v1.0.0...v1.1.0

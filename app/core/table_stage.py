@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -46,17 +46,23 @@ from app.core.table_check import (
     repair,
     summarize,
 )
+from app.core.thorough_passes import (
+    ALL_DETECTORS,
+    LEVEL_BALANCED,
+    LEVEL_FAST,
+    LEVEL_THOROUGH,
+    PassPlan,
+)
 
 logger = logging.getLogger(__name__)
 
-LEVEL_FAST = "fast"
-LEVEL_BALANCED = "balanced"
-LEVEL_THOROUGH = "thorough"
+# The levels and the steps each runs live in app/core/thorough_passes.py.
 LEVELS = (LEVEL_FAST, LEVEL_BALANCED, LEVEL_THOROUGH)
 DEFAULT_LEVEL = LEVEL_FAST
 
 SKIP_UNREADABLE = "unreadable"
 SKIP_ERROR = "error"
+SKIP_SWITCHED_OFF = "switched_off"  # every step that uses the table finder is off
 
 # An engine's table this wide may be two borderless tables side by side.
 HINT_MIN_COLUMNS = 4
@@ -64,7 +70,7 @@ HINT_MIN_COLUMNS = 4
 HINT_PAGE_COVERAGE = 0.9
 MAX_HINTS = 40
 
-# find(path, pages, job, hints=...) -> the finder's JSON (app/core/table_finder.py)
+# find(path, pages, job, hints=..., detectors=...) -> the finder's JSON (app/core/table_finder.py)
 Finder = Callable[..., dict]
 
 
@@ -72,14 +78,17 @@ def normalize_level(value: Any) -> str:
     return value if value in LEVELS else DEFAULT_LEVEL
 
 
-def checks_tables(level: str) -> bool:
-    return normalize_level(level) in (LEVEL_BALANCED, LEVEL_THOROUGH)
+def checks_tables(level: str, disabled: Collection[str] = ()) -> bool:
+    """Whether the table check runs at this level (it does from Balanced up, unless switched off)."""
+    return PassPlan(normalize_level(level), disabled=disabled).on("table_check")
 
 
-def _find_in_worker(path: str, pages: list[int], job: Any, hints: dict | None = None, deep: bool = False) -> dict:
+def _find_in_worker(
+    path: str, pages: list[int], job: Any, hints: dict | None = None, detectors: list[str] | None = None
+) -> dict:
     from app.core.engines.markitdown_worker_client import find_tables_in_worker
 
-    return find_tables_in_worker(path, pages, job, hints=hints, deep=deep)
+    return find_tables_in_worker(path, pages, job, hints=hints, detectors=detectors)
 
 
 def wide_table_hints(markdown: str, probe: Any) -> dict[int, list[list[list[str]]]]:
@@ -135,13 +144,16 @@ def inspect_tables(
     probe: Any,
     *,
     deep: bool = False,
+    detectors: Collection[str] | None = None,
     job: Any = None,
     find: Finder | None = None,
 ) -> TableInspection:
     """Find the PDF's tables and compare them with `markdown`; changes nothing. Blocking.
 
-    `deep` (Thorough) also looks for tables without lines on every text page;
-    those need confirm_tables before they can be written.
+    `detectors` (app/core/thorough_passes.py) are what the finder also looks
+    for, on every text page: rating grids, tables without lines (those need
+    confirm_tables before they can be written), positioned text. `deep` means
+    all of them.
     A cancelled job raises ConversionCancelledError; any other failure ends
     the inspection with `early` set and the Markdown untouched.
     """
@@ -155,8 +167,9 @@ def inspect_tables(
     except Exception as exc:  # a hint is an extra, never a reason to stop
         logger.warning("Table hints skipped: %s", exc)
         hints = {}
+    wanted = [d for d in ALL_DETECTORS if deep or d in (detectors or ())]
     pages = set(probe.table_pages) | set(hints)
-    if deep:
+    if wanted:  # these look at every text page, not only those with drawn tables
         pages |= set(_text_pages(probe))
     if not pages:
         insp.early = TableSummary(checked=True)
@@ -164,7 +177,7 @@ def inspect_tables(
     job.raise_if_cancelled()
     job.set_phase("checking", "Checking tables…")
     try:
-        found = (find or _find_in_worker)(path, sorted(pages), job, hints=hints, deep=deep)
+        found = (find or _find_in_worker)(path, sorted(pages), job, hints=hints, detectors=wanted)
     except ConversionCancelledError:
         raise
     except Exception as exc:
@@ -276,13 +289,19 @@ def confirm_tables(
     return confirmed
 
 
-def finish_tables(insp: TableInspection, *, repair_allowed: bool) -> tuple[str, TableSummary]:
-    """(Markdown to keep, what happened to its tables): repair what may be repaired. Blocking."""
+def finish_tables(
+    insp: TableInspection, *, repair_allowed: bool, kinds: Collection[str] | None = None
+) -> tuple[str, TableSummary]:
+    """(Markdown to keep, what happened to its tables): repair what may be repaired. Blocking.
+
+    `kinds` are the finder results whose step is on (app/core/thorough_passes.py);
+    None allows every kind.
+    """
     if insp.early is not None:
         return insp.markdown, insp.early
     found = insp.found
     try:
-        result = repair(insp.lines, insp.bands) if repair_allowed else insp.markdown
+        result = repair(insp.lines, insp.bands, kinds=kinds) if repair_allowed else insp.markdown
         summary = summarize(insp.bands, [p["page"] for p in found.get("pages", [])], repair_allowed=repair_allowed)
     except Exception as exc:  # a bug here must never cost the conversion
         logger.exception("Table check failed: %s", exc)

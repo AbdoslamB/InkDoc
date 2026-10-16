@@ -5,7 +5,7 @@ import pytest
 
 from app.core.table_finder import color_name, find_tables, shape_label
 from tests._pdf_fixtures import drawn_page, text_op, write_pdf
-from tests._table_fixtures import FIXTURES, grid_table, side_by_side
+from tests._table_fixtures import FIXTURES, grid_table, rating_grid, side_by_side
 
 # Borderless tables have no ruling lines: the line strategy finds nothing there,
 # and they are handled from the engine's own table (split_merged_table).
@@ -143,6 +143,41 @@ def test_word_tables_need_the_deep_flag(tmp_path):
     pages, _ = FIXTURES["side_by_side_borderless"]()
     pdf = write_pdf(tmp_path / "pair.pdf", pages)
     assert _word_tables(find_tables(str(pdf), [1])) == []
+
+
+# ─── Detectors: each Thorough step asks for only what it uses ────────────────
+def _sources(result: dict) -> list[tuple[str, str]]:
+    return [(t["source"], t["kind"]) for p in result["pages"] for b in p["bands"] for t in b["tables"]]
+
+
+def test_each_detector_finds_only_its_own(tmp_path):
+    pages, _ = FIXTURES["side_by_side_borderless"]()
+    pair = str(write_pdf(tmp_path / "pair.pdf", pages))
+    words = find_tables(pair, [1], detectors=["borderless_tables"])
+    assert _sources(words) == [("pdf_words", "borderless_tables")] * 2
+    assert "segments" not in words["pages"][0]
+    segments = find_tables(pair, [1], detectors=["segments"])
+    assert _sources(segments) == [] and segments["pages"][0]["segments"]
+    assert find_tables(pair, [1], detectors=["not_a_detector"])["pages"][0]["bands"] == []
+    # deep is every detector at once.
+    every = find_tables(pair, [1], detectors=["rating_grids", "borderless_tables", "segments"])
+    deep = find_tables(pair, [1], deep=True)
+    assert {k: v for k, v in every.items() if k != "elapsed_ms"} == {k: v for k, v in deep.items() if k != "elapsed_ms"}
+
+    grid_pages, _ = rating_grid()
+    grid = str(write_pdf(tmp_path / "rating.pdf", grid_pages))
+    assert ("pdf_shapes", "rating_grids") in _sources(find_tables(grid, [1], detectors=["rating_grids"]))
+    assert ("pdf_shapes", "rating_grids") not in _sources(find_tables(grid, [1], detectors=["borderless_tables"]))
+
+
+def test_every_table_says_which_kind_it_is(tmp_path):
+    # The kind decides which step may write it (app/core/thorough_passes.py).
+    pages, _ = FIXTURES["table_in_prose"]()
+    ruled = find_tables(str(write_pdf(tmp_path / "ruled.pdf", pages)), [1])
+    assert {kind for _source, kind in _sources(ruled)} == {"lines"}
+    pages, _ = FIXTURES["side_by_side_borderless"]()
+    split = find_tables(str(write_pdf(tmp_path / "pair.pdf", pages)), [], hints={1: [MERGED_ROWS]})
+    assert _sources(split) == [("pdf_words", "hint_split")] * 2
 
 
 def test_a_wrapped_cell_continues_its_row(tmp_path):

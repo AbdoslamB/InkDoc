@@ -34,8 +34,8 @@ MERGED = (
 )
 
 
-def _in_process(path, pages, _job, hints=None, deep=False):
-    return find_tables(path, pages, hints=hints, deep=deep)
+def _in_process(path, pages, _job, **kwargs):
+    return find_tables(path, pages, **kwargs)  # hints, deep, detectors: as the worker gets them
 
 
 def _pair(tmp_path):

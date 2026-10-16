@@ -262,6 +262,8 @@ class ConversionOptions:
     # the ones an engine got wrong. Thorough also lets Auto split mixed PDFs
     # by page and read hard tables with GLM-OCR.
     auto_quality: str = "fast"
+    # Steps of that level not to run, by name (app/core/thorough_passes.py).
+    passes_off: tuple[str, ...] = ()
     # GLM-OCR reads only these 1-based pages (Auto's page split); None = all.
     page_subset: list[int] | None = None
 

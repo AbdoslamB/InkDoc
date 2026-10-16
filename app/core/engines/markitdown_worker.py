@@ -13,7 +13,7 @@ Protocol, one JSON object per line:
              "options": {...}, "stream_info": {...}, "url": "..."}
             {"id": 8, "action": "tables", "source": "...", "output": "...",
              "pages": [3, 4], "hints": {"5": [[["h1", "h2"], ["a", "b"]]]},
-             "deep": false, "time_budget_s": 20}
+             "detectors": ["rating_grids", "segments"], "time_budget_s": 20}
             {"action": "shutdown"}
     stdout  {"status": "ready", "pid": 1234, "markitdown": "0.1.7"}   once, when warm
             {"status": "error", "error": "..."}                         instead, if it can't load
@@ -151,8 +151,11 @@ def _tables(request: dict, send) -> None:
                         [[str(c) for c in row] for row in t if isinstance(row, list)]
                         for t in tables if isinstance(t, list)
                     ]
+        raw_detectors = request.get("detectors")
+        detectors = [d for d in raw_detectors if isinstance(d, str)] if isinstance(raw_detectors, list) else []
         result = find_tables(
-            str(request["source"]), pages, hints=hints, deep=request.get("deep") is True, time_budget_s=budget
+            str(request["source"]), pages, hints=hints, deep=request.get("deep") is True,
+            detectors=detectors, time_budget_s=budget,
         )
         _write_result(str(request["output"]), json.dumps(result))
         send({"id": rid, "ok": True, "none": False})

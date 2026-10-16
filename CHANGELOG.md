@@ -48,6 +48,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Docling reads the text pages and GLM-OCR only the scanned ones, and the
   results are joined in page order. The result's details list which engine read
   which pages.
+- **What each step did** (API): `tables.passes` lists every step of the
+  chosen Auto quality level, whether it ran, what it changed, or why it was
+  skipped (for example "needs Docling and GLM-OCR").
 - **Tables without lines (Thorough).** A borderless table that the engine
   wrote as loose text or dropped is found from the positions of the PDF's
   words. It is rebuilt only when GLM-OCR's own reading of that area agrees,

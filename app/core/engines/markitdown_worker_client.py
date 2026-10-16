@@ -451,6 +451,7 @@ class MarkItDownWorker:
         time_budget_s: float | None = None,
         hints: dict[int, list] | None = None,
         deep: bool = False,
+        detectors: list[str] | None = None,
     ) -> dict:
         """Run the table finder (app/core/table_finder.py) on `pages` of the PDF, in the worker."""
         fields: dict[str, Any] = {"source": str(source), "pages": [int(p) for p in pages]}
@@ -458,6 +459,8 @@ class MarkItDownWorker:
             fields["hints"] = {str(page): tables for page, tables in hints.items()}
         if deep:
             fields["deep"] = True
+        if detectors:
+            fields["detectors"] = list(detectors)
         if time_budget_s is not None:
             fields["time_budget_s"] = float(time_budget_s)
         _response, text = self._call(
@@ -632,15 +635,20 @@ def convert_with_markitdown(
 
 
 def find_tables_in_worker(
-    source: str, pages: list[int], job: Any = None, hints: dict[int, list] | None = None, deep: bool = False
+    source: str,
+    pages: list[int],
+    job: Any = None,
+    hints: dict[int, list] | None = None,
+    deep: bool = False,
+    detectors: list[str] | None = None,
 ) -> dict:
     """The table finder's result for `pages`: in the worker, or here if it can't be started."""
     worker = MarkItDownWorker.get_instance()
     if worker.usable():
         try:
-            return worker.find_tables(source, pages, job, hints=hints, deep=deep)
+            return worker.find_tables(source, pages, job, hints=hints, deep=deep, detectors=detectors)
         except WorkerUnavailableError as exc:
             logger.warning("MarkItDown worker unavailable (%s); finding tables in InkDoc's own process.", exc)
     from app.core.table_finder import find_tables
 
-    return find_tables(source, pages, hints=hints, deep=deep)
+    return find_tables(source, pages, hints=hints, deep=deep, detectors=detectors)

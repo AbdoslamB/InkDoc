@@ -110,6 +110,25 @@ def test_stream_info_hints_reach_the_worker(worker, tmp_path):
     assert "# Title" in out
 
 
+def test_the_table_finder_gives_the_same_result_in_the_worker(worker, tmp_path):
+    from app.core.table_finder import find_tables
+    from tests._pdf_fixtures import write_pdf
+    from tests._table_fixtures import rating_grid
+
+    pages, _ = rating_grid()
+    pdf = str(write_pdf(tmp_path / "rating.pdf", pages))
+
+    def same(result: dict) -> dict:
+        return {k: v for k, v in result.items() if k != "elapsed_ms"}
+
+    for detectors in ([], ["rating_grids"], ["segments", "borderless_tables"]):
+        assert same(worker.find_tables(pdf, [1], detectors=detectors)) == same(
+            find_tables(pdf, [1], detectors=detectors)
+        ), detectors
+    found = worker.find_tables(pdf, [1], detectors=["rating_grids"])
+    assert [t["kind"] for b in found["pages"][0]["bands"] for t in b["tables"]] == ["rating_grids"]
+
+
 def test_errors_keep_markitdown_s_own_message(worker, tmp_path):
     src = tmp_path / "blob.unknownext"
     src.write_bytes(os.urandom(2048))

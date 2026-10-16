@@ -208,6 +208,15 @@ def test_two_tables_put_back_at_the_same_line_keep_their_order():
     assert [b.rows for b in find_table_blocks(out.split("\n"))] == [first, second]
 
 
+def test_a_table_whose_step_is_off_is_left_as_the_engine_wrote_it():
+    found = _found(_band(_table(LEFT), _table(RIGHT)))
+    lines, results = check(MERGED_TABLE, found)
+    assert repair(lines, results, kinds={"rating_grids"}) == MERGED_TABLE
+    assert not results[0].repaired and results[0].not_repaired == "that step is switched off"
+    lines, results = check(MERGED_TABLE, found)
+    assert repair(lines, results, kinds={"lines"}) != MERGED_TABLE and results[0].repaired
+
+
 def test_check_only_never_changes_the_text():
     md = _md("Quarterly summary", MERGED_TABLE, "Figures are unaudited.")
     out, results = _run(md, _found(_band(_table(LEFT), _table(RIGHT))), allowed=False)

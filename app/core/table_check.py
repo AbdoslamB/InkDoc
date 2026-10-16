@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -432,14 +433,21 @@ def table_lines(table: dict, page: int) -> list[str]:
     return out
 
 
-def repair(lines: list[str], results: list[BandResult]) -> str:
-    """Replace each repairable band's lines with the PDF's tables; marks results repaired."""
+def repair(lines: list[str], results: list[BandResult], kinds: Collection[str] | None = None) -> str:
+    """Replace each repairable band's lines with the PDF's tables; marks results repaired.
+
+    `kinds`: the finder results whose step is on (app/core/thorough_passes.py);
+    a band holding another kind is left as it is. None allows every kind.
+    """
     out = list(lines)
     # Last first, so earlier positions stay valid; of two insertions at the same
     # line, the later band goes in first and the earlier one lands before it.
     located = [(r.start or 0, i, r) for i, r in enumerate(results) if r.located]
     for _start, _index, result in sorted(located, key=lambda t: (t[0], t[1]), reverse=True):
         if result.issue == OK:
+            continue
+        if kinds is not None and any(t.get("kind", "lines") not in kinds for t in result.tables):
+            result.not_repaired = "that step is switched off"
             continue
         if result.how == "words-approx":
             result.not_repaired = "the result's text there differs slightly from the PDF's table"
@@ -486,6 +494,8 @@ class TableSummary:
     figures_filled: int = 0           # Thorough: figures given their text from the PDF
     paragraphs_restored: int = 0      # Thorough: whole paragraphs the engine dropped, put back
     characters_restored: int = 0      # Thorough: '&', dashes and quotes put back
+    # Every step of the level (app/core/thorough_passes.py): ran, changed, or skipped and why.
+    passes: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -501,6 +511,7 @@ class TableSummary:
             "figures_filled": self.figures_filled,
             "paragraphs_restored": self.paragraphs_restored,
             "characters_restored": self.characters_restored,
+            "passes": [dict(p) for p in self.passes],
         }
 
 

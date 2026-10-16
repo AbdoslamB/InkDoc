@@ -61,6 +61,7 @@ def test_explicit_engine_is_checked_never_changed():
     assert tables["checked"] and tables["tables_found"] == 2
     assert tables["warning"] is True and tables["repaired"] == []
     assert tables["message"] == "Page 1: 2 side-by-side tables came out as one."
+    assert tables["passes"] == [], "Auto's steps: an explicit engine runs none"
     assert len(find_table_blocks(data["markdown"].split("\n"))) == 1  # MarkItDown's own, untouched
 
 
@@ -73,6 +74,7 @@ def test_auto_rebuilds_the_tables_and_says_so():
     assert tables["repaired"] == [{"page": 1, "tables": 2, "issue": "merged", "source": "pdf_lines"}]
     assert any("rebuilt 2 tables" in line for line in tables["details"])
     assert data["engine_used"] == "markitdown"
+    assert tables["passes"] == [{"name": "table_check", "ran": True, "changed": 2, "skipped": ""}]
 
 
 def test_text_responses_carry_table_headers():

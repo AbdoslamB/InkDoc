@@ -325,7 +325,7 @@ async def _run_quality_check(source_path: str, markdown: str, options: Conversio
     """
     from app.core.table_stage import checks_tables
 
-    check_tables = checks_tables(options.auto_quality)
+    check_tables = checks_tables(options.auto_quality, options.passes_off)
     if not options.quality_check and not check_tables:
         return
     engine_used = options.engine_used or (

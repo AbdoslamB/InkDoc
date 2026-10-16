@@ -31,9 +31,20 @@ import colorsys
 import logging
 import re
 import time
+from collections.abc import Iterable
 from typing import Any
 
 from app.core.markdown_tables import GridCell, clean_cell_text, to_markdown_grid
+from app.core.thorough_passes import (
+    ALL_DETECTORS,
+    DETECT_BORDERLESS,
+    DETECT_RATING_GRIDS,
+    DETECT_SEGMENTS,
+    TABLE_KIND_BORDERLESS,
+    TABLE_KIND_HINT_SPLIT,
+    TABLE_KIND_LINES,
+    TABLE_KIND_RATING,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -253,6 +264,7 @@ def _table_dict(page: Any, table: Any) -> dict | None:
         "captions": captions,
         "rows": rows,
         "source": "pdf_lines",
+        "kind": TABLE_KIND_LINES,
         "verified": not reason,
         "reason": reason,
         "merged_cells": merged,
@@ -391,6 +403,7 @@ def split_merged_table(words: list[dict], rows: list[list[str]], avoid: list[tup
             "captions": [],
             "rows": part,
             "source": "pdf_words",
+            "kind": TABLE_KIND_HINT_SPLIT,
             "verified": True,
             "reason": "",
             "merged_cells": 0,
@@ -522,6 +535,7 @@ def find_word_tables(words: list[dict], avoid: list[tuple]) -> list[dict]:
                 "captions": [],
                 "rows": part,
                 "source": "pdf_words",
+                "kind": TABLE_KIND_BORDERLESS,
                 "verified": False,
                 "confirm": True,
                 "reason": "a table without lines is used only when a second reading agrees",
@@ -761,6 +775,7 @@ def find_marker_grids(page: Any, words: list[dict]) -> list[dict]:
             "captions": [],
             "rows": out_rows,
             "source": "pdf_shapes",
+            "kind": TABLE_KIND_RATING,
             "verified": True,
             "reason": "",
             "merged_cells": 0,
@@ -834,25 +849,28 @@ def page_segments(words: list[dict]) -> list[dict]:
 
 
 def _page_tables(
-    page: Any, number: int, hints: list[list[list[str]]] | None = None, deep: bool = False
+    page: Any, number: int, hints: list[list[list[str]]] | None = None,
+    detectors: frozenset[str] = frozenset(),
 ) -> dict:
     rotation = int(getattr(page, "rotation", 0) or 0) % 360
     if rotation:
         return {"page": number, "skipped": "rotated", "bands": []}
     tables = [t for t in (_table_dict(page, raw) for raw in page.find_tables()) if t is not None]
     extra: dict[str, Any] = {}
-    if hints or deep:
+    if hints or detectors:
         words = page.extract_words()
         ruled = [tuple(t["bbox"]) for t in tables]
         for rows in hints or []:
             tables += split_merged_table(words, rows, ruled)
-        if deep:
+        if DETECT_RATING_GRIDS in detectors:
             grids = find_marker_grids(page, words)
             if grids:
                 # A rating grid's rules can look like a table of empty cells.
                 tables = [t for t in tables if not any(_overlaps(t["bbox"], g["bbox"]) for g in grids)]
                 tables += grids
+        if DETECT_BORDERLESS in detectors:
             tables += find_word_tables(words, [tuple(t["bbox"]) for t in tables])
+        if DETECT_SEGMENTS in detectors:
             extra = {
                 "width": round(float(page.width), 2),
                 "height": round(float(page.height), 2),
@@ -884,6 +902,7 @@ def find_tables(
     *,
     hints: dict[int, list[list[list[str]]]] | None = None,
     deep: bool = False,
+    detectors: Iterable[str] | None = None,
     time_budget_s: float = DEFAULT_TIME_BUDGET_S,
 ) -> dict:
     """Tables of the given 1-based pages of the PDF at `path`. Never raises.
@@ -891,14 +910,19 @@ def find_tables(
     `hints` maps a page to tables an engine wrote for it (rows, header
     first): a borderless one that is really several tables side by side comes
     back split (source "pdf_words"); one that is a single table adds nothing.
-    `deep` also looks for borderless tables in the words' positions
-    (find_word_tables; they come back unverified, to be confirmed).
+    `detectors` names what else to look for on each page (app/core/thorough_passes.py):
+    rating grids drawn with markers, borderless tables from word positions
+    (unverified, to be confirmed), and positioned text segments; `deep` is
+    all of them.
 
     {"pages": [{"page", "skipped", "bands": [...]}], "truncated": bool,
      "elapsed_ms": int, "error": str}. Stops after MAX_PAGES pages or
     `time_budget_s` seconds and says so with truncated=True.
     """
     hints = {int(k): v for k, v in (hints or {}).items()}
+    looking_for = frozenset(ALL_DETECTORS if deep else ()) | frozenset(
+        d for d in detectors or () if d in ALL_DETECTORS
+    )
     pages = list(pages) + list(hints)
     started = time.perf_counter()
     result: dict[str, Any] = {"pages": [], "truncated": False, "elapsed_ms": 0, "error": ""}
@@ -919,7 +943,7 @@ def find_tables(
                     break
                 page = pdf.pages[number - 1]
                 try:
-                    result["pages"].append(_page_tables(page, number, hints.get(number), deep))
+                    result["pages"].append(_page_tables(page, number, hints.get(number), looking_for))
                 except Exception as exc:
                     logger.warning("Table finder skipped page %d: %s", number, exc)
                     result["pages"].append({"page": number, "skipped": "error", "bands": []})

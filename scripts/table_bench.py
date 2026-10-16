@@ -215,7 +215,7 @@ def run(
             started = time.perf_counter()
             inspection = inspect_tables(
                 str(pdf), md, probe, deep=thorough,
-                find=lambda p, pages, _job, hints=None, deep=False: find_tables(p, pages, hints=hints, deep=deep),
+                find=lambda p, pages, _job, **kwargs: find_tables(p, pages, **kwargs),
             )
             if thorough and _usable("glm_ocr"):
                 from app.core.engines.glm_ocr_engine import read_table_region

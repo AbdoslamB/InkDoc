@@ -84,7 +84,8 @@ curl -F "file=@dataset.xlsx" "http://localhost:13118/convert/file?response_forma
     "warning": false, "message": "",
     "details": ["Compared 2 tables with the PDF on page 3.",
                 "Page 3: rebuilt 2 tables from the PDF's ruling lines (merged); checked against the PDF's text."],
-    "figures_filled": 0, "paragraphs_restored": 0, "characters_restored": 0   // Thorough
+    "figures_filled": 0, "paragraphs_restored": 0, "characters_restored": 0,  // Thorough
+    "passes": [{"name": "table_check", "ran": true, "changed": 2, "skipped": ""}]  // engine=auto: each step of the level
   },
   "quality": {
     "checked": true, "coverage": 0.97, "missing_pct": 3,
@@ -217,6 +218,8 @@ InkDoc writes tables in plain Markdown. A merged cell's text is repeated in each
 `tables.figures_filled`, `tables.paragraphs_restored` and `tables.characters_restored` count these.
 
 **Thorough** also looks for tables without lines on every text page, from the positions of the PDF's words (`source=pdf-words`). Such a table is written only in two cases. First, the engine wrote no table there (loose lines, a picture, nothing). Second, GLM-OCR is installed and its reading of the same area (`Table Recognition:`) has the same rows and columns, with at least 90% of the cells alike. The written table keeps the PDF's own text and is marked `checked=text-layer,glm-ocr`. At most six tables per file are read a second time, within GLM-OCR's 5-minute limit. Without agreement the table is left as it is, with a line in `tables.details` and no warning.
+
+**What each step did (`tables.passes`, `engine=auto`).** One entry per step of the chosen level, in the order they run: `{"name", "ran", "changed", "skipped"}`. `changed` counts what the step changed (pages given to GLM-OCR, characters put back, tables written, figures filled, paragraphs put back); `skipped` says why a step did not run, such as `"needs Docling and GLM-OCR"` or `"GLM-OCR isn't installed to confirm them"`. Balanced has one step, `table_check`. Thorough adds `digital_layout`, `page_split`, `polish`, `rating_grids`, `borderless_tables`, `figure_text` and `dropped_paragraphs`. The list is empty for explicit engines, which run none of these steps. When every step that uses the table finder is off, `tables.checked` is `false` with `skipped_reason` `"switched_off"`.
 
 ### <a id="missing-text-check"></a>Missing-text check
 After a PDF conversion, InkDoc compares the Markdown with the PDF's own embedded text layer. It skips pages it cannot trust (image-only pages, OCR'd scans, CJK-heavy pages) and running headers/footers. `quality.warning` is `true` when about 10% or more of the document's text, or 25% of one page, is missing, when scanned pages were left unread by MarkItDown/Markit, or when the output is full of `(cid:N)` font junk. `quality.suggestion` names the engine to try (`docling`, `glm_ocr`, `markitdown`) or the engine to install (`install_docling`, `install_glm_ocr`). A GLM-OCR result with missing text suggests MarkItDown (a vision model can skip a table; the PDF's own text layer is what MarkItDown reads). The check is read-only: it never changes or delays the saved file (explicit engines save first, then check).

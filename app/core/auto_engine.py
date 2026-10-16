@@ -52,6 +52,7 @@ from app.core.quality_check import (
     format_pages,
 )
 from app.core.queue_model import EngineKind, QueueItem
+from app.core.thorough_passes import LEVEL_THOROUGH, PASSES, PassLog, PassPlan
 
 if TYPE_CHECKING:
     from app.core.converter import ConversionOptions, FetchedSource
@@ -831,18 +832,28 @@ async def run_auto(
             job.raise_if_cancelled()
             probe = await asyncio.to_thread(probe_pdf, path)
 
-    # Thorough: a mixed PDF is read page by page (Docling for text pages,
-    # GLM-OCR for the rest), with GLM-OCR's time limit counted on its pages only.
-    from app.core.table_stage import LEVEL_THOROUGH, normalize_level
+    # The "Auto quality" steps on for this conversion (app/core/thorough_passes.py),
+    # judged on what is installed, before GLM-OCR's time limit.
+    plan = PassPlan(
+        options.auto_quality, available={e.value for e in ocr_engines}, disabled=options.passes_off
+    )
+    log = PassLog(plan)
 
+    # A mixed PDF is read page by page (Docling for text pages, GLM-OCR for
+    # the rest), with GLM-OCR's time limit counted on its pages only.
     split: list[PageSegment] | None = None
-    if pdf and normalize_level(options.auto_quality) == LEVEL_THOROUGH:
+    if pdf and plan.on("page_split"):
         split = plan_page_split(probe, ocr_engines)
-        if split is not None:
+        if split is None:
+            log.ran("page_split")  # not a mix of text and scanned pages
+        else:
             ocr_pages = sum(len(s.pages) for s in split if s.engine == EngineKind.GLM_OCR)
             estimate = await asyncio.to_thread(glm_estimate_for_pages, ocr_pages)
             if estimate is not None and estimate > GLM_OCR_TIME_LIMIT_S:
                 split = None
+                log.skipped("page_split", f"GLM-OCR would need over {GLM_OCR_TIME_LIMIT_S / 60:.0f} minutes")
+            else:
+                log.ran("page_split", ocr_pages)
 
     # Auto runs its own fallback (below), in the right lane.
     options.allow_engine_fallback = False
@@ -852,6 +863,7 @@ async def run_auto(
         await asyncio.to_thread(_apply_enrichment_policy, options, decision)
         markdown = await _convert_split(item, options, split, path=path, lane=lane, job=job)
         used = decision.engine
+        log.skipped("digital_layout", "the page split chose the engines")
     else:
         # GLM-OCR only for files it should finish within the time limit; else Docling.
         gate_note = ""
@@ -874,16 +886,23 @@ async def run_auto(
                 decision.reason += f" ({gate_note})"
                 if decision.engine == EngineKind.MARKITDOWN and not decision.hint:
                     decision.hint = gate_note + "."
-        thorough = normalize_level(options.auto_quality) == LEVEL_THOROUGH
-        if thorough and pdf and probe is not None:
+        if pdf and probe is not None and plan.on("digital_layout"):
+            routed_from = decision.engine
             thorough_digital_route(decision, docling_usable_now, EngineKind.GLM_OCR in ocr_engines)
+            if decision.engine != routed_from:
+                log.ran("digital_layout", 1)
+            elif decision.engine == EngineKind.MARKITDOWN and "Digital PDF" in decision.reason:
+                log.skipped("digital_layout", "GLM-OCR would take too long and Docling isn't installed")
+            else:
+                log.ran("digital_layout")  # not a digital PDF: Auto's own choice stands
         options.auto_decision = decision
         if decision.engine == EngineKind.DOCLING:
             await asyncio.to_thread(_apply_enrichment_policy, options, decision)
 
+        # Docling's worker stops a conversion after 3 minutes: at Thorough a long PDF goes in parts.
+        thorough = plan.level == LEVEL_THOROUGH
         chunks = docling_chunks(probe) if thorough and decision.engine == EngineKind.DOCLING else None
         if chunks is not None:
-            # Docling's worker stops a conversion after 3 minutes: a long PDF goes in parts.
             markdown = await _convert_split(item, options, chunks, path=path, lane=lane, job=job)
         else:
             markdown = await _convert_with_fallback(
@@ -891,8 +910,14 @@ async def run_auto(
             )
         used = options.engine_used or decision.engine
 
-    if pdf and probe is not None and normalize_level(options.auto_quality) == LEVEL_THOROUGH:
-        markdown = await asyncio.to_thread(_polish, markdown, probe, used, options)
+    if pdf and plan.on("polish"):
+        if probe is None:
+            log.skipped("polish", "the PDF could not be read")
+        elif used in (EngineKind.MARKITDOWN, EngineKind.MARKIT):
+            log.ran("polish")  # they copy the text layer as it is
+        else:
+            markdown = await asyncio.to_thread(_polish, markdown, probe, used, options)
+            log.ran("polish", sum(options.polish_counts))
 
     report: QualityReport | None = None
     if pdf and options.quality_check:
@@ -952,22 +977,19 @@ async def run_auto(
         decision.escalated = True
         decision.escalation = escalation
 
-    if pdf:
-        from app.core.table_stage import checks_tables
-
-        if checks_tables(options.auto_quality):
-            before = markdown
-            markdown = await _check_tables(
-                path, markdown, probe, options, lane=lane, job=job, glm_usable=glm_usable
+    if pdf and plan.relevant():
+        before = markdown
+        markdown = await _check_tables(
+            path, markdown, probe, options, lane=lane, job=job, plan=plan, log=log, glm_usable=glm_usable
+        )
+        if markdown != before and report is not None and report.checked and probe is not None:
+            # The words are the same, but the check describes the saved text.
+            ocr_engine = ocr_engines[0] if ocr_engines else None
+            report = await asyncio.to_thread(
+                assess, path, markdown, used,
+                probe=probe, ocr_engine=ocr_engine, ocr_installable=installable,
+                ocr_install_engine=install_target or "docling",
             )
-            if markdown != before and report is not None and report.checked and probe is not None:
-                # The words are the same, but the check describes the saved text.
-                ocr_engine = ocr_engines[0] if ocr_engines else None
-                report = await asyncio.to_thread(
-                    assess, path, markdown, used,
-                    probe=probe, ocr_engine=ocr_engine, ocr_installable=installable,
-                    ocr_install_engine=install_target or "docling",
-                )
 
     options.engine_used = used
     options.quality_report = report
@@ -982,45 +1004,68 @@ async def _check_tables(
     *,
     lane: LaneProvider,
     job: JobHandle,
+    plan: PassPlan,
+    log: PassLog,
     glm_usable: bool = False,
 ) -> str:
     """The table stage for Auto: check, and replace what the engine got wrong.
 
     The finder runs in the MarkItDown worker, so the inspection takes
-    MarkItDown's lane. At Thorough, tables found from word positions are read
-    a second time by GLM-OCR, in GLM-OCR's lane (only when it is installed),
-    before anything is written.
+    MarkItDown's lane. Tables found from word positions are read a second
+    time by GLM-OCR, in GLM-OCR's lane (only when it is installed), before
+    anything is written. Which of this runs is `plan`'s to say; what each
+    step did goes into `log` and the report's `passes`.
     """
+    from app.core.table_check import TableSummary
     from app.core.table_stage import (
-        LEVEL_THOROUGH,
+        SKIP_SWITCHED_OFF,
         confirm_tables,
         finish_tables,
         inspect_tables,
-        normalize_level,
         pending_confirmations,
     )
 
-    deep = normalize_level(options.auto_quality) == LEVEL_THOROUGH
-    async with lane(EngineKind.MARKITDOWN):
-        job.raise_if_cancelled()
-        inspection = await asyncio.to_thread(inspect_tables, path, markdown, probe, deep=deep, job=job)
-    if deep and glm_usable and pending_confirmations(inspection):
-        from app.core.engines.glm_ocr_engine import read_table_region
-
-        async with lane(EngineKind.GLM_OCR):
+    if plan.finder_needed():
+        async with lane(EngineKind.MARKITDOWN):
             job.raise_if_cancelled()
-            await asyncio.to_thread(confirm_tables, inspection, read_table_region, job=job)
-    result, summary = await asyncio.to_thread(finish_tables, inspection, repair_allowed=True)
-    if deep and inspection.found:
+            inspection = await asyncio.to_thread(
+                inspect_tables, path, markdown, probe, detectors=plan.detectors(), job=job
+            )
+        pending = pending_confirmations(inspection) if plan.on("borderless_tables") else []
+        if pending and glm_usable:
+            from app.core.engines.glm_ocr_engine import read_table_region
+
+            async with lane(EngineKind.GLM_OCR):
+                job.raise_if_cancelled()
+                await asyncio.to_thread(confirm_tables, inspection, read_table_region, job=job)
+        result, summary = await asyncio.to_thread(
+            finish_tables, inspection, repair_allowed=True, kinds=plan.table_kinds()
+        )
+        _log_table_passes(log, plan, inspection, unconfirmed=bool(pending) and not glm_usable)
+    else:
+        inspection = None
+        result, summary = markdown, TableSummary(checked=False, skipped_reason=SKIP_SWITCHED_OFF)
+
+    after = [name for name in ("figure_text", "dropped_paragraphs") if plan.on(name)]
+    if after and inspection is not None and inspection.found:
         from app.core.figure_text import recover_dropped_paragraphs, recover_figure_text
 
         pages = inspection.found.get("pages", [])
         filled = restored = 0
+        running = ""
         try:
-            result, filled = await asyncio.to_thread(recover_figure_text, result, pages)
-            result, restored = await asyncio.to_thread(recover_dropped_paragraphs, result, pages)
+            if "figure_text" in after:
+                running = "figure_text"
+                result, filled = await asyncio.to_thread(recover_figure_text, result, pages)
+                log.ran("figure_text", filled)
+            if "dropped_paragraphs" in after:
+                running = "dropped_paragraphs"
+                result, restored = await asyncio.to_thread(recover_dropped_paragraphs, result, pages)
+                log.ran("dropped_paragraphs", restored)
         except Exception as exc:  # an addition, never a reason to fail
-            logger.warning("Figure text skipped: %s", exc)
+            logger.warning("Figure text skipped (%s): %s", running, exc)
+            for name in after:
+                log.skipped(name, "it failed" if name == running else "a step before it failed")
         if filled:
             summary.figures_filled = filled
             summary.details.append(
@@ -1032,6 +1077,9 @@ async def _check_tables(
             summary.details.append(
                 f"Put back {restored} paragraph{'s' if restored != 1 else ''} of the PDF the engine left out."
             )
+    else:
+        for name in after:
+            log.skipped(name, _unread_reason(inspection))
     amps, words = options.polish_counts
     if amps or words:
         summary.characters_restored = amps + words
@@ -1039,8 +1087,43 @@ async def _check_tables(
             f"Put back {amps + words} of the PDF's characters the engine had simplified "
             "('&', dashes and quotes)."
         )
+    summary.passes = log.to_list()
     options.table_report = summary
     return result
+
+
+def _unread_reason(inspection: Any) -> str:
+    """Why the finder has nothing for the steps that build on it."""
+    from app.core.table_stage import SKIP_UNREADABLE
+
+    early = inspection.early if inspection is not None else None
+    if early is None:
+        return "the table finder found nothing to read"
+    if early.checked:
+        return "the PDF has no text pages"
+    return "the PDF could not be read" if early.skipped_reason == SKIP_UNREADABLE else "the table check failed"
+
+
+def _log_table_passes(log: PassLog, plan: PassPlan, inspection: Any, *, unconfirmed: bool) -> None:
+    """What the table check and the finder's steps did: tables written, per step."""
+    names = [p.name for p in PASSES if p.table_kinds and plan.on(p.name)]
+    if inspection.early is not None and not inspection.early.checked:
+        for name in names:
+            log.skipped(name, _unread_reason(inspection))
+        return
+    owner = {kind: p.name for p in PASSES for kind in p.table_kinds}
+    written = dict.fromkeys(names, 0)
+    for band in inspection.bands:
+        if band.repaired:
+            for table in band.tables:
+                name = owner.get(table.get("kind", "lines"))
+                if name in written:
+                    written[name] += 1
+    for name, count in written.items():
+        if name == "borderless_tables" and unconfirmed and not count:
+            log.skipped(name, "GLM-OCR isn't installed to confirm them")
+        else:
+            log.ran(name, count)
 
 
 def run_auto_blocking(

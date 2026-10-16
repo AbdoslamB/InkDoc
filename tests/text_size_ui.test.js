@@ -255,16 +255,18 @@ function setup({ initial } = {}) {
         assert.ok(/id="textSizeStatus" role="status" aria-live="polite"/.test(display));
     }
 
-    // Preferences: four groups (saving, Docling fallback, PDF check, Auto
-    // quality), each setting in its own, no inline spacing left over.
+    // Conversion: three groups, most used first (saving, Auto quality, PDF
+    // check), each setting in its own, no inline spacing left over. Docling's
+    // fallback is an option of that engine, in its card.
     {
-        const prefs = html.slice(html.indexOf(">Preferences<"), html.indexOf('class="settings-section settings-display"'));
+        const prefs = html.slice(html.indexOf(">Conversion<"), html.indexOf('class="settings-section settings-display"'));
         const groups = prefs.split('<div class="settings-group">').slice(1);
-        assert.strictEqual(groups.length, 4);
+        assert.strictEqual(groups.length, 3);
         assert.ok(groups[0].includes('id="autoSaveToggle"') && groups[0].includes('id="btnChangeSaveFolder"'));
-        assert.ok(groups[1].includes('id="doclingFallbackToggle"'));
+        assert.ok(groups[1].includes('id="autoQualityGroup"'));
         assert.ok(groups[2].includes('id="qualityCheckToggle"'));
-        assert.ok(groups[3].includes('id="autoQualityGroup"'));
+        const docling = html.slice(html.indexOf('id="engineCardDocling"'), html.indexOf('id="engineCardGlmOcr"'));
+        assert.ok(docling.includes('id="doclingFallbackToggle"'), "fallback sits in the Docling card");
         assert.ok(!/toggle-switch" style="margin-top/.test(prefs));
         assert.ok(/\.settings-group \+ \.settings-group \{[^}]*border-top: 1px solid var\(--divider\);/.test(css), "a line only between groups");
     }

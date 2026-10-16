@@ -30,6 +30,7 @@
   --on-mark: #06241b;
   --danger: #f97066;
   --danger-tint: #3b1c1a;
+  --heart: #f2666c;
   --success: #3dab86;
   --success-tint: #16352c;
   --shadow-card: 0 8px 32px rgba(0, 0, 0, 0.4);
@@ -68,6 +69,7 @@
   --on-mark: #f4fbf7;
   --danger: #b42318;
   --danger-tint: #f8e6e4;
+  --heart: #cf2e3e;
   --success: #0f6e56;
   --success-tint: #dcebe4;
   --shadow-card: 0 8px 30px rgba(0, 0, 0, 0.08);
@@ -140,6 +142,14 @@
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border-width: 0;
+}
+
+/* Holds the <symbol>s in index.html; takes no space. */
+.svg-sprite {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
 }
 
 html,
@@ -514,13 +524,19 @@ html[data-layout-width="full"] {
   min-height: 0;
 }
 
+.settings-side {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--rule);
+  background-color: var(--sunken);
+}
+
 .settings-nav {
   display: flex;
   flex-direction: column;
   gap: 2px;
   padding: 10px 8px;
-  border-right: 1px solid var(--rule);
-  background-color: var(--sunken);
   overflow-y: auto;
 }
 
@@ -568,6 +584,48 @@ html[data-layout-width="full"] {
 }
 
 .settings-nav-dot[hidden] {
+  display: none;
+}
+
+/* Support: a red outline heart, never filled; the same icon as About's link.
+   At the foot of the section list, but not one of the sections. */
+.support-heart {
+  color: var(--heart);
+  flex-shrink: 0;
+  transition: transform var(--transition-fast);
+}
+
+.settings-support {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-start;
+  margin: auto 8px 10px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  transition: background-color var(--transition-fast);
+}
+
+.settings-support:hover {
+  background-color: var(--elevated);
+}
+
+.settings-support:hover .support-heart {
+  transform: scale(1.12);
+}
+
+.settings-support:active .support-heart,
+.about-support-link:active .support-heart {
+  transform: scale(0.92);
+}
+
+.settings-support:focus-visible {
+  outline: 2px solid var(--mark);
+  outline-offset: -2px;
+}
+
+/* About shows its own link. */
+.settings-drawer[data-section="about"] .settings-support {
   display: none;
 }
 
@@ -634,6 +692,35 @@ html[data-layout-width="full"] {
   border-radius: 2px;
 }
 
+.about-support {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--faint);
+}
+
+.about-support-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 500;
+  color: var(--muted);
+  text-decoration: none;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.about-support-link:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+.about-support-link:focus-visible {
+  outline: 2px solid var(--mark);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
 /* Narrow browser tabs (Web Bench; the desktop window is at least 960px wide):
    full width, with the sections as a row of tabs above the content. */
 @media (max-width: 640px) {
@@ -650,12 +737,24 @@ html[data-layout-width="full"] {
     grid-template-rows: auto minmax(0, 1fr);
   }
 
-  .settings-nav {
+  .settings-side {
     flex-direction: row;
+    align-items: center;
     border-right: none;
     border-bottom: 1px solid var(--rule);
+  }
+
+  .settings-nav {
+    flex: 1;
+    min-width: 0;
+    flex-direction: row;
     overflow-x: auto;
     overflow-y: hidden;
+  }
+
+  .settings-support {
+    align-self: center;
+    margin: 0 8px 0 0;
   }
 
   .settings-nav-item {
@@ -701,7 +800,7 @@ html[data-layout-width="full"] {
   line-height: 1.45;
 }
 
-/* Save folder (Preferences): where auto-save writes. */
+/* Save folder (General → Conversion): where auto-save writes. */
 .save-folder {
   margin-top: 10px;
 }
@@ -725,8 +824,8 @@ html[data-layout-width="full"] {
   border-top: 1px solid var(--divider);
 }
 
-/* Unrelated groups within a section (Preferences: saving, Docling fallback,
-   PDF check; Display: width, text size; Updates: status, daily check) get a
+/* Unrelated groups within a section (Conversion: saving, Auto quality, PDF
+   check; Display: text size, width; Updates: status, daily check) get a
    thin line between them, inset by the section's padding so it reads lighter
    than the full-width line between sections. */
 .settings-group + .settings-group {
@@ -1329,6 +1428,7 @@ html[data-layout-width="full"] {
 }
 
 .settings-drawer.keyboard-nav .settings-nav-item:focus,
+.settings-drawer.keyboard-nav .settings-support:focus,
 .settings-drawer.keyboard-nav .text-size-btn:focus,
 .settings-drawer.keyboard-nav .segmented-option input:focus + span {
   outline: 2px solid var(--mark);
@@ -1361,6 +1461,18 @@ html[data-layout-width="full"] {
   background-color: var(--muted);
   border-radius: 50%;
   transition: var(--transition-fast);
+}
+
+/* An engine card's details (size, version, source) sit below its buttons. */
+.engine-actions + .engine-meta-grid {
+  margin-top: 10px;
+}
+
+/* Docling's fallback switch: an option of that engine, so it lives in its card. */
+.engine-fallback {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--divider);
 }
 
 /* Enrichment options inside the Docling engine card. Shown greyed out while
@@ -3146,10 +3258,12 @@ html[data-hidden-engines~="glm_ocr"] #engineCardGlmOcr .engine-hidden-chip {
   background-color: var(--sunken);
   border: 1px solid var(--rule);
   border-radius: 9px;
-  padding: 12px 14px;
+  padding: 16px 18px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 16px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .update-status-row {
@@ -3179,16 +3293,17 @@ html[data-hidden-engines~="glm_ocr"] #engineCardGlmOcr .engine-hidden-chip {
 
 .update-details {
   border-top: 1px solid var(--rule);
-  padding-top: 10px;
+  padding-top: 16px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 
 .update-release-meta {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
+  gap: 12px;
 }
 
 .update-new-version {
@@ -3202,40 +3317,118 @@ html[data-hidden-engines~="glm_ocr"] #engineCardGlmOcr .engine-hidden-chip {
   color: var(--muted);
 }
 
-.update-notes-accordion {
-  background: var(--elevated);
-  border: 1px solid var(--rule);
-  border-radius: 6px;
-  overflow: hidden;
+/* What's new: the release's first entries, below everything else in the card. */
+.update-notes {
+  border-top: 1px solid var(--rule);
+  padding-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
 }
 
-.update-notes-summary {
-  font-size: 12px;
+.update-notes[hidden] {
+  display: none;
+}
+
+.update-notes-title {
+  margin: 0;
+  font-size: 13px;
   font-weight: 600;
   color: var(--ink);
-  padding: 6px 10px;
-  cursor: pointer;
-  user-select: none;
-  background: rgba(255, 255, 255, 0.02);
 }
 
-.update-notes-content {
-  padding: 8px 12px;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--ink);
-  max-height: 150px;
-  overflow-y: auto;
-  border-top: 1px solid var(--rule);
+.update-notes-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
-.update-notes-content p {
-  margin: 0 0 6px;
+.update-notes-group {
+  margin: 6px 0 2px;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--faint);
 }
 
-.update-notes-content ul {
-  margin: 0 0 6px;
+.update-notes-group:first-child {
+  margin-top: 0;
+}
+
+.update-notes-list {
+  margin: 0;
   padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+.update-notes-list li::marker {
+  color: var(--mark);
+}
+
+.update-notes-list strong {
+  font-weight: 600;
+}
+
+.update-notes-list code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background-color: var(--elevated);
+  border: 1px solid var(--rule);
+}
+
+.update-notes-empty {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.update-notes-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.update-notes-more:empty {
+  display: none;
+}
+
+.update-notes-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  font-weight: 600;
+  color: var(--mark);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.update-notes-link[hidden] {
+  display: none;
+}
+
+.update-notes-link:hover {
+  text-decoration: underline;
+}
+
+.update-notes-link:focus-visible {
+  outline: 2px solid var(--mark);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 
 .update-actions {

@@ -369,7 +369,7 @@ def _handle_convert(payload: dict) -> dict:
                 "error": (
                     "The code and formula recognition model is not available in this "
                     f"engine pack ({cap.get('detail') or 'model directory missing'}). "
-                    "Install it from Settings, or turn off Code and Formula Enrichment."
+                    "Install it from Settings, or turn off Code recognition and Formula recognition."
                 ),
                 "capability": cap,
             }

@@ -31,9 +31,9 @@ const stepsBlock = slice("  // ─── Auto quality steps ", "  // ─── E
 
 // The steps as GET /settings sends them (app/core/thorough_passes.py catalogue()).
 const STEPS = [
-    { name: "digital_layout", title: "Layout-aware engine for digital PDFs", description: "d1",
+    { name: "digital_layout", title: "Layout-aware reading", description: "d1",
       level: "thorough", needs_all: [], needs_any: ["docling", "glm_ocr"], cost: "high" },
-    { name: "polish", title: "The PDF's own characters", description: "d2",
+    { name: "polish", title: "Original punctuation", description: "d2",
       level: "thorough", needs_all: [], needs_any: [], cost: "low" },
     { name: "table_check", title: "Table check", description: "d3",
       level: "balanced", needs_all: [], needs_any: [], cost: "low" },
@@ -136,6 +136,8 @@ function setup({ available = {} } = {}) {
         t.api.syncAutoSteps(STEPS, ["polish", "from_a_newer_version"]);
         assert.strictEqual(t.box.hidden, false);
         assert.strictEqual(t.list.children.length, STEPS.length);
+        assert.strictEqual(t.list.children[0], t.row("table_check"), "Balanced's step first");
+        assert.strictEqual(t.list.children[1], t.row("digital_layout"), "then the server's order");
         assert.strictEqual(t.input("polish").checked, false);
         assert.strictEqual(t.input("table_check").checked, true);
         assert.deepStrictEqual(t.api.off(), ["polish"], "unknown names dropped: they would fail the next save");

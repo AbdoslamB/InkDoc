@@ -721,8 +721,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const updateDetails           = document.getElementById("updateDetails");
   const updateNewVersion        = document.getElementById("updateNewVersion");
   const updateAssetSize         = document.getElementById("updateAssetSize");
-  const updateNotesAccordion    = document.getElementById("updateNotesAccordion");
-  const updateNotesContent      = document.getElementById("updateNotesContent");
+  const updateNotes             = document.getElementById("updateNotes");
+  const updateNotesTitle        = document.getElementById("updateNotesTitle");
+  const updateNotesBody         = document.getElementById("updateNotesBody");
+  const updateNotesMore         = document.getElementById("updateNotesMore");
+  const updateNotesLink         = document.getElementById("updateNotesLink");
   const updateProgressWrapper   = document.getElementById("updateProgressWrapper");
   const updateProgressFill      = document.getElementById("updateProgressFill");
   const updateProgressText      = document.getElementById("updateProgressText");
@@ -1184,6 +1187,7 @@ document.addEventListener("DOMContentLoaded", () => {
   function showSettingsSection(name) {
     if (!settingsPanes.some((pane) => pane.dataset.settingsPane === name)) return;
     settingsSection = name;
+    settingsPopover.dataset.section = name; // the CSS hides the support heart on About
     settingsPanes.forEach((pane) => { pane.hidden = pane.dataset.settingsPane !== name; });
     settingsNavItems.forEach((item) => {
       if (item.dataset.settingsSection === name) item.setAttribute("aria-current", "page");
@@ -1474,7 +1478,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (docling.status === "installed") {
         if (pillDocling) {
           pillDocling.classList.remove("is-installable", "engine-unavailable");
-          pillDocling.title = "Docling — IBM AI layout & table recognition. Deep document analysis.";
+          pillDocling.title = "Docling — reads page layout and tables with AI. Best for complex PDFs.";
         }
         if (doclingStatusBadge) {
           doclingStatusBadge.textContent = docling.source_mode ? "Active (Source)" : "Installed";
@@ -2360,8 +2364,8 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  wireEnrichmentToggle(doclingCodeEnrichmentToggle, "docling_code_enrichment", "Code Enrichment");
-  wireEnrichmentToggle(doclingFormulaEnrichmentToggle, "docling_formula_enrichment", "Formula Enrichment");
+  wireEnrichmentToggle(doclingCodeEnrichmentToggle, "docling_code_enrichment", "Code recognition");
+  wireEnrichmentToggle(doclingFormulaEnrichmentToggle, "docling_formula_enrichment", "Formula recognition");
 
   if (doclingFallbackToggle) {
     doclingFallbackToggle.addEventListener("change", async (e) => {
@@ -2515,7 +2519,9 @@ document.addEventListener("DOMContentLoaded", () => {
   // focus away from a switch.
   function buildAutoSteps(steps) {
     if (!autoStepsList) return;
-    const valid = steps.filter((s) => s && typeof s.name === "string" && typeof s.title === "string");
+    const valid = steps.filter((s) => s && typeof s.name === "string" && typeof s.title === "string")
+      // Balanced's steps first, as they run at both levels; otherwise the server's order.
+      .sort((a, b) => (b.level === "balanced") - (a.level === "balanced"));
     if (valid.map((s) => s.name).join() === [...autoStepRows.keys()].join()) return;
     autoStepRows.clear();
     autoStepsList.replaceChildren(...valid.map(autoStepRow));
@@ -2964,6 +2970,232 @@ document.addEventListener("DOMContentLoaded", () => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
   }
 
+  // ─── Release notes ─────────────────────────────────────────────────────────
+  // The notes are the CHANGELOG's section for the release ("### Added" and so
+  // on, each a list of "- " entries). Settings → Updates shows five entries,
+  // the first ones of each section in turn (pickHighlights), each cut to its
+  // first sentence, under their headings, and links to
+  // the release page for the rest. GitHub's generated notes ("* Fix by @x in
+  // https://…") are read too, without their links.
+  //
+  // Built from text nodes only: nothing in the notes is ever inserted as HTML,
+  // and no link in them is kept, so nothing in them can load a page in the
+  // window. The one link is the release page's, from the signed manifest.
+  const RELEASE_HIGHLIGHTS_SHOWN = 5;
+  const RELEASE_HIGHLIGHT_MAX_CHARS = 180;
+  const RELEASE_HIGHLIGHT_LEAD_IN_CHARS = 40;
+
+  // Inline Markdown as [{ text, strong, code }], links reduced to their text.
+  function inlineNoteSegments(text) {
+    const target = String.raw`\((?:[^()]|\([^()]*\))*\)`;
+    const plain = String(text)
+      .replace(new RegExp(String.raw`!\[[^\]]*\]` + target, "g"), "")
+      .replace(new RegExp(String.raw`\[([^\]]*)\]` + target, "g"), "$1")
+      .replace(/<(script|style)\b[\s\S]*?<\/\1\s*>/gi, "")
+      .replace(/<https?:\/\/[^>]*>/gi, "")
+      .replace(/<\/?[a-z][^>]*>/gi, "")
+      .replace(/\bhttps?:\/\/\S+/gi, "")
+      .replace(/\(\s*\)/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    const segments = [];
+    const emphasis = (s) => s.replace(/(^|[^\w*])[*_]([^*_\s][^*_]*?)[*_](?=[^\w*]|$)/g, "$1$2");
+    const pushText = (s, strong) => { if (s) segments.push({ text: emphasis(s), strong, code: false }); };
+    const token = /\*\*(.+?)\*\*|__(.+?)__|`([^`]+)`/g;
+    let last = 0;
+    let m;
+    while ((m = token.exec(plain))) {
+      pushText(plain.slice(last, m.index), false);
+      if (m[3] !== undefined) segments.push({ text: m[3], strong: false, code: true });
+      else pushText(m[1] !== undefined ? m[1] : m[2], true);
+      last = token.lastIndex;
+    }
+    pushText(plain.slice(last), false);
+    return segments.map((seg) => (seg.code ? seg : { ...seg, text: seg.text.replace(/[*`]/g, "") }))
+      .filter((seg) => seg.text);
+  }
+
+  // The first sentence, at most RELEASE_HIGHLIGHT_MAX_CHARS, ending on a word.
+  // A short lead-in ("Less memory while idle.") takes the next sentence too.
+  function shortenNoteSegments(segments) {
+    const full = segments.map((seg) => seg.text).join("");
+    let end = full.length;
+    const sentenceEnd = /[.!?](?=\s+["“(*`]?[A-Z0-9])/g;
+    let match;
+    while ((match = sentenceEnd.exec(full))) {
+      end = match.index + 1;
+      if (end >= RELEASE_HIGHLIGHT_LEAD_IN_CHARS) break;
+      end = full.length;
+    }
+    let ellipsis = false;
+    if (end > RELEASE_HIGHLIGHT_MAX_CHARS) {
+      const space = full.lastIndexOf(" ", RELEASE_HIGHLIGHT_MAX_CHARS);
+      end = space > RELEASE_HIGHLIGHT_MAX_CHARS / 2 ? space : RELEASE_HIGHLIGHT_MAX_CHARS;
+      ellipsis = true;
+    }
+    const out = [];
+    let used = 0;
+    for (const seg of segments) {
+      if (used >= end) break;
+      const text = seg.text.slice(0, end - used);
+      used += seg.text.length;
+      out.push({ ...seg, text });
+    }
+    if (ellipsis && out.length) {
+      const tail = out[out.length - 1];
+      tail.text = tail.text.replace(/[\s,;:(—–-]+$/, "");
+      out.push({ text: "…", strong: false, code: false });
+    }
+    return out;
+  }
+
+  // { items: [{ section, segments }], total } from the notes' Markdown.
+  function releaseHighlights(notes) {
+    const entries = [];
+    const paragraphs = [];
+    let section = "";
+    let entry = null;
+    let paragraph = null;
+    const lines = String(notes || "").replace(/\r\n?/g, "\n").split("\n");
+    for (const line of lines) {
+      const heading = line.match(/^#{1,6}\s+(.*?)\s*#*\s*$/);
+      const bullet = line.match(/^[-*+]\s+(.*)$/);
+      if (heading) {
+        section = inlineNoteSegments(heading[1]).map((seg) => seg.text).join("").trim();
+        entry = paragraph = null;
+      } else if (bullet) {
+        entry = { section, text: bullet[1] };
+        entries.push(entry);
+        paragraph = null;
+      } else if (!line.trim()) {
+        entry = paragraph = null;
+      } else if (entry && /^\s/.test(line)) {
+        entry.text += " " + line.trim();
+      } else if (paragraph) {
+        paragraph.text += " " + line.trim();
+      } else {
+        entry = null;
+        paragraph = { section, text: line.trim() };
+        paragraphs.push(paragraph);
+      }
+    }
+    const items = [];
+    for (const raw of entries.length ? entries : paragraphs) {
+      // GitHub's generated notes: "<title> by @user in <pull request URL>".
+      if (/\bmade their first contribution\b/i.test(raw.text)) continue;
+      const text = raw.text.replace(/\s+by\s+@[\w-]+(?:\s+in\s+\S+)?\s*$/, "").replace(/\s+in\s+https?:\/\/\S+\s*$/, "");
+      const segments = inlineNoteSegments(text);
+      const plain = segments.map((seg) => seg.text).join("").trim();
+      // Nothing left but a label ("Full Changelog:") once its link is gone.
+      if (!/[A-Za-z]/.test(plain) || /:$/.test(plain)) continue;
+      const generic = /^what'?s changed$/i.test(raw.section) || /^\[?v?\d+\.\d+/.test(raw.section);
+      items.push({ section: generic ? "" : raw.section, segments });
+    }
+    return { items, total: items.length };
+  }
+
+  // The highlights: each section's first entry, then each one's second, and so
+  // on, so a release with many additions still shows what it changed and fixed.
+  // Kept in the notes' own order, so each section's entries stay together.
+  function pickHighlights(items, count) {
+    const bySection = new Map();
+    items.forEach((item, index) => {
+      if (!bySection.has(item.section)) bySection.set(item.section, []);
+      bySection.get(item.section).push(index);
+    });
+    const chosen = [];
+    for (let round = 0; chosen.length < Math.min(count, items.length); round++) {
+      for (const indexes of bySection.values()) {
+        if (round < indexes.length && chosen.length < count) chosen.push(indexes[round]);
+      }
+    }
+    return chosen.sort((a, b) => a - b).map((index) => items[index]);
+  }
+
+  function releaseNotesUrl(url) {
+    return typeof url === "string" && /^https:\/\/[^\s"'<>]+$/i.test(url) ? url : "";
+  }
+
+  let renderedNotesKey = null;
+
+  function renderReleaseNotes(s) {
+    if (!updateNotes) return;
+    const key = JSON.stringify([s.latest_version || "", s.release_notes || "", s.release_url || ""]);
+    if (key === renderedNotesKey) return;
+    renderedNotesKey = key;
+
+    const { items, total } = releaseHighlights(s.release_notes);
+    const url = releaseNotesUrl(s.release_url);
+    if (!items.length && !url) {
+      updateNotes.hidden = true;
+      return;
+    }
+    if (updateNotesTitle) {
+      updateNotesTitle.textContent = s.latest_version ? `What's new in v${s.latest_version}` : "What's new";
+    }
+    if (updateNotesBody) {
+      updateNotesBody.replaceChildren();
+      let list = null;
+      let section = null;
+      for (const item of pickHighlights(items, RELEASE_HIGHLIGHTS_SHOWN)) {
+        if (!list || item.section !== section) {
+          section = item.section;
+          if (section) {
+            const label = document.createElement("p");
+            label.className = "update-notes-group";
+            label.textContent = section;
+            updateNotesBody.appendChild(label);
+          }
+          list = document.createElement("ul");
+          list.className = "update-notes-list";
+          updateNotesBody.appendChild(list);
+        }
+        const li = document.createElement("li");
+        for (const seg of shortenNoteSegments(item.segments)) {
+          const node = seg.code ? document.createElement("code") : seg.strong ? document.createElement("strong") : null;
+          if (node) {
+            node.textContent = seg.text;
+            li.appendChild(node);
+          } else {
+            li.appendChild(document.createTextNode(seg.text));
+          }
+        }
+        list.appendChild(li);
+      }
+      if (!items.length) {
+        const empty = document.createElement("p");
+        empty.className = "update-notes-empty";
+        empty.textContent = "The highlights of this version are on its release page.";
+        updateNotesBody.appendChild(empty);
+      }
+    }
+    const more = total - Math.min(total, RELEASE_HIGHLIGHTS_SHOWN);
+    if (updateNotesMore) {
+      updateNotesMore.textContent = more > 0 ? `+ ${more} more change${more === 1 ? "" : "s"}` : "";
+    }
+    if (updateNotesLink) {
+      updateNotesLink.hidden = !url;
+      updateNotesLink.setAttribute("href", url || "#");
+    }
+    updateNotes.hidden = false;
+  }
+
+  // The release page opens in the system browser, never in InkDoc's window,
+  // whichever button clicked it. In a browser tab (Web Bench) the link's own
+  // target="_blank" opens a new tab.
+  function openReleaseNotesLink(e) {
+    if (e.type === "auxclick" && e.button !== 1) return;
+    if (!window.pywebview) return;
+    e.preventDefault();
+    const url = releaseNotesUrl(updateNotesLink.getAttribute("href"));
+    if (url) withWindowApi((api) => Promise.resolve(api.open_external_link(url)).catch(() => {}));
+  }
+  if (updateNotesLink) {
+    updateNotesLink.addEventListener("click", openReleaseNotesLink);
+    updateNotesLink.addEventListener("auxclick", openReleaseNotesLink);
+  }
+  // ─── End release notes ─────────────────────────────────────────────────────
+
   function renderUpdateStatus(s) {
     if (!s) return;
     currentUpdateState = s;
@@ -3001,6 +3233,8 @@ document.addEventListener("DOMContentLoaded", () => {
           : "Last checked: Never";
       }
       if (updateDetails) updateDetails.style.display = "none";
+      if (updateNotes) updateNotes.hidden = true;
+      renderedNotesKey = null;
       if (updateErrorBox) updateErrorBox.style.display = "none";
       stopUpdatePolling();
       return;
@@ -3018,23 +3252,7 @@ document.addEventListener("DOMContentLoaded", () => {
         updateAssetSize.textContent = s.asset_size ? formatBytes(s.asset_size) : "";
       }
 
-      if (s.release_notes && s.release_notes.trim()) {
-        try {
-          if (window.DOMPurify) {
-            const cleanHtml = window.DOMPurify.sanitize(marked.parse(s.release_notes));
-            if (updateNotesContent) updateNotesContent.innerHTML = cleanHtml;
-          } else if (updateNotesContent) {
-            // No sanitiser loaded: show the notes as text, never as HTML.
-            updateNotesContent.textContent = s.release_notes;
-          }
-          if (updateNotesAccordion) updateNotesAccordion.style.display = "block";
-        } catch (_) {
-          if (updateNotesContent) updateNotesContent.textContent = s.release_notes;
-          if (updateNotesAccordion) updateNotesAccordion.style.display = "block";
-        }
-      } else if (updateNotesAccordion) {
-        updateNotesAccordion.style.display = "none";
-      }
+      renderReleaseNotes(s);
 
       if (updateProgressWrapper) updateProgressWrapper.style.display = "none";
       if (btnDownloadUpdate) {
@@ -3057,6 +3275,7 @@ document.addEventListener("DOMContentLoaded", () => {
         updateStatusTitle.textContent = state === "verifying" ? "Verifying update…" : "Downloading update…";
       }
       if (updateDetails) updateDetails.style.display = "block";
+      renderReleaseNotes(s);
       if (updateProgressWrapper) updateProgressWrapper.style.display = "block";
 
       const pct = Math.round(s.progress_percent || 0);
@@ -3085,6 +3304,7 @@ document.addEventListener("DOMContentLoaded", () => {
         updateStatusSubtitle.textContent = `Version v${s.latest_version} verified.`;
       }
       if (updateDetails) updateDetails.style.display = "block";
+      renderReleaseNotes(s);
       if (updateProgressWrapper) updateProgressWrapper.style.display = "none";
       if (btnDownloadUpdate) btnDownloadUpdate.style.display = "none";
       if (btnApplyUpdate) {
@@ -3113,6 +3333,7 @@ document.addEventListener("DOMContentLoaded", () => {
         updateStatusSubtitle.textContent = `Version v${s.latest_version} verified and saved to Downloads.`;
       }
       if (updateDetails) updateDetails.style.display = "block";
+      renderReleaseNotes(s);
       if (updateProgressWrapper) updateProgressWrapper.style.display = "none";
       if (btnDownloadUpdate) btnDownloadUpdate.style.display = "none";
       if (btnApplyUpdate) btnApplyUpdate.style.display = "none";
@@ -3410,24 +3631,36 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // ─── Links in converted documents and release notes ─────────────────────
+  // ─── Links in converted documents ───────────────────────────────────────
   // In the desktop app a plain link would load the other page inside InkDoc's
   // own window. Web links open in the system browser instead, and no other
   // link may replace the app; links to a heading in the same document still
-  // scroll. In a browser tab (Web Bench) links behave as before.
+  // scroll. A middle click (auxclick, which never fires "click") is handled
+  // the same way: left alone, WebView2 would hand any link, file: ones too, to
+  // the system to open. In a browser tab (Web Bench) links behave as before.
+  // Release notes have no links of their own (renderReleaseNotes).
   function handleContentLinkClick(e) {
     if (!window.pywebview) return;
-    const link = e.target && e.target.closest ? e.target.closest("a[href]") : null;
+    if (e.type === "auxclick" && e.button !== 1) return;
+    // Image-map areas and SVG links (xlink:href) navigate too; the sanitiser keeps both.
+    const link = e.target && e.target.closest ? e.target.closest("a, area") : null;
     if (!link) return;
-    const href = link.getAttribute("href") || "";
-    if (href.startsWith("#")) return;
+    const href = link.getAttribute("href") || link.getAttributeNS("http://www.w3.org/1999/xlink", "href") || "";
+    if (!href) return;
+    if (href.startsWith("#")) {
+      // A click scrolls; a middle click would open InkDoc itself in the browser.
+      if (e.type === "auxclick") e.preventDefault();
+      return;
+    }
     e.preventDefault();
     if (/^https?:\/\//i.test(href)) {
       withWindowApi((api) => Promise.resolve(api.open_external_link(href)).catch(() => {}));
     }
   }
-  if (renderedOutput) renderedOutput.addEventListener("click", handleContentLinkClick);
-  if (updateNotesContent) updateNotesContent.addEventListener("click", handleContentLinkClick);
+  if (renderedOutput) {
+    renderedOutput.addEventListener("click", handleContentLinkClick);
+    renderedOutput.addEventListener("auxclick", handleContentLinkClick);
+  }
   // ─── End content links ───────────────────────────────────────────────────
 
   // ─── External Links (Settings) ─────────────────────────────────────────────
@@ -3444,6 +3677,18 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     });
   }
+
+  // The support links (Settings sidebar heart, About) open this one address,
+  // never whatever href the link carries.
+  const SUPPORT_URL = "https://buymeacoffee.com/abdoslamb";
+  document.querySelectorAll("[data-support-link]").forEach((link) => {
+    link.addEventListener("click", (e) => {
+      if (!window.pywebview) return;
+      e.preventDefault();
+      withWindowApi((api) => Promise.resolve(api.open_external_link(SUPPORT_URL)).catch(() => {}));
+    });
+  });
+  // ─── End external links ──────────────────────────────────────────────────
 
   // ─── Custom title bar (frameless desktop window only) ────────────────────
   // The flag is injected into the page before first paint, so the controls never

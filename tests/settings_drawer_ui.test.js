@@ -425,6 +425,18 @@ function setup() {
     assert.ok(/<div class="settings-scrim" id="settingsScrim" hidden>/.test(html), "the scrim starts hidden");
 }
 
+// The drawer carries the section shown, so the CSS can hide the support heart
+// on About (which has its own link); it starts on General in the markup.
+{
+    const t = setup();
+    t.click(t.gear);
+    t.click(t.navItems[SECTIONS.indexOf("about")]);
+    assert.strictEqual(t.drawer.dataset.section, "about");
+    t.click(t.navItems[SECTIONS.indexOf("updates")]);
+    assert.strictEqual(t.drawer.dataset.section, "updates");
+    assert.ok(/<div[^>]*id="settingsPopover"[^>]*data-section="general"/.test(html));
+}
+
 // Every element the old popover had is still there exactly once, so no
 // getElementById in app.js lost its target in the move.
 {
@@ -441,11 +453,11 @@ function setup() {
         btnGlmInstall btnGlmUpdate btnGlmVerify btnGlmRemove btnGlmCancel glmOptions glmGpuToggle glmGpuLabel
         glmGpuCaption glmAdvanced glmSourceSelect glmVariantSelect btnGlmSelftest glmCatalogueInfo
         settingsUpdatesSection appCurrentVersionBadge updateCard updateStatusTitle updateStatusSubtitle btnCheckUpdates
-        iconCheckUpdatesSpin btnCheckUpdatesText updateDetails updateNewVersion updateAssetSize updateNotesAccordion
-        updateNotesContent updateProgressWrapper updateProgressFill updateProgressText updateActions btnDownloadUpdate
+        iconCheckUpdatesSpin btnCheckUpdatesText updateDetails updateNewVersion updateAssetSize updateNotes updateNotesTitle
+        updateNotesBody updateNotesMore updateNotesLink updateProgressWrapper updateProgressFill updateProgressText updateActions btnDownloadUpdate
         btnApplyUpdate btnRevealUpdate btnCancelUpdate updateActionHelp updateErrorBox updateErrorMsg aboutUsLink`
         .split(/\s+/).filter(Boolean);
-    assert.strictEqual(ids.length, 100);
+    assert.strictEqual(ids.length, 103);
     ids.forEach((id) => {
         const count = (html.match(new RegExp(`id="${id}"`, "g")) || []).length;
         assert.strictEqual(count, 1, `#${id} should appear exactly once, found ${count}`);

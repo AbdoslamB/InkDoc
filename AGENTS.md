@@ -50,7 +50,7 @@ python -c "import urllib.request, time; time.sleep(2); res = urllib.request.urlo
 
 # Test suite (CI runs exactly this) and the UI unit tests (Node, no npm)
 python -m pytest tests/ -q
-node tests/auto_engine_ui.test.js && node tests/preview_word_count.test.js && node tests/glm_ocr_ui.test.js && node tests/desktop_download_ui.test.js && node tests/save_folder_ui.test.js && node tests/preview_links_ui.test.js && node tests/theme_toggle_ui.test.js && node tests/settings_drawer_ui.test.js && node tests/layout_width_ui.test.js && node tests/text_size_ui.test.js && node tests/math_render_ui.test.js && node tests/preferences_ui.test.js && node tests/engine_visibility_ui.test.js && node tests/reset_defaults_ui.test.js && node tests/tables_ui.test.js && node tests/auto_steps_ui.test.js && node tests/layout_addon_ui.test.js
+node tests/auto_engine_ui.test.js && node tests/preview_word_count.test.js && node tests/glm_ocr_ui.test.js && node tests/desktop_download_ui.test.js && node tests/save_folder_ui.test.js && node tests/preview_links_ui.test.js && node tests/theme_toggle_ui.test.js && node tests/settings_drawer_ui.test.js && node tests/layout_width_ui.test.js && node tests/text_size_ui.test.js && node tests/math_render_ui.test.js && node tests/preferences_ui.test.js && node tests/engine_visibility_ui.test.js && node tests/reset_defaults_ui.test.js && node tests/tables_ui.test.js && node tests/auto_steps_ui.test.js && node tests/layout_addon_ui.test.js && node tests/support_link_ui.test.js && node tests/release_notes_ui.test.js
 
 # Lint (also run in CI)
 pip install ruff

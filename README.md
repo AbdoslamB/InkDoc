@@ -437,6 +437,7 @@ node tests/math_render_ui.test.js
 node tests/preferences_ui.test.js
 node tests/engine_visibility_ui.test.js
 node tests/reset_defaults_ui.test.js
+node tests/support_link_ui.test.js
 
 # 4. Verify code style and formatting with Ruff
 ruff check .
@@ -452,6 +453,7 @@ Contributions, bug reports, and feature proposals are welcome.
 
 - Review **[`CONTRIBUTING.md`](CONTRIBUTING.md)** for architecture guidelines, pull request protocols, and test requirements.
 - Report security vulnerabilities confidentially via the **[Security Policy](CONTRIBUTING.md#6-security-policy)**.
+- Built with love by one independent developer. If InkDoc saves you time, you can **[buy me a coffee](https://buymeacoffee.com/abdoslamb)**.
 
 <br />
 

@@ -28,10 +28,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          # An environment variable, never pasted into the script: a tag name
+          # may contain $( ) or backticks.
+          TAG: ${{ github.ref_name }}
         run: |
-          TAG="${{ github.ref_name }}"
           echo "Checking if release or draft already exists for $TAG..."
-          if gh release view "$TAG" -R "${{ github.repository }}" >/dev/null 2>&1; then
+          if gh release view "$TAG" -R "$GH_REPO" >/dev/null 2>&1; then
             echo "::error::A release or draft for tag '$TAG' already exists. Aborting workflow to prevent collision."
             exit 1
           fi
@@ -39,8 +41,19 @@ jobs:
           if [[ "$TAG" == *-* ]]; then
             PRERELEASE_FLAG="--prerelease"
           fi
+          # The notes are the CHANGELOG's section for this version: the app shows
+          # them under Settings -> Updates (sign_manifest.py signs the same text).
+          # GitHub's generated notes are only a fallback; without pull requests
+          # they are little more than a link.
+          NOTES_FILE="$RUNNER_TEMP/release-notes.md"
+          if python3 scripts/changelog_notes.py "$TAG" > "$NOTES_FILE"; then
+            NOTES_ARGS=(--notes-file "$NOTES_FILE")
+          else
+            echo "::warning::CHANGELOG.md has no section for $TAG; using GitHub's generated notes."
+            NOTES_ARGS=(--generate-notes)
+          fi
           echo "Creating single draft release for $TAG ($PRERELEASE_FLAG)..."
-          gh release create "$TAG" -R "${{ github.repository }}" --draft $PRERELEASE_FLAG --title "$TAG" --generate-notes
+          gh release create "$TAG" -R "$GH_REPO" --draft $PRERELEASE_FLAG --title "$TAG" "${NOTES_ARGS[@]}"
 
   build:
     name: Build (${{ matrix.asset_name }})

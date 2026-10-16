@@ -33,6 +33,13 @@ from typing import Any
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
+try:  # imported by the tests, from the repo root
+    from scripts.changelog_notes import changelog_section
+except ImportError:  # run as a script: scripts/ is sys.path[0]
+    from changelog_notes import changelog_section
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
 DEFAULT_KEY_PATH = Path.home() / ".inkdoc-keys" / "inkdoc_signing_key.pem"
 
 
@@ -82,6 +89,36 @@ def build_manifest_payload(
         "notes": release_notes,
         "assets": assets,
     }
+
+
+def changelog_at_tag(tag: str) -> str | None:
+    """CHANGELOG.md as committed at the tag, else the working tree's copy."""
+    try:
+        res = subprocess.run(
+            ["git", "show", f"{tag}:CHANGELOG.md"],
+            cwd=REPO_ROOT, capture_output=True, check=True,
+        )
+        return res.stdout.decode("utf-8", errors="replace")
+    except (OSError, subprocess.CalledProcessError):
+        pass
+    try:
+        return (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def pick_release_notes(version: str, changelog: str | None, release_body: str) -> tuple[str, str]:
+    """The notes the app will show for this release, and where they came from.
+
+    The CHANGELOG's section for the version, as on the release page release.yml
+    creates. The release body only when the CHANGELOG has none: if GitHub
+    generated it, it is mostly links, and Settings -> Updates can show nothing
+    but the link to the release.
+    """
+    section = changelog_section(changelog, version) if changelog else None
+    if section:
+        return section, "CHANGELOG.md"
+    return release_body or "", "release body"
 
 
 def build_envelope(
@@ -251,6 +288,17 @@ def main() -> int:
                             return 1
             print(f"[OK] Checksums verified against {sums_file.name}")
 
+        release_notes, notes_source = pick_release_notes(
+            clean_version, changelog_at_tag(args.tag), release_info.get("body") or "",
+        )
+        if notes_source == "CHANGELOG.md":
+            print(f"[OK] Release notes: the CHANGELOG's [{clean_version}] section")
+        else:
+            print(
+                f"[Warning] CHANGELOG.md has no [{clean_version}] section; signing the release "
+                "body as the notes. The app shows them under Settings -> Updates.",
+            )
+
         # Construct inner manifest payload
         now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
         manifest_payload = build_manifest_payload(
@@ -259,7 +307,7 @@ def main() -> int:
             # Same reason as canonical_url: for a draft, release_info["url"] is
             # the untagged-<slug> page, which disappears on publish.
             release_url=f"https://github.com/{args.repo}/releases/tag/{args.tag}",
-            release_notes=release_info.get("body") or "",
+            release_notes=release_notes,
             assets=manifest_assets,
         )
 

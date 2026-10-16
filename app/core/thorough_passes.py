@@ -77,62 +77,57 @@ class PassInfo:
 
 PASSES: tuple[PassInfo, ...] = (
     PassInfo(
-        "digital_layout", "Layout-aware engine for digital PDFs",
-        "Reads a digital PDF with Docling (or GLM-OCR without Docling) instead of MarkItDown, which "
-        "interleaves columns, sidebars and side-by-side tables.",
+        "digital_layout", "Layout-aware reading",
+        "Reads digital PDFs with Docling (or GLM-OCR) so columns and side-by-side tables stay in order.",
         LEVEL_THOROUGH, STAGE_ROUTE, needs_any=("docling", "glm_ocr"), cost="high",
         modules=("app.core.auto_engine",),
     ),
     PassInfo(
         "page_split", "Page split for mixed PDFs",
-        "Reads the text pages of a PDF with Docling and only its scanned pages with GLM-OCR.",
+        "Docling reads the text pages, GLM-OCR only the scanned ones.",
         LEVEL_THOROUGH, STAGE_ROUTE, needs_all=("docling", "glm_ocr"), cost="medium",
         modules=("app.core.auto_engine", "app.core.pdf_pages"),
     ),
     PassInfo(
-        "polish", "The PDF's own characters",
-        "Puts back the '&', dashes and quotes an engine simplified, where the PDF spells the word one way.",
+        "polish", "Original punctuation",
+        "Restores the '&', dashes and quotes an engine simplified.",
         LEVEL_THOROUGH, STAGE_POLISH, modules=("app.core.text_polish",),
     ),
     PassInfo(
         "table_check", "Table check",
-        "Compares the result's tables with the PDF's own and, in Auto, rebuilds the ones an engine got "
-        "wrong: merged side-by-side tables, merged cells, tables shown as loose text or as a picture.",
+        "Compares tables with the PDF. With Auto, rebuilds the ones that came out wrong.",
         LEVEL_BALANCED, STAGE_TABLES, table_kinds=(TABLE_KIND_LINES, TABLE_KIND_HINT_SPLIT),
         modules=("app.core.table_stage", "app.core.table_finder", "app.core.table_check",
                  "app.core.markdown_tables"),
     ),
     PassInfo(
         "rating_grids", "Rating grids",
-        "Reads grids drawn with coloured markers (Underweight ... Overweight, arrows) and writes them "
-        "as a table.",
+        "Turns grids drawn with coloured markers (Underweight ... Overweight) into tables.",
         LEVEL_THOROUGH, STAGE_FINDER, detector=DETECT_RATING_GRIDS, table_kinds=(TABLE_KIND_RATING,),
         modules=("app.core.table_finder",),
     ),
     PassInfo(
         "borderless_tables", "Tables without lines",
-        "Finds borderless tables from the positions of the PDF's words; writes one only when GLM-OCR's "
-        "reading of the same area agrees.",
+        "Finds tables without borders. Writes one only when GLM-OCR reads it the same way.",
         LEVEL_THOROUGH, STAGE_FINDER, needs_all=("glm_ocr",), detector=DETECT_BORDERLESS,
         table_kinds=(TABLE_KIND_BORDERLESS,), cost="medium",
         modules=("app.core.table_finder", "app.core.table_stage"),
     ),
     PassInfo(
         "scanned_tables", "Tables on scanned pages",
-        "Finds each table on a page without a text layer with the layout model and has GLM-OCR read it "
-        "on its own; writes that reading when it agrees with GLM-OCR's reading of the whole page.",
+        "Reads each table on a scanned page again, on its own. Keeps it only when the words match.",
         LEVEL_THOROUGH, STAGE_SCANNED, needs_all=("glm_ocr", "layout_model"), cost="high",
         modules=("app.core.scanned_tables",),
     ),
     PassInfo(
         "figure_text", "Chart text",
-        "Adds the labels and values inside charts an engine left out; a labelled bar chart becomes a table.",
+        "Adds chart labels and values an engine left out. Bar charts become tables.",
         LEVEL_THOROUGH, STAGE_AFTER_TABLES, needs_segments=True,
         modules=("app.core.figure_text", "app.core.table_finder"),
     ),
     PassInfo(
         "dropped_paragraphs", "Dropped paragraphs",
-        "Puts back whole paragraphs an engine left out.",
+        "Puts back paragraphs an engine left out.",
         LEVEL_THOROUGH, STAGE_AFTER_TABLES, needs_segments=True,
         modules=("app.core.figure_text", "app.core.table_finder"),
     ),

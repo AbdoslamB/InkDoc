@@ -83,6 +83,10 @@ that should trust it.
 ### Step 1: Prepare the Release
 
 1. Update `CHANGELOG.md`: move items from `[Unreleased]` into a new section `[X.Y.Z] - YYYY-MM-DD`.
+   This section becomes the release notes: `release.yml` puts it on the release page
+   and `sign_manifest.py` signs it into the update manifest. Settings → Updates shows
+   five entries, the first ones of each heading in turn, so put each heading's most
+   important entries first.
 2. Commit and push the changelog:
    ```bash
    git add CHANGELOG.md

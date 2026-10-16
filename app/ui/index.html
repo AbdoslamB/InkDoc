@@ -14,6 +14,12 @@
   <script src="/static/vendor/purify.min.js"></script>
 </head>
 <body>
+  <!-- Icons used in more than one place, drawn with <use href="#…">. -->
+  <svg class="svg-sprite" aria-hidden="true" focusable="false">
+    <symbol id="iconHeart" viewBox="0 0 24 24">
+      <path d="M12 20.25S3 15.2 3 8.9C3 6.1 5.1 4 7.7 4c1.8 0 3.4 1 4.3 2.6C12.9 5 14.5 4 16.3 4 18.9 4 21 6.1 21 8.9c0 6.3-9 11.35-9 11.35Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"></path>
+    </symbol>
+  </svg>
   <div class="app-container">
     <!-- Header -->
     <header class="app-header">
@@ -59,7 +65,7 @@
             </svg>
           </button>
           <div class="settings-scrim" id="settingsScrim" hidden></div>
-          <div class="settings-drawer" id="settingsPopover" role="dialog" aria-modal="true" aria-labelledby="settingsDrawerTitle" tabindex="-1">
+          <div class="settings-drawer" id="settingsPopover" role="dialog" aria-modal="true" aria-labelledby="settingsDrawerTitle" tabindex="-1" data-section="general">
             <div class="settings-drawer-header">
               <h2 class="settings-drawer-title" id="settingsDrawerTitle">Settings</h2>
               <button type="button" class="btn btn-icon settings-close" id="settingsCloseBtn" title="Close settings" aria-label="Close settings">
@@ -70,21 +76,28 @@
               </button>
             </div>
             <div class="settings-drawer-body">
-              <nav class="settings-nav" id="settingsNav" aria-label="Settings sections">
-                <button type="button" class="settings-nav-item" id="settingsNavGeneral" data-settings-section="general" aria-controls="settingsPaneGeneral" aria-current="page">General</button>
-                <button type="button" class="settings-nav-item" id="settingsNavEngines" data-settings-section="engines" aria-controls="settingsPaneEngines">Engines</button>
-                <button type="button" class="settings-nav-item" id="settingsNavAddons" data-settings-section="addons" aria-controls="settingsPaneAddons">Add-ons</button>
-                <button type="button" class="settings-nav-item" id="settingsNavUpdates" data-settings-section="updates" aria-controls="settingsPaneUpdates">Updates<span class="settings-nav-dot" id="settingsUpdateDot" title="Update available" hidden></span></button>
-                <button type="button" class="settings-nav-item" id="settingsNavAbout" data-settings-section="about" aria-controls="settingsPaneAbout">About</button>
-              </nav>
+              <div class="settings-side">
+                <nav class="settings-nav" id="settingsNav" aria-label="Settings sections">
+                  <button type="button" class="settings-nav-item" id="settingsNavGeneral" data-settings-section="general" aria-controls="settingsPaneGeneral" aria-current="page">General</button>
+                  <button type="button" class="settings-nav-item" id="settingsNavEngines" data-settings-section="engines" aria-controls="settingsPaneEngines">Engines</button>
+                  <button type="button" class="settings-nav-item" id="settingsNavAddons" data-settings-section="addons" aria-controls="settingsPaneAddons">Add-ons</button>
+                  <button type="button" class="settings-nav-item" id="settingsNavUpdates" data-settings-section="updates" aria-controls="settingsPaneUpdates">Updates<span class="settings-nav-dot" id="settingsUpdateDot" title="Update available" hidden></span></button>
+                  <button type="button" class="settings-nav-item" id="settingsNavAbout" data-settings-section="about" aria-controls="settingsPaneAbout">About</button>
+                </nav>
+                <!-- Not a section: a link, hidden on About, which has its own. -->
+                <a href="https://buymeacoffee.com/abdoslamb" target="_blank" rel="noopener noreferrer" class="settings-support" id="settingsSupportLink" data-support-link title="Support InkDoc" aria-label="Support InkDoc on Buy Me a Coffee">
+                  <svg class="support-heart" width="16" height="16" aria-hidden="true" focusable="false"><use href="#iconHeart"></use></svg>
+                </a>
+              </div>
 
               <section class="settings-pane" id="settingsPaneGeneral" data-settings-pane="general" aria-labelledby="settingsNavGeneral">
                 <div class="settings-section">
-                  <p class="settings-section-title">Preferences</p>
-                  <!-- Unrelated groups (saving, Docling fallback, PDF check) are
-                       separated by a thin line; see .settings-group. -->
+                  <p class="settings-section-title">Conversion</p>
+                  <!-- Most used first: saving, Auto quality, PDF check. Groups are
+                       separated by a thin line; see .settings-group. Docling's
+                       fallback lives in its engine card. -->
                   <div class="settings-group">
-                    <label class="toggle-switch" title="Also save converted .md files to your save folder">
+                    <label class="toggle-switch" title="Save each result as a .md file in your save folder">
                       <input type="checkbox" id="autoSaveToggle">
                       <span class="toggle-slider"></span>
                       <span class="toggle-label">Auto-save</span>
@@ -105,12 +118,31 @@
                   </div>
 
                   <div class="settings-group">
-                    <label class="toggle-switch" title="Automatically retry with MarkItDown if Docling conversion fails">
-                      <input type="checkbox" id="doclingFallbackToggle">
-                      <span class="toggle-slider"></span>
-                      <span class="toggle-label">Fall back to MarkItDown if Docling fails</span>
-                    </label>
-                    <p class="settings-caption">If Docling encounters an error, automatically re-run using MarkItDown. The preview will explicitly indicate when fallback occurred.</p>
+                    <div class="layout-width-row">
+                      <span class="layout-width-label" id="autoQualityLabel">Auto quality</span>
+                      <div class="segmented" id="autoQualityGroup" role="radiogroup" aria-labelledby="autoQualityLabel">
+                        <label class="segmented-option" title="Quickest; no extra checks">
+                          <input type="radio" class="sr-only" name="autoQuality" value="fast" checked>
+                          <span>Fast</span>
+                        </label>
+                        <label class="segmented-option" title="Checks PDF tables and fixes the wrong ones">
+                          <input type="radio" class="sr-only" name="autoQuality" value="balanced">
+                          <span>Balanced</span>
+                        </label>
+                        <label class="segmented-option" title="Best result for hard PDFs; slower">
+                          <input type="radio" class="sr-only" name="autoQuality" value="thorough">
+                          <span>Thorough</span>
+                        </label>
+                      </div>
+                    </div>
+                    <p class="settings-caption" id="autoQualityCaption">For PDFs. Balanced checks tables against the PDF and fixes the wrong ones. Thorough also recovers layout, charts and dropped text, and is slower. Fixes need the Auto engine; other engines are only checked.</p>
+                    <!-- One switch per step, built by app.js from GET /settings
+                         (thorough_passes); hidden until that list arrives. -->
+                    <details class="auto-steps" id="autoSteps" hidden>
+                      <summary>Steps</summary>
+                      <p class="settings-caption">Turn off any step you don't need. New steps start on.</p>
+                      <ul class="auto-steps-list" id="autoStepsList" aria-label="Steps of Balanced and Thorough"></ul>
+                    </details>
                   </div>
 
                   <div class="settings-group">
@@ -119,61 +151,12 @@
                       <span class="toggle-slider"></span>
                       <span class="toggle-label">Check PDFs for missing text</span>
                     </label>
-                    <p class="settings-caption">Compares the result with the PDF's embedded text and warns if part of it was lost. Read-only; never changes the saved file.</p>
-                  </div>
-
-                  <div class="settings-group">
-                    <div class="layout-width-row">
-                      <span class="layout-width-label" id="autoQualityLabel">Auto quality</span>
-                      <div class="segmented" id="autoQualityGroup" role="radiogroup" aria-labelledby="autoQualityLabel">
-                        <label class="segmented-option" title="Convert as before">
-                          <input type="radio" class="sr-only" name="autoQuality" value="fast" checked>
-                          <span>Fast</span>
-                        </label>
-                        <label class="segmented-option" title="Check PDF tables against the PDF; Auto rebuilds the ones an engine got wrong">
-                          <input type="radio" class="sr-only" name="autoQuality" value="balanced">
-                          <span>Balanced</span>
-                        </label>
-                        <label class="segmented-option" title="Balanced, plus page-by-page engines for mixed PDFs and GLM-OCR for hard tables (slower)">
-                          <input type="radio" class="sr-only" name="autoQuality" value="thorough">
-                          <span>Thorough</span>
-                        </label>
-                      </div>
-                    </div>
-                    <p class="settings-caption" id="autoQualityCaption">Balanced checks every PDF's tables against the PDF itself: side-by-side tables, merged cells and shapes in cells. In Auto, a table an engine got wrong is rebuilt from the PDF and marked in the file. Thorough reads digital PDFs with Docling (layout-aware) instead of MarkItDown, adds the text of charts, rating grids drawn with markers and paragraphs the engine dropped, splits mixed PDFs by page and, with GLM-OCR installed, rebuilds tables without lines once GLM-OCR's reading agrees and reads each table on a scanned page again (with the layout model). Slower; other engines are only checked, never changed.</p>
-                    <!-- One switch per step, built by app.js from GET /settings
-                         (thorough_passes); hidden until that list arrives. -->
-                    <details class="auto-steps" id="autoSteps" hidden>
-                      <summary>Steps</summary>
-                      <p class="settings-caption">What Balanced and Thorough add to an engine's result. A step switched off never runs; new steps arrive switched on.</p>
-                      <ul class="auto-steps-list" id="autoStepsList" aria-label="Steps of Balanced and Thorough"></ul>
-                    </details>
+                    <p class="settings-caption">Warns when part of the PDF's text is missing from the result. Never changes the file.</p>
                   </div>
                 </div>
 
                 <div class="settings-section settings-display">
                   <p class="settings-section-title">Display</p>
-                  <div class="settings-group">
-                    <div class="layout-width-row">
-                      <span class="layout-width-label" id="layoutWidthLabel">Layout width</span>
-                      <div class="segmented" id="layoutWidthGroup" role="radiogroup" aria-labelledby="layoutWidthLabel">
-                        <label class="segmented-option" title="Up to 1,400 px wide, as before">
-                          <input type="radio" class="sr-only" name="layoutWidth" value="standard" checked>
-                          <span>Standard</span>
-                        </label>
-                        <label class="segmented-option" title="Up to 1,920 px wide">
-                          <input type="radio" class="sr-only" name="layoutWidth" value="wide">
-                          <span>Wide</span>
-                        </label>
-                        <label class="segmented-option" title="The whole window">
-                          <input type="radio" class="sr-only" name="layoutWidth" value="full">
-                          <span>Full</span>
-                        </label>
-                      </div>
-                    </div>
-                    <p class="settings-caption">Gives tables, code and images more room on large screens; text keeps a readable line length. Changes nothing in windows narrower than 1,400 px.</p>
-                  </div>
-
                   <div class="settings-group text-size">
                     <div class="text-size-row">
                       <span class="layout-width-label" id="textSizeLabel">Preview text size</span>
@@ -194,6 +177,27 @@
                     </div>
                     <p class="sr-only" id="textSizeStatus" role="status" aria-live="polite"></p>
                   </div>
+
+                  <div class="settings-group">
+                    <div class="layout-width-row">
+                      <span class="layout-width-label" id="layoutWidthLabel">Layout width</span>
+                      <div class="segmented" id="layoutWidthGroup" role="radiogroup" aria-labelledby="layoutWidthLabel">
+                        <label class="segmented-option" title="Up to 1,400 px wide">
+                          <input type="radio" class="sr-only" name="layoutWidth" value="standard" checked>
+                          <span>Standard</span>
+                        </label>
+                        <label class="segmented-option" title="Up to 1,920 px wide">
+                          <input type="radio" class="sr-only" name="layoutWidth" value="wide">
+                          <span>Wide</span>
+                        </label>
+                        <label class="segmented-option" title="The whole window">
+                          <input type="radio" class="sr-only" name="layoutWidth" value="full">
+                          <span>Full</span>
+                        </label>
+                      </div>
+                    </div>
+                    <p class="settings-caption">More room for tables, code and images on screens wider than 1,400 px. Text keeps a readable line length.</p>
+                  </div>
                 </div>
 
                 <!-- Restore defaults: preferences only (the server holds the list,
@@ -213,8 +217,8 @@
               <section class="settings-pane" id="settingsPaneEngines" data-settings-pane="engines" aria-labelledby="settingsNavEngines" hidden>
                 <!-- Engine info & management cards -->
                 <div class="settings-section settings-engines">
-                  <p class="settings-section-title">Processing Engines</p>
-                  <p class="settings-caption engines-intro">Turn off "Show on main screen" to hide an engine's button. Hidden engines stay installed, and Auto still uses them.</p>
+                  <p class="settings-section-title">Conversion engines</p>
+                  <p class="settings-caption engines-intro">Hide engines you don't use from the main screen. Hidden engines stay installed, and Auto still uses them.</p>
 
                   <!-- MarkItDown (Bundled) -->
                   <details class="engine-card" id="engineCardMarkitdown">
@@ -238,35 +242,7 @@
                         <span class="toggle-slider"></span>
                         <span class="toggle-label">Show on main screen</span>
                       </label>
-                      <p class="engine-card-desc">Fast, zero-config converter for everyday documents: PDF, Word, Excel, PowerPoint, images, audio transcription, HTML &amp; CSV.</p>
-                    </div>
-                  </details>
-
-                  <!-- Markit (Bundled) -->
-                  <details class="engine-card" id="engineCardMarkit">
-                    <summary class="engine-card-summary">
-                      <span class="engine-card-icon markit-icon">
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                          <circle cx="12" cy="12" r="10"></circle>
-                          <line x1="2" y1="12" x2="22" y2="12"></line>
-                          <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
-                        </svg>
-                      </span>
-                      <span class="engine-card-name">Markit</span>
-                      <span class="engine-badge engine-badge-builtin">Built-in</span>
-                      <span class="engine-badge engine-hidden-chip">Hidden</span>
-                      <span class="engine-card-version" id="versionMarkit">—</span>
-                      <svg class="engine-card-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                        <polyline points="6 9 12 15 18 9"></polyline>
-                      </svg>
-                    </summary>
-                    <div class="engine-card-content">
-                      <label class="toggle-switch engine-visibility" title="Show this engine's button on the main screen">
-                        <input type="checkbox" data-engine-visibility="markit" aria-label="Show on main screen: Markit" checked>
-                        <span class="toggle-slider"></span>
-                        <span class="toggle-label">Show on main screen</span>
-                      </label>
-                      <p class="engine-card-desc">Broad format specialist. Use for EPUB ebooks, YAML configs, Jupyter Notebooks (.ipynb), XML &amp; other formats not covered by MarkItDown.</p>
+                      <p class="engine-card-desc">Fast, built-in converter for everyday files: PDF, Word, Excel, PowerPoint, HTML, CSV, images and audio.</p>
                     </div>
                   </details>
 
@@ -293,30 +269,7 @@
                         <span class="toggle-slider"></span>
                         <span class="toggle-label">Show on main screen</span>
                       </label>
-                      <p class="engine-card-desc">IBM AI deep document parser. Best for complex multi-column layouts, scanned pages &amp; table structure extraction.</p>
-                  
-                      <div class="engine-meta-grid">
-                        <div class="engine-meta-item">
-                          <span class="engine-meta-label">Pack Size:</span>
-                          <span class="engine-meta-value" id="doclingSizeInfo">~650 MB</span>
-                        </div>
-                        <div class="engine-meta-item">
-                          <span class="engine-meta-label">Version:</span>
-                          <span class="engine-meta-value" id="doclingVersionInfo">—</span>
-                        </div>
-                        <div class="engine-meta-item">
-                          <span class="engine-meta-label">Source:</span>
-                          <span class="engine-meta-value" id="doclingSourceInfo">GitHub Release Asset (SHA-256)</span>
-                        </div>
-                        <div class="engine-meta-item full-width" id="doclingPlatformsRow">
-                          <span class="engine-meta-label">Supported Builds:</span>
-                          <span class="engine-meta-value" id="doclingPlatformsInfo">—</span>
-                        </div>
-                        <div class="engine-meta-item full-width" id="doclingPathRow" style="display: none;">
-                          <span class="engine-meta-label">Location:</span>
-                          <span class="engine-meta-value settings-path-text" id="doclingPathInfo">—</span>
-                        </div>
-                      </div>
+                      <p class="engine-card-desc">Reads page layout with AI. Best for multi-column pages, tables and scans.</p>
 
                       <!-- Progress Indicator -->
                       <div class="engine-progress-wrapper" id="doclingProgressContainer" style="display: none;">
@@ -332,6 +285,38 @@
                         <button type="button" class="btn btn-sm btn-secondary" id="btnDoclingVerify" style="display: none;">Verify Integrity</button>
                         <button type="button" class="btn btn-sm btn-danger" id="btnDoclingRemove" style="display: none;">Remove Pack</button>
                         <button type="button" class="btn btn-sm btn-ghost" id="btnDoclingCancel" style="display: none;">Cancel</button>
+                      </div>
+
+                      <div class="engine-meta-grid">
+                        <div class="engine-meta-item">
+                          <span class="engine-meta-label">Pack size:</span>
+                          <span class="engine-meta-value" id="doclingSizeInfo">~650 MB</span>
+                        </div>
+                        <div class="engine-meta-item">
+                          <span class="engine-meta-label">Version:</span>
+                          <span class="engine-meta-value" id="doclingVersionInfo">—</span>
+                        </div>
+                        <div class="engine-meta-item">
+                          <span class="engine-meta-label">Source:</span>
+                          <span class="engine-meta-value" id="doclingSourceInfo">GitHub Release Asset (SHA-256)</span>
+                        </div>
+                        <div class="engine-meta-item full-width" id="doclingPlatformsRow">
+                          <span class="engine-meta-label">Supported builds:</span>
+                          <span class="engine-meta-value" id="doclingPlatformsInfo">—</span>
+                        </div>
+                        <div class="engine-meta-item full-width" id="doclingPathRow" style="display: none;">
+                          <span class="engine-meta-label">Location:</span>
+                          <span class="engine-meta-value settings-path-text" id="doclingPathInfo">—</span>
+                        </div>
+                      </div>
+
+                      <div class="engine-fallback">
+                        <label class="toggle-switch" title="Retry with MarkItDown when Docling fails">
+                          <input type="checkbox" id="doclingFallbackToggle">
+                          <span class="toggle-slider"></span>
+                          <span class="toggle-label">Fall back to MarkItDown if Docling fails</span>
+                        </label>
+                        <p class="settings-caption">Retries with MarkItDown when Docling fails. The preview says when this happens.</p>
                       </div>
 
                       <!-- Enrichment options. Both toggles stay disabled until the
@@ -366,15 +351,15 @@
                         <label class="toggle-switch" title="Transcribe code blocks with the recognition model and label their programming language">
                           <input type="checkbox" id="doclingCodeEnrichmentToggle" disabled>
                           <span class="toggle-slider"></span>
-                          <span class="toggle-label">Code Enrichment</span>
+                          <span class="toggle-label">Code recognition</span>
                         </label>
                         <label class="toggle-switch engine-enrichment-second" title="Recognise mathematical formulas and convert them to LaTeX">
                           <input type="checkbox" id="doclingFormulaEnrichmentToggle" disabled>
                           <span class="toggle-slider"></span>
-                          <span class="toggle-label">Formula Enrichment</span>
+                          <span class="toggle-label">Formula recognition</span>
                         </label>
                         <p class="settings-caption" id="doclingEnrichmentCaption">
-                          Requires the optional recognition model. Both options share the same model, so turning on either one loads it for <em>every</em> Docling conversion, not only documents that contain code or formulas.
+                          Both need the recognition model above. While either is on, <em>every</em> Docling conversion loads it, which takes longer.
                         </p>
                       </div>
                     </div>
@@ -403,9 +388,26 @@
                         <span class="toggle-slider"></span>
                         <span class="toggle-label">Show on main screen</span>
                       </label>
-                      <p class="engine-card-desc">Best-in-class OCR for scans, photos of documents, math and complex tables. Runs locally. <span id="glmSizeDesc">~1.45 GB download.</span></p>
-                      <p class="settings-caption glm-privacy">Downloads come from Hugging Face or GitHub. Your documents are processed on this computer and never uploaded.</p>
-                      <p class="settings-caption" id="glmRequirement">Needs about 3 GB of free memory while converting. Slower than other engines on a CPU: expect several seconds to a minute per page.</p>
+                      <p class="engine-card-desc">Reads scans, photos of documents, math and complex tables, on this computer. <span id="glmSizeDesc">~1.45 GB download.</span></p>
+                      <p class="settings-caption glm-privacy">Downloaded from Hugging Face or GitHub. Your documents are never uploaded.</p>
+                      <p class="settings-caption" id="glmRequirement">Needs about 3 GB of free memory. On a CPU, expect several seconds to a minute per page.</p>
+
+                      <p class="engine-enrichment-addon-reason" id="glmReason" hidden></p>
+
+                      <div class="engine-progress-wrapper" id="glmProgressContainer" style="display: none;">
+                        <div class="engine-progress-bar">
+                          <div class="engine-progress-fill" id="glmProgressFill" style="width: 0%;"></div>
+                        </div>
+                        <div class="engine-progress-text" id="glmProgressText" role="status" aria-live="polite">Preparing…</div>
+                      </div>
+
+                      <div class="engine-actions">
+                        <button type="button" class="btn btn-sm btn-primary" id="btnGlmInstall">Download GLM-OCR</button>
+                        <button type="button" class="btn btn-sm btn-primary" id="btnGlmUpdate" style="display: none;">Update available</button>
+                        <button type="button" class="btn btn-sm btn-secondary" id="btnGlmVerify" style="display: none;">Verify</button>
+                        <button type="button" class="btn btn-sm btn-danger" id="btnGlmRemove" style="display: none;">Remove</button>
+                        <button type="button" class="btn btn-sm btn-ghost" id="btnGlmCancel" style="display: none;">Cancel</button>
+                      </div>
 
                       <div class="engine-meta-grid">
                         <div class="engine-meta-item">
@@ -442,23 +444,6 @@
                         </div>
                       </div>
 
-                      <p class="engine-enrichment-addon-reason" id="glmReason" hidden></p>
-
-                      <div class="engine-progress-wrapper" id="glmProgressContainer" style="display: none;">
-                        <div class="engine-progress-bar">
-                          <div class="engine-progress-fill" id="glmProgressFill" style="width: 0%;"></div>
-                        </div>
-                        <div class="engine-progress-text" id="glmProgressText" role="status" aria-live="polite">Preparing…</div>
-                      </div>
-
-                      <div class="engine-actions">
-                        <button type="button" class="btn btn-sm btn-primary" id="btnGlmInstall">Download GLM-OCR</button>
-                        <button type="button" class="btn btn-sm btn-primary" id="btnGlmUpdate" style="display: none;">Update available</button>
-                        <button type="button" class="btn btn-sm btn-secondary" id="btnGlmVerify" style="display: none;">Verify</button>
-                        <button type="button" class="btn btn-sm btn-danger" id="btnGlmRemove" style="display: none;">Remove</button>
-                        <button type="button" class="btn btn-sm btn-ghost" id="btnGlmCancel" style="display: none;">Cancel</button>
-                      </div>
-
                       <div class="engine-enrichment" id="glmOptions" style="display: none;">
                         <label class="toggle-switch" title="Use the graphics card to read pages faster">
                           <input type="checkbox" id="glmGpuToggle">
@@ -486,13 +471,41 @@
                       </div>
                     </div>
                   </details>
+
+                  <!-- Markit (Bundled) -->
+                  <details class="engine-card" id="engineCardMarkit">
+                    <summary class="engine-card-summary">
+                      <span class="engine-card-icon markit-icon">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                          <circle cx="12" cy="12" r="10"></circle>
+                          <line x1="2" y1="12" x2="22" y2="12"></line>
+                          <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                        </svg>
+                      </span>
+                      <span class="engine-card-name">Markit</span>
+                      <span class="engine-badge engine-badge-builtin">Built-in</span>
+                      <span class="engine-badge engine-hidden-chip">Hidden</span>
+                      <span class="engine-card-version" id="versionMarkit">—</span>
+                      <svg class="engine-card-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="6 9 12 15 18 9"></polyline>
+                      </svg>
+                    </summary>
+                    <div class="engine-card-content">
+                      <label class="toggle-switch engine-visibility" title="Show this engine's button on the main screen">
+                        <input type="checkbox" data-engine-visibility="markit" aria-label="Show on main screen: Markit" checked>
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Show on main screen</span>
+                      </label>
+                      <p class="engine-card-desc">For formats MarkItDown doesn't cover: EPUB, Jupyter notebooks, YAML, XML and more.</p>
+                    </div>
+                  </details>
                 </div>
               </section>
 
               <section class="settings-pane" id="settingsPaneAddons" data-settings-pane="addons" aria-labelledby="settingsNavAddons" hidden>
                 <div class="settings-section">
                   <p class="settings-section-title">Add-ons</p>
-                  <p class="settings-caption addons-intro">Optional features. Built-in add-ons are part of InkDoc: nothing is downloaded, and they work offline. Downloadable ones are fetched only when you install them, then run on this computer.</p>
+                  <p class="settings-caption addons-intro">Optional extras. Built-in ones work offline. Downloadable ones are fetched only when you install them, and run on this computer.</p>
 
                   <!-- Built-in add-on: math formulas (bundled KaTeX, loaded only for
                        documents that contain math). The switch is render_math. -->
@@ -507,7 +520,7 @@
                         <span class="toggle-slider"></span>
                       </label>
                     </div>
-                    <p class="settings-caption">Shows LaTeX, such as the formulas Docling and GLM-OCR read from PDFs, as formulas in the preview. Turn it off if ordinary text with $ signs is shown as math. Saved files are never changed.</p>
+                    <p class="settings-caption">Shows LaTeX from Docling and GLM-OCR as formulas in the preview. Turn off if plain text with $ signs looks like math. Saved files don't change.</p>
                   </div>
 
                   <!-- Downloadable add-on: the layout model for scanned tables
@@ -522,7 +535,7 @@
                       </div>
                       <span class="engine-badge engine-badge-not-installed" id="layoutAddonBadge">Checking…</span>
                     </div>
-                    <p class="settings-caption">Finds the tables on scanned pages, so GLM-OCR can read each one on its own (Auto quality, Thorough: "Tables on scanned pages"). Docling's layout model "heron".</p>
+                    <p class="settings-caption">Finds tables on scanned pages so GLM-OCR can read each one separately. Used by Thorough's "Tables on scanned pages" step. Docling's "heron" layout model.</p>
                     <p class="settings-caption" id="layoutAddonReason" hidden></p>
                     <div class="engine-progress-wrapper" id="layoutAddonProgress" hidden>
                       <div class="engine-progress-bar">
@@ -544,7 +557,7 @@
                 <!-- Software Updates section -->
                 <div class="settings-section settings-updates" id="settingsUpdatesSection">
                   <div class="updates-header-row">
-                    <p class="settings-section-title" style="margin-bottom: 0;">Software Updates</p>
+                    <p class="settings-section-title" style="margin-bottom: 0;">Software updates</p>
                     <span class="update-version-badge" id="appCurrentVersionBadge">v—</span>
                   </div>
 
@@ -577,12 +590,6 @@
                           <span class="update-asset-size" id="updateAssetSize">—</span>
                         </div>
 
-                        <!-- Release notes collapsible -->
-                        <details class="update-notes-accordion" id="updateNotesAccordion" style="display: none;">
-                          <summary class="update-notes-summary">Release Notes</summary>
-                          <div class="update-notes-content" id="updateNotesContent"></div>
-                        </details>
-
                         <!-- Download progress -->
                         <div class="engine-progress-wrapper" id="updateProgressWrapper" style="display: none;">
                           <div class="engine-progress-bar">
@@ -610,16 +617,26 @@
                         </svg>
                         <span id="updateErrorMsg"></span>
                       </div>
+
+                      <!-- What's new: the release's first entries, then a link to all of them -->
+                      <div class="update-notes" id="updateNotes" role="group" aria-labelledby="updateNotesTitle" hidden>
+                        <h3 class="update-notes-title" id="updateNotesTitle">What's new</h3>
+                        <div class="update-notes-body" id="updateNotesBody"></div>
+                        <div class="update-notes-foot">
+                          <span class="update-notes-more" id="updateNotesMore"></span>
+                          <a class="update-notes-link" id="updateNotesLink" href="#" target="_blank" rel="noopener noreferrer" hidden>Full release notes<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"></path><path d="M20 4l-9 9"></path><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"></path></svg></a>
+                        </div>
+                      </div>
                     </div>
                   </div>
 
                   <div class="settings-group">
-                    <label class="toggle-switch" title="Check for application updates daily on launch">
+                    <label class="toggle-switch" title="Check for a new version when InkDoc starts">
                       <input type="checkbox" id="dailyUpdateToggle">
                       <span class="toggle-slider"></span>
                       <span class="toggle-label">Check for updates daily</span>
                     </label>
-                    <p class="settings-caption">Automatically checks GitHub Releases for new signed updates on startup (desktop only).</p>
+                    <p class="settings-caption">Checks GitHub for a new signed version when InkDoc starts. Desktop app only.</p>
                   </div>
                 </div>
               </section>
@@ -637,6 +654,10 @@
                     InkDoc turns documents, web pages and scans into clean Markdown on your computer,
                     and saves each result the moment it's ready.
                     <a href="https://abdoslamb.github.io/InkDoc/" target="_blank" rel="noopener noreferrer" class="about-read-more" id="aboutUsLink">Read more</a>
+                  </p>
+                  <p class="about-support">
+                    Built with love by Abdoslam Baabbad ·
+                    <a href="https://buymeacoffee.com/abdoslamb" target="_blank" rel="noopener noreferrer" class="about-support-link" id="aboutSupportLink" data-support-link><svg class="support-heart" width="14" height="14" aria-hidden="true" focusable="false"><use href="#iconHeart"></use></svg>Buy me a coffee</a>
                   </p>
                 </div>
               </section>
@@ -737,7 +758,7 @@
               <div class="engine-pill-group" id="enginePillGroup" role="radiogroup" aria-label="Processing Engine">
                 <button type="button" class="engine-pill active" data-engine="auto" id="pillAuto"
                   role="radio" aria-checked="true" tabindex="0"
-                  title="Auto: picks the best engine per file. MarkItDown for digital documents; GLM-OCR or Docling for scans and images (when installed; GLM-OCR only when it would finish within 5 minutes); Markit for YAML and XML.">
+                  title="Auto — picks the engine for each file: MarkItDown for digital documents, GLM-OCR or Docling for scans (when installed), Markit for YAML and XML.">
                   <span class="pill-engine-icon auto-icon">
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                       <path d="M15 4V2"></path>
@@ -755,7 +776,7 @@
                 </button>
                 <button type="button" class="engine-pill" data-engine="markitdown" id="pillMarkitdown"
                   role="radio" aria-checked="false" tabindex="-1"
-                  title="MarkItDown — Fast local programmatic converter. Supports Office, PDF, audio, images &amp; text.">
+                  title="MarkItDown — fast converter for everyday files: Office, PDF, HTML, images and audio.">
                   <span class="pill-engine-icon markitdown-icon">
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                       <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
@@ -765,7 +786,7 @@
                 </button>
                 <button type="button" class="engine-pill" data-engine="docling" id="pillDocling"
                   role="radio" aria-checked="false" tabindex="-1"
-                  title="Docling — IBM AI layout &amp; table recognition. Deep document analysis.">
+                  title="Docling — reads page layout and tables with AI. Best for complex PDFs.">
                   <span class="pill-engine-icon docling-icon">
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                       <path d="M12 2a10 10 0 1 0 10 10"></path>
@@ -777,7 +798,7 @@
                 </button>
                 <button type="button" class="engine-pill is-hidden" data-engine="glm_ocr" id="pillGlmOcr"
                   role="radio" aria-checked="false" tabindex="-1"
-                  title="GLM-OCR — downloadable OCR model for scans, photos of documents, math and complex tables. Runs locally.">
+                  title="GLM-OCR — reads scans, photos, math and complex tables on this computer.">
                   <span class="pill-engine-icon glm-ocr-icon">
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                       <path d="M3 7V5a2 2 0 0 1 2-2h2"></path><path d="M17 3h2a2 2 0 0 1 2 2v2"></path><path d="M21 17v2a2 2 0 0 1-2 2h-2"></path><path d="M7 21H5a2 2 0 0 1-2-2v-2"></path><line x1="7" y1="9" x2="17" y2="9"></line><line x1="7" y1="12" x2="17" y2="12"></line><line x1="7" y1="15" x2="13" y2="15"></line>
@@ -787,7 +808,7 @@
                 </button>
                 <button type="button" class="engine-pill" data-engine="markit" id="pillMarkit"
                   role="radio" aria-checked="false" tabindex="-1"
-                  title="Markit — Broad format converter. EPUB, YAML, Jupyter Notebooks, XML &amp; more.">
+                  title="Markit — for EPUB, Jupyter notebooks, YAML, XML and more.">
                   <span class="pill-engine-icon markit-icon">
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                       <circle cx="12" cy="12" r="10"></circle>

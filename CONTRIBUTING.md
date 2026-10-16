@@ -101,6 +101,27 @@ inkdoc/
   - Keep all features compatible with Windows, macOS, and Linux.
   - Use `pathlib.Path` for filesystem operations rather than platform-specific string concatenation.
 
+### Core feature or download?
+
+A new feature ships inside InkDoc unless at least one of these is true. If one is, it becomes a download (an engine pack or add-on that users install from Settings):
+
+- it needs model weights or a native runtime;
+- it adds more than 25 MB to the app or slows its startup;
+- it needs separate builds per platform;
+- its license isn't a permissive one like MIT, BSD or Apache-2.0 (for example GPL, LGPL, AGPL, MPL, or a model license that restricts use);
+- it uses the network.
+
+Not sure? Open an issue first. The full rule is in [AGENTS.md](AGENTS.md#core-or-add-on).
+
+### Adding an Auto quality step
+
+Steps are what Balanced and Thorough add to an engine's result (for example the table check or chart text). Each one is core code and gets its own switch under Settings → General → Auto quality → Steps automatically. To add one:
+
+1. **Register it** in [`app/core/thorough_passes.py`](app/core/thorough_passes.py): a `PassInfo` whose place in `PASSES` is its order, with its lowest level, its stage, the engines it needs (`needs_all` / `needs_any`) and `modules`, the modules that do its work.
+2. **Write the work** in its own module under `app/core/`, pure where possible. It may import the standard library, InkDoc's own code and the PDF libraries InkDoc ships (pypdfium2, pdfplumber, pdfminer.six); import those libraries inside the function that uses them. `tests/test_step_imports.py` checks this.
+3. **Call it** where its stage runs (`run_auto` or `_check_tables` in [`app/core/auto_engine.py`](app/core/auto_engine.py)), only when `plan.on("<name>")`, and record what it did with `log.ran(...)` or `log.skipped(...)`. That record is the response's `tables.passes`.
+4. **Test it**: the step's own behaviour, and its `tables.passes` entry (see `tests/test_thorough_passes.py`).
+
 ---
 
 ## 4. Optional Engine Packs (Docling) & Manifest Management

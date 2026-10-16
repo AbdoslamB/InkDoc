@@ -18,8 +18,11 @@ Steps can be switched off one by one (the `thorough_passes_off` setting,
 Settings -> General -> Auto quality -> Steps); a new step arrives switched on.
 
 Adding a step: a PassInfo below (its place in PASSES is its order), its work
-in its own module, and a call where its stage runs. Nothing here imports
-anything heavy.
+in its own module (named in PassInfo.modules), and a call where its stage
+runs. A step is core code, so its modules import only what the core-or-add-on
+rule allows (AGENTS.md, checked by tests/test_step_imports.py); what needs a
+download is an add-on the step lists in needs_all / needs_any. Nothing here
+imports anything heavy.
 """
 from __future__ import annotations
 
@@ -66,6 +69,7 @@ class PassInfo:
     detector: str = ""                  # what it asks the table finder to look for
     table_kinds: tuple[str, ...] = ()   # finder results it may write
     needs_segments: bool = False        # uses the finder's positioned text
+    modules: tuple[str, ...] = ()       # where its work lives (tests/test_step_imports.py checks them)
 
 
 PASSES: tuple[PassInfo, ...] = (
@@ -74,28 +78,33 @@ PASSES: tuple[PassInfo, ...] = (
         "Reads a digital PDF with Docling (or GLM-OCR without Docling) instead of MarkItDown, which "
         "interleaves columns, sidebars and side-by-side tables.",
         LEVEL_THOROUGH, STAGE_ROUTE, needs_any=("docling", "glm_ocr"), cost="high",
+        modules=("app.core.auto_engine",),
     ),
     PassInfo(
         "page_split", "Page split for mixed PDFs",
         "Reads the text pages of a PDF with Docling and only its scanned pages with GLM-OCR.",
         LEVEL_THOROUGH, STAGE_ROUTE, needs_all=("docling", "glm_ocr"), cost="medium",
+        modules=("app.core.auto_engine", "app.core.pdf_pages"),
     ),
     PassInfo(
         "polish", "The PDF's own characters",
         "Puts back the '&', dashes and quotes an engine simplified, where the PDF spells the word one way.",
-        LEVEL_THOROUGH, STAGE_POLISH,
+        LEVEL_THOROUGH, STAGE_POLISH, modules=("app.core.text_polish",),
     ),
     PassInfo(
         "table_check", "Table check",
         "Compares the result's tables with the PDF's own and, in Auto, rebuilds the ones an engine got "
         "wrong: merged side-by-side tables, merged cells, tables shown as loose text or as a picture.",
         LEVEL_BALANCED, STAGE_TABLES, table_kinds=(TABLE_KIND_LINES, TABLE_KIND_HINT_SPLIT),
+        modules=("app.core.table_stage", "app.core.table_finder", "app.core.table_check",
+                 "app.core.markdown_tables"),
     ),
     PassInfo(
         "rating_grids", "Rating grids",
         "Reads grids drawn with coloured markers (Underweight ... Overweight, arrows) and writes them "
         "as a table.",
         LEVEL_THOROUGH, STAGE_FINDER, detector=DETECT_RATING_GRIDS, table_kinds=(TABLE_KIND_RATING,),
+        modules=("app.core.table_finder",),
     ),
     PassInfo(
         "borderless_tables", "Tables without lines",
@@ -103,16 +112,19 @@ PASSES: tuple[PassInfo, ...] = (
         "reading of the same area agrees.",
         LEVEL_THOROUGH, STAGE_FINDER, needs_all=("glm_ocr",), detector=DETECT_BORDERLESS,
         table_kinds=(TABLE_KIND_BORDERLESS,), cost="medium",
+        modules=("app.core.table_finder", "app.core.table_stage"),
     ),
     PassInfo(
         "figure_text", "Chart text",
         "Adds the labels and values inside charts an engine left out; a labelled bar chart becomes a table.",
         LEVEL_THOROUGH, STAGE_AFTER_TABLES, needs_segments=True,
+        modules=("app.core.figure_text", "app.core.table_finder"),
     ),
     PassInfo(
         "dropped_paragraphs", "Dropped paragraphs",
         "Puts back whole paragraphs an engine left out.",
         LEVEL_THOROUGH, STAGE_AFTER_TABLES, needs_segments=True,
+        modules=("app.core.figure_text", "app.core.table_finder"),
     ),
 )
 BY_NAME: dict[str, PassInfo] = {p.name: p for p in PASSES}

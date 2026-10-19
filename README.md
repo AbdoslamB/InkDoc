@@ -49,7 +49,7 @@ Ready-to-run desktop packages with every dependency and runtime bundled — **no
   <a href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-setup.exe"><img src="assets/readme/download-windows-setup.svg" width="400" alt="Download InkDoc for Windows: Setup installer (inkdoc-setup.exe)" /></a>
   <a href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc.exe"><img src="assets/readme/download-windows-portable.svg" width="400" alt="Download InkDoc for Windows: Portable executable (inkdoc.exe)" /></a>
   <a href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-macos.zip"><img src="assets/readme/download-macos.svg" width="400" alt="Download InkDoc for macOS: Apple Silicon application (inkdoc-macos.zip)" /></a>
-  <a href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-linux.zip"><img src="assets/readme/download-linux.svg" width="400" alt="Download InkDoc for Linux: Portable bundle (inkdoc-linux.zip)" /></a>
+  <a href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-linux-x86_64.AppImage"><img src="assets/readme/download-linux.svg" width="400" alt="Download InkDoc for Linux: AppImage (inkdoc-linux-x86_64.AppImage)" /></a>
 </p>
 
 <details>
@@ -63,10 +63,36 @@ Ready-to-run desktop packages with every dependency and runtime bundled — **no
 | **Windows 10 / 11** | Portable executable | x86_64 | Standalone single-file executable | [`inkdoc.exe`](https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc.exe) |
 | **Windows 10 / 11** | Portable ZIP archive | x86_64 | Portable folder bundle | [`inkdoc-windows.zip`](https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-windows.zip) |
 | **macOS** | Application bundle | Apple Silicon (arm64) | macOS 12 Monterey or newer (Apple Silicon M1/M2/M3/M4) | [`inkdoc-macos.zip`](https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-macos.zip) |
-| **Linux** | Portable bundle | x86_64 | Ubuntu 22.04 LTS+ (glibc 2.35+), WebKit2GTK runtime | [`inkdoc-linux.zip`](https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-linux.zip) |
+| **Linux** | AppImage | x86_64 | Ubuntu 24.04+, Debian 13+, Fedora 40+ (glibc 2.39+), with the distribution's WebKit2GTK 4.1 | [`inkdoc-linux-x86_64.AppImage`](https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-linux-x86_64.AppImage) |
 
 > [!IMPORTANT]
-> **Platform Support Note:** macOS builds are currently native for **Apple Silicon (arm64)** only. Intel Macs (x86_64) are not supported. Windows builds are compiled for **x86_64** (ARM64 Windows devices run x86_64 emulation). Linux builds are compiled and verified on **Ubuntu 22.04 LTS (glibc 2.35+)**.
+> **Platform Support Note:** macOS builds are currently native for **Apple Silicon (arm64)** only. Intel Macs (x86_64) are not supported. Windows builds are compiled for **x86_64** (ARM64 Windows devices run x86_64 emulation). Linux builds are compiled on **Ubuntu 24.04 LTS (glibc 2.39+)** and tested on Ubuntu 24.04, Debian 13 and Fedora 44. Ubuntu 22.04 and other systems older than glibc 2.39 can keep using [InkDoc 1.2.0](https://github.com/AbdoslamB/inkdoc/releases/tag/v1.2.0).
+
+</details>
+
+<details>
+<summary><b>Running the Linux AppImage</b></summary>
+
+<br />
+
+InkDoc's window is your system's own WebKit2GTK, so install it once if it isn't there already:
+
+| Distribution | Package |
+| :--- | :--- |
+| Ubuntu 24.04+, Debian 13+ | `sudo apt install gir1.2-webkit2-4.1` |
+| Fedora 40+ | `sudo dnf install webkit2gtk4.1` (minimal installs also need `gobject-introspection`) |
+| Others | WebKit2GTK 4.1 and GTK 3 with their GObject introspection data (typelibs) |
+
+Then make the download executable and start it (or tick **Allow executing file as program** in the file's Properties):
+
+```bash
+chmod +x inkdoc-linux-x86_64.AppImage
+./inkdoc-linux-x86_64.AppImage
+```
+
+On a system without FUSE, unpack it into a folder of your own and start it from there: `./inkdoc-linux-x86_64.AppImage --appimage-extract`, then `./squashfs-root/AppRun`. Updates downloaded from **Settings → Updates** are made executable for you.
+
+Without WebKit2GTK, InkDoc opens the same interface in your web browser instead and says what to install. It then keeps running without a window until you stop it with `pkill -f inkdoc` (or Ctrl+C when started from a terminal); starting it again just reopens the browser tab.
 
 </details>
 
@@ -111,7 +137,7 @@ InkDoc features a security-first update workflow designed to protect users again
 - **Pre-execution Re-hashing & Disk Checks:** Downloads stream with HTTP Range-resume support and verify 2.5× required disk headroom. Downloaded files are verified against the manifest's SHA-256 digest upon completion and re-hashed immediately prior to execution.
 - **Platform-Specific Update Scope:**
   - **Windows Installer (`inkdoc-setup.exe`):** Silent in-app background upgrade (`/VERYSILENT /SUPPRESSMSGBOXES /NORESTART`) followed by clean process termination and relaunch.
-  - **Windows Portable, macOS (arm64), Linux (x86_64):** Verified download directly to `~/Downloads` (`.part` streaming followed by atomic rename), with a one-click **Reveal in Folder** option.
+  - **Windows Portable, macOS (arm64), Linux (x86_64):** Verified download directly to `~/Downloads` (`.part` streaming followed by atomic rename), with a one-click **Reveal in Folder** option. On Linux the verified AppImage is made executable, and an update that needs a newer glibc than the system's is not offered.
 - **Manual Rollback Policy:** The Windows installer path executes an in-place upgrade without automatic rollback. If an issue occurs after an update, users can manually roll back at any time by downloading and installing any prior release from the [GitHub Releases](https://github.com/AbdoslamB/inkdoc/releases) archive.
 - **macOS Gatekeeper & Quarantine:** InkDoc builds are unsigned. The updater strictly preserves macOS quarantine attributes and does not strip quarantine. If Gatekeeper blocks execution, right-click `inkdoc.app` and choose **Open**, or run:
   ```bash

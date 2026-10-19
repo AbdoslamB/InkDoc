@@ -60,6 +60,8 @@ jobs:
     needs: [create-draft-release]
     if: ${{ !failure() && !cancelled() }}
     runs-on: ${{ matrix.os }}
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
     env:
       HAVE_SIGNING: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
     strategy:
@@ -70,32 +72,35 @@ jobs:
             asset_name: windows
           - os: macos-latest
             asset_name: macos
-          - os: ubuntu-22.04
+          # The Linux build host sets the oldest glibc the AppImage runs on (2.39 here);
+          # scripts/sign_manifest.py's MIN_GLIBC must name the same version.
+          - os: ubuntu-24.04
             asset_name: linux
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
 
-      # The interpreter that ships inside the Windows and macOS bundles. Move to the next
-      # minor version each autumn, while the current one still gets binary releases:
-      # "3.11" stayed on 3.11.9 (April 2024) because later 3.11 security fixes were
-      # source-only. Linux uses Ubuntu's own Python, for apt's python3-gi.
-      - name: Set up Python (Windows and macOS)
-        if: runner.os != 'Linux'
+      # The interpreter that ships inside every bundle. Move to the next minor version
+      # each autumn, while the current one still gets binary releases: "3.11" stayed on
+      # 3.11.9 (April 2024) because later 3.11 security fixes were source-only.
+      - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.4.0
         with:
           python-version: "3.14"
           cache: "pip"
 
-      - name: Set up system Python venv (Linux)
+      # Linux: the window is the user's own WebKit2GTK, so the bundle carries only
+      # PyGObject's Python side, built here against 24.04's GLib, and
+      # scripts/linux_host_libs.py removes the GTK stack PyInstaller collects.
+      # xvfb and x11-apps (xwd) are for the GUI smoke test.
+      - name: Set up the Linux build (GTK headers, venv)
         if: runner.os == 'Linux'
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y libegl1 libxkbcommon0 libgl1 zip xvfb python3-venv python3-gi gir1.2-gtk-3.0
-          sudo apt-get install -y gir1.2-webkit2-4.1 || sudo apt-get install -y gir1.2-webkit2-4.0
-          /usr/bin/python3 --version
-          /usr/bin/python3 -m venv --system-site-packages "$HOME/inkdoc-build-venv"
+          sudo apt-get install -y libgirepository-2.0-dev libcairo2-dev pkg-config \
+            gir1.2-gtk-3.0 gir1.2-webkit2-4.1 libegl1 libxkbcommon0 libgl1 xvfb x11-apps
+          python -m venv "$HOME/inkdoc-build-venv"
           echo "$HOME/inkdoc-build-venv/bin" >> "$GITHUB_PATH"
           echo "VIRTUAL_ENV=$HOME/inkdoc-build-venv" >> "$GITHUB_ENV"
 
@@ -117,10 +122,19 @@ jobs:
           echo "Resolved version for build and smoke test: $VERSION"
 
       - name: Install dependencies
+        shell: bash
         run: |
           python -m pip install --upgrade pip
           python -m pip install --ignore-installed -r requirements.txt
           python -m pip install pyinstaller
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            # PyGObject is compiled here against the runner's GLib (3.52+ needs GLib 2.80).
+            # Every file is hash-pinned, and --no-build-isolation keeps pip from fetching
+            # build tools of its own: hence three passes (scripts/linux-gtk/).
+            python -m pip install --require-hashes --no-deps --only-binary :all: -r scripts/linux-gtk/build-tools.txt
+            python -m pip install --require-hashes --no-deps --no-build-isolation -r scripts/linux-gtk/pycairo.txt
+            python -m pip install --require-hashes --no-deps --no-build-isolation -r scripts/linux-gtk/pygobject.txt
+          fi
 
       - name: Record the bundled interpreter
         shell: bash
@@ -154,7 +168,17 @@ jobs:
             ICON_OPT="--icon assets/logo.icns"
           else
             ICON_OPT="--icon assets/logo.png"
+            # gi's Python package only. Excluding the gi.repository modules keeps their
+            # typelibs, GTK data and runtime hooks (GTK_PATH, GIO_MODULE_DIR...) out of the
+            # bundle: at run time gi loads the host's typelibs (app/core/linux_host.py).
             GI_OPT="--collect-all gi"
+            for m in Gtk Gdk GdkPixbuf GdkX11 GLib GObject Gio GModule Pango PangoCairo cairo Atk \
+                     HarfBuzz xlib freetype2 Soup WebKit2 JavaScriptCore Gst GstAudio GstVideo \
+                     GstBase GstController GstPbutils; do
+              GI_OPT="$GI_OPT --exclude-module gi.repository.$m"
+            done
+            # pycairo is only needed to compile PyGObject; keep it (and its licence) out.
+            GI_OPT="$GI_OPT --exclude-module cairo"
             YAML_OPT="--collect-all yaml"
           fi
           # --noupx: runners have no UPX today, but if one ever appears on PATH,
@@ -257,40 +281,42 @@ jobs:
         run: |
           Write-Host "Signing Inno Setup installer..."
           # Ready for SignPath / Authenticode signing command when secret is set
-      - name: Trim optional Linux data files
+      # The host's WebKit2GTK can only load against the host's GTK, GLib and libstdc++, so
+      # none of them may be bundled (1.2.0's zip broke on every newer distribution this way).
+      - name: Use the host's GTK and WebKit (Linux)
         if: runner.os == 'Linux'
         shell: bash
         run: |
           bundle=dist/inkdoc
-          echo "Linux bundle before trim: $(du -sh "$bundle" | cut -f1)"
-          icons="$bundle/_internal/share/icons"
-          if [ -d "$icons" ]; then
-            find "$icons" -mindepth 1 -maxdepth 1 ! -name hicolor ! -name Adwaita -exec rm -rf -- {} +
-          fi
+          echo "Linux bundle before pruning: $(du -sh "$bundle" | cut -f1)"
+          python scripts/linux_host_libs.py prune "$bundle/_internal"
           pocketsphinx="$bundle/_internal/speech_recognition/pocketsphinx-data"
           if [ -d "$pocketsphinx" ]; then
             rm -rf -- "$pocketsphinx"
           fi
-          echo "Linux bundle after trim: $(du -sh "$bundle" | cut -f1)"
-          echo "No shared libraries were removed."
+          python scripts/linux_host_libs.py check "$bundle/_internal"
+          echo "Linux bundle after pruning: $(du -sh "$bundle" | cut -f1)"
 
-      - name: Package (macOS / Linux)
-        if: runner.os != 'Windows'
+      - name: Package (macOS zip)
+        if: runner.os == 'macOS'
         shell: bash
         run: |
           cd dist
-          if [ "${{ runner.os }}" = "macOS" ]; then
-            ditto -c -k --keepParent inkdoc.app "../inkdoc-macos.zip"
-          else
-            zip -r "../inkdoc-${{ matrix.asset_name }}.zip" inkdoc
-            echo "Linux zip size: $(wc -c < ../inkdoc-${{ matrix.asset_name }}.zip) bytes"
-          fi
+          ditto -c -k --keepParent inkdoc.app "../inkdoc-macos.zip"
+
+      - name: Package (Linux AppImage)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          python scripts/build_appimage.py dist/inkdoc inkdoc-linux-x86_64.AppImage
+          echo "Linux AppImage size: $(wc -c < inkdoc-linux-x86_64.AppImage) bytes"
 
       - name: Stage release artifacts
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path release
           if (Test-Path "inkdoc-${{ matrix.asset_name }}.zip") { Copy-Item "inkdoc-${{ matrix.asset_name }}.zip" release/ }
+          if (Test-Path "inkdoc-linux-x86_64.AppImage") { Copy-Item "inkdoc-linux-x86_64.AppImage" release/ }
           if (Test-Path "dist-onefile/inkdoc.exe") { Copy-Item "dist-onefile/inkdoc.exe" release/ }
           if (Test-Path "dist-installer/inkdoc-setup.exe") { Copy-Item "dist-installer/inkdoc-setup.exe" release/ }
 
@@ -348,11 +374,22 @@ jobs:
         run: |
           python scripts/smoke_test_artifact.py --artifact release/inkdoc-macos.zip --type zip --expected-version "${{ steps.ver.outputs.version }}"
 
-      - name: Smoke-test Linux zip artifact
+      # The GUI path (a window under Xvfb, checked to have drawn something) with
+      # APPIMAGE_EXTRACT_AND_RUN, then once more through the FUSE mount when the runner has it.
+      - name: Smoke-test Linux AppImage artifact
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          xvfb-run -a python scripts/smoke_test_artifact.py --artifact "release/inkdoc-${{ matrix.asset_name }}.zip" --type zip --expected-version "${{ steps.ver.outputs.version }}"
+          appimage="release/inkdoc-linux-x86_64.AppImage"
+          xvfb-run -a -s "-screen 0 1400x900x24" python scripts/smoke_test_artifact.py \
+            --artifact "$appimage" --type appimage --expected-version "${{ steps.ver.outputs.version }}"
+          if [ -e /dev/fuse ] && command -v fusermount3 >/dev/null; then
+            xvfb-run -a -s "-screen 0 1400x900x24" python scripts/smoke_test_artifact.py \
+              --artifact "$appimage" --type appimage --appimage-fuse \
+              --expected-version "${{ steps.ver.outputs.version }}"
+          else
+            echo "No FUSE on this runner; the mount path was not tested."
+          fi
 
       - name: Enforce artifact size limits
         shell: pwsh
@@ -364,15 +401,17 @@ jobs:
           # not. Re-measure after each release rather than letting these go stale: the
           # caps before this were still set against v1.0.1 and left 1.4 MB of headroom
           # on inkdoc-macos.zip, which the engine manifest alone would have exceeded.
+          # The AppImage baseline is the 1.3.0 prototype built in an ubuntu:24.04 container
+          # with this workflow's steps (2026-10-19); re-measure it from the first CI build.
           $limits = @{
-            "inkdoc-linux.zip" = @{ Baseline = 149151831; Cap = 158100940 }
+            "inkdoc-linux-x86_64.AppImage" = @{ Baseline = 113646072; Cap = 120464836 }
             "inkdoc-macos.zip" = @{ Baseline = 120399830; Cap = 127623819 }
             "inkdoc-windows.zip" = @{ Baseline = 125443527; Cap = 132970138 }
             "inkdoc.exe" = @{ Baseline = 122880190; Cap = 130253001 }
             "inkdoc-setup.exe" = @{ Baseline = 93829365; Cap = 99459126 }
           }
           if ($env:RUNNER_OS -eq "Linux") {
-            $names = @("inkdoc-linux.zip")
+            $names = @("inkdoc-linux-x86_64.AppImage")
           } elseif ($env:RUNNER_OS -eq "macOS") {
             $names = @("inkdoc-macos.zip")
           } else {
@@ -461,10 +500,62 @@ jobs:
           echo "Uploading release artifacts to draft release $TAG..."
           gh release upload "$TAG" -R "${{ github.repository }}" release/* --clobber
 
+  # The AppImage relies on the user's own GTK and WebKit2GTK. The build host is only one
+  # distribution, so run the same smoke test (window included) on others, with nothing but
+  # what a user installs: the distribution's WebKit2GTK 4.1 and its typelibs.
+  linux-compat:
+    name: Linux compatibility (${{ matrix.image }})
+    needs: [build]
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: ubuntu-24.04
+    container: ${{ matrix.image }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: ubuntu:24.04
+            family: deb
+          - image: debian:13
+            family: deb
+          - image: fedora:44
+            family: fedora
+    steps:
+      - name: Install the distribution's WebKit2GTK, Xvfb and Python
+        run: |
+          if [ "${{ matrix.family }}" = deb ]; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+              ca-certificates python3 python3-venv xvfb xauth x11-apps \
+              gir1.2-gtk-3.0 gir1.2-webkit2-4.1 fonts-dejavu-core
+          else
+            # gobject-introspection carries cairo-1.0.typelib, present on every Fedora desktop.
+            dnf -y install python3 xorg-x11-server-Xvfb xorg-x11-xauth xwd \
+              gtk3 webkit2gtk4.1 gobject-introspection dejavu-sans-fonts
+          fi
+          getconf GNU_LIBC_VERSION
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+
+      - name: Download the Linux build
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: inkdoc-build-linux
+          path: release
+
+      - name: Smoke-test the AppImage
+        run: |
+          python3 -m venv /tmp/smoke-venv
+          /tmp/smoke-venv/bin/pip install python-docx==1.1.2 openpyxl==3.1.5 fpdf2==2.8.2
+          xvfb-run -a -s "-screen 0 1400x900x24" /tmp/smoke-venv/bin/python scripts/smoke_test_artifact.py \
+            --artifact release/inkdoc-linux-x86_64.AppImage --type appimage \
+            --expected-version "${{ needs.build.outputs.version }}"
+
   publish-release:
     name: Publish Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build]
+    needs: [build, linux-compat]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -477,7 +568,7 @@ jobs:
         run: |
           TAG="${{ github.ref_name }}"
           assets=$(gh release view "$TAG" -R "${{ github.repository }}" --json assets -q '.assets[].name')
-          for required in inkdoc-setup.exe inkdoc.exe inkdoc-windows.zip inkdoc-macos.zip inkdoc-linux.zip; do
+          for required in inkdoc-setup.exe inkdoc.exe inkdoc-windows.zip inkdoc-macos.zip inkdoc-linux-x86_64.AppImage; do
             if ! printf '%s\n' "$assets" | grep -Fxq "$required"; then
               echo "::error::Draft release '$TAG' is missing required asset: $required"
               exit 1

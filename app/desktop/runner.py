@@ -54,6 +54,7 @@ if _repo_root not in sys.path:
 import uvicorn
 
 from app.core.converter import sanitize_filename
+from app.core.linux_host import is_frozen_linux, open_on_host
 from app.core.save_location import check_usable, folder_state, store_save_dir
 from app.server.server import app
 
@@ -468,7 +469,11 @@ class WindowControls:
         try:
             if urlparse(url).scheme not in ("http", "https"):
                 return False
-            webbrowser.open(url)
+            if is_frozen_linux():
+                # Not webbrowser.open: the browser would inherit the bundle's LD_LIBRARY_PATH.
+                open_on_host(["xdg-open", url])
+            else:
+                webbrowser.open(url)
             return True
         except Exception:
             return False
@@ -676,6 +681,78 @@ def close_desktop_window() -> None:
             pass
 
 
+LINUX_WEBKIT_HELP = (
+    "InkDoc's window needs WebKit2GTK 4.1 and GTK 3 with their typelibs "
+    "(Ubuntu/Debian: sudo apt install gir1.2-webkit2-4.1; Fedora: sudo dnf install webkit2gtk4.1)."
+)
+
+
+def linux_webview_problem() -> str | None:
+    """Why pywebview's GTK window can't be shown on this Linux system, or None.
+
+    The window is the system's own WebKit2GTK (scripts/linux_host_libs.py), which the
+    user may not have installed. Asked the way pywebview's GTK backend asks.
+    """
+    try:
+        import gi
+
+        gi.require_version("Gtk", "3.0")
+        try:
+            gi.require_version("WebKit2", "4.1")
+        except ValueError:
+            gi.require_version("WebKit2", "4.0")
+        from gi.repository import Gtk, WebKit2  # noqa: F401
+    except Exception as exc:  # ImportError, ValueError ("Namespace ... not available"), GLib.Error
+        return f"{type(exc).__name__}: {exc}"
+    return None
+
+
+def _open_for_user(args: list[str]) -> bool:
+    """Start a desktop program (xdg-open, notify-send) for the user; False when it isn't installed."""
+    try:
+        if is_frozen_linux():
+            open_on_host(args)
+        else:
+            import subprocess
+
+            subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        return True
+    except OSError:
+        return False
+
+
+def run_in_browser(app_url: str, server_thread: EmbeddedServer | None, problem: str) -> int:
+    """Linux without a usable WebKit2GTK: the same UI in the default browser.
+
+    The server keeps running (no window to close), like headless mode, until it is
+    stopped; launching InkDoc again finds it and just opens the browser again.
+    """
+    print(f"[Warn] {LINUX_WEBKIT_HELP} ({problem})", file=sys.stderr)
+    print(f"[Info] Opening InkDoc in your web browser instead: {app_url}", file=sys.stderr)
+    os.environ["INKDOC_DESKTOP_RUNNER"] = "0"  # a browser tab, not the desktop window
+    from app.server.server import get_update_manager
+
+    get_update_manager().set_desktop_runner(False)
+    _open_for_user(["notify-send", "--app-name=InkDoc", "InkDoc opened in your browser",
+                    f"{LINUX_WEBKIT_HELP} InkDoc keeps running until you stop it: pkill -f inkdoc"])
+    if not _open_for_user(["xdg-open", app_url]):
+        webbrowser.open(app_url)
+    if server_thread is None:  # another InkDoc already serves the page
+        return 0
+    print("[Info] InkDoc keeps running without a window; stop it with Ctrl+C or `pkill -f inkdoc`.",
+          file=sys.stderr)
+    try:
+        while server_thread.is_alive():
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server_thread.stop()
+        stop_engine_processes()
+    return 0
+
+
 def run_desktop(
     port: int | None = None,
     headless: bool = False,
@@ -760,6 +837,12 @@ def run_desktop(
         if server_thread:
             server_thread.stop()
         return 1
+
+    # The release only: a source checkout may use pywebview's Qt backend instead of GTK.
+    if is_frozen_linux():
+        problem = linux_webview_problem()
+        if problem:
+            return run_in_browser(app_url, server_thread, problem)
 
     # Locate icon
     icon_path: str | None = None

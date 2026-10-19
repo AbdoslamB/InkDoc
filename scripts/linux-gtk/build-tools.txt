@@ -1,0 +1,14 @@
+# Linux release build, pass 1 of 3: the tools that compile pycairo and PyGObject.
+# release.yml installs these hash-pinned wheels, then builds the two source packages
+# with --no-build-isolation, so pip fetches nothing on its own (see pycairo.txt).
+# To update: pick new versions and take each file's sha256 from https://pypi.org/pypi/<name>/<version>/json.
+meson-python==0.22.1 \
+    --hash=sha256:258fde948cf45aab5df23fcc9e17a9050ee73d4e1002fe6cf86519f61c414778
+meson==1.12.1 \
+    --hash=sha256:930bc7542cbd9f57009e182fd014eba48cf1a0180a7b9006d2d32d8f168d8b02
+pyproject-metadata==0.12.1 \
+    --hash=sha256:f7162d580a96386a8eb096da06215f981f547d1490f03055ef99e323bc2da427
+packaging==26.3 \
+    --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
+ninja==1.13.2 \
+    --hash=sha256:65a24341b5ac09fcadcc37082660be40a94174e51a937fabf6e2cae26225fa2c

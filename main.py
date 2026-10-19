@@ -47,6 +47,13 @@ if __name__ == "__main__" and sys.argv[1:2] == ["--markitdown-worker"]:
 
     sys.exit(_markitdown_worker(sys.argv[2:]))
 
+# The Linux release shows its window with the host's GTK and WebKit2GTK; point GTK and
+# GObject introspection at them before anything imports gi (app/core/linux_host.py).
+if getattr(sys, "frozen", False) and sys.platform.startswith("linux"):
+    from app.core.linux_host import use_host_gtk
+
+    use_host_gtk(os.environ, getattr(sys, "_MEIPASS", ""))
+
 from app.desktop.runner import main
 
 if __name__ == "__main__":

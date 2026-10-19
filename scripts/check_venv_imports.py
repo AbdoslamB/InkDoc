@@ -17,6 +17,9 @@ REQUIRED_PACKAGES = (
     "uvicorn",
     "requests",
     "webview",
+    # PyGObject, built in the venv (release.yml), never the distribution's python3-gi.
+    "gi",
+    "cairo",
 )
 OPTIONAL_PACKAGES = ("httpx", "PIL", "numpy")
 

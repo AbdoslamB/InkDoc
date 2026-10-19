@@ -38,6 +38,7 @@ from app.core.download_utils import (
     StrictRedirectHandler,
     stream_download,
 )
+from app.core.linux_host import is_frozen_linux, open_on_host
 from app.core.update_verifier import (
     DowngradeError,
     UpdateVerificationError,
@@ -148,6 +149,38 @@ def get_current_platform_key() -> tuple[str, bool, str | None]:
             )
 
     return ("unsupported", False, f"Operating system '{sys_plat}' is not supported.")
+
+
+def host_glibc() -> tuple[int, ...] | None:
+    """This system's glibc version, e.g. (2, 39); None off glibc (or when it can't be read)."""
+    try:
+        name, _, version = (os.confstr("CS_GNU_LIBC_VERSION") or "").partition(" ")
+    except (AttributeError, ValueError, OSError):
+        return None
+    return _version_tuple(version) if name == "glibc" else None
+
+
+def _version_tuple(text: str) -> tuple[int, ...] | None:
+    try:
+        return tuple(int(part) for part in str(text).split("."))
+    except ValueError:
+        return None
+
+
+def glibc_incompatibility(asset: dict[str, Any], host: tuple[int, ...] | None) -> str | None:
+    """Why `asset` can't start on this system (its min_glibc is newer), or None.
+
+    Unknown versions don't block: the field is only a guard against offering a Linux
+    update that is certain not to start.
+    """
+    needed = _version_tuple(asset.get("min_glibc", "")) if asset.get("min_glibc") else None
+    if needed is None or host is None or host >= needed:
+        return None
+    return (
+        f"This update needs glibc {'.'.join(map(str, needed))} or newer (Ubuntu 24.04, Debian 13, "
+        f"Fedora 40 or later); this system has {'.'.join(map(str, host))}. Keep using this version, "
+        "or upgrade the operating system first."
+    )
 
 
 def get_staging_directory() -> Path:
@@ -327,6 +360,12 @@ class UpdateManager:
                     )
                     return asdict(self._status)
 
+                incompatible = glibc_incompatibility(target_asset, host_glibc())
+                if incompatible:
+                    self._status.state = UpdateState.ERROR.value
+                    self._status.error = incompatible
+                    return asdict(self._status)
+
                 self._verified_target_asset = target_asset
                 self._status.asset_name = target_asset.get("filename")
                 self._status.asset_size = target_asset.get("size_bytes")
@@ -493,6 +532,10 @@ class UpdateManager:
                     f"Integrity check failed: computed SHA-256 ({computed_sha256}) did not match manifest ({expected_hash})."
                 )
 
+            if filename.endswith(".AppImage"):
+                # Verified, so it may run: an AppImage only starts once it is executable.
+                target_path.chmod(0o755)
+
             with self._lock:
                 self._staged_file_path = target_path
                 if install_method == "inno_silent":
@@ -545,6 +588,9 @@ class UpdateManager:
                 subprocess.Popen(["explorer.exe", f"/select,{path}"])
             elif sys.platform == "darwin":
                 subprocess.Popen(["open", "-R", str(path)])
+            elif is_frozen_linux():
+                # The file manager must not inherit the bundle's LD_LIBRARY_PATH.
+                open_on_host(["xdg-open", str(path.parent)])
             else:
                 subprocess.Popen(["xdg-open", str(path.parent)])
             return True

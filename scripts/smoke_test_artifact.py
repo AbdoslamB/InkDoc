@@ -94,6 +94,14 @@ def prepare_target_executable(artifact_path: Path, artifact_type: str, temp_dir:
                 z.extractall(extract_dir)
         return find_executable(extract_dir)
 
+    if artifact_type == "appimage":
+        if not sys.platform.startswith("linux"):
+            raise RuntimeError("AppImage smoke testing is only supported on Linux runners.")
+        target = temp_dir / artifact_path.name
+        shutil.copy2(artifact_path, target)
+        target.chmod(0o755)  # as a browser download, it arrives without the executable bit
+        return target
+
     if artifact_type == "installer":
         if sys.platform != "win32":
             raise RuntimeError("Installer smoke testing is only supported on Windows runners.")
@@ -114,7 +122,58 @@ def prepare_target_executable(artifact_path: Path, artifact_type: str, temp_dir:
             )
         return find_executable(install_dir)
 
-    raise ValueError(f"Unknown artifact type '{artifact_type}'. Expected: onefile, zip, or installer.")
+    raise ValueError(f"Unknown artifact type '{artifact_type}'. Expected: onefile, zip, appimage, or installer.")
+
+
+def launch_env(artifact_type: str, use_fuse: bool = False) -> dict[str, str]:
+    """The environment the artifact runs with. An AppImage normally mounts itself with FUSE,
+    which CI runners and containers may lack; APPIMAGE_EXTRACT_AND_RUN=1 unpacks it instead
+    (the same contents, so the same test). --appimage-fuse tests the mount path."""
+    env = dict(os.environ)
+    if artifact_type == "appimage" and not use_fuse:
+        env["APPIMAGE_EXTRACT_AND_RUN"] = "1"
+    return env
+
+
+def xwd_colour_count(data: bytes, step: int = 5) -> int:
+    """Distinct pixel values in an X window dump (`xwd -root`), sampling every `step`-th pixel.
+
+    A rendered InkDoc window (antialiased text, icons) has hundreds; an empty display or a
+    WebKit view that drew nothing has a handful. ZPixmap with 24 or 32 bits per pixel only.
+    """
+    import struct
+
+    if len(data) < 100:
+        raise ValueError("not an XWD dump")
+    fields = struct.unpack(">25I", data[:100])
+    header_size, version, pixmap_format = fields[0], fields[1], fields[2]
+    height, bits_per_pixel, bytes_per_line, ncolors = fields[5], fields[11], fields[12], fields[19]
+    if version != 7 or pixmap_format != 2 or bits_per_pixel not in (24, 32):
+        raise ValueError(f"unsupported XWD dump (version {version}, format {pixmap_format}, {bits_per_pixel} bpp)")
+    offset, size = header_size + ncolors * 12, bits_per_pixel // 8
+    seen = set()
+    for row in range(0, height, step):
+        line = data[offset + row * bytes_per_line: offset + (row + 1) * bytes_per_line]
+        for col in range(0, len(line) - size + 1, size * step):
+            seen.add(line[col:col + size])
+    return len(seen)
+
+
+GUI_MIN_COLOURS = 64
+
+
+def check_window_rendered(artifact_name: str, log_dir: Path) -> None:
+    """Fail when the X display shows no rendered window (needs `xwd`, from x11-apps)."""
+    if not shutil.which("xwd"):
+        record_summary_line(f"[GUI-RENDER] {artifact_name}: skipped (xwd is not installed)")
+        return
+    shot = subprocess.run(["xwd", "-root", "-silent"], capture_output=True, timeout=30, check=True).stdout
+    (log_dir / f"{Path(artifact_name).stem}.screen.xwd").write_bytes(shot)
+    colours = xwd_colour_count(shot)
+    if colours < GUI_MIN_COLOURS:
+        record_summary_line(f"[GUI-RENDER] {artifact_name}: FAIL ({colours} colours on screen)")
+        raise RuntimeError(f"The window shows nothing ({colours} distinct colours on the X display).")
+    record_summary_line(f"[GUI-RENDER] {artifact_name}: PASS ({colours} colours on screen)")
 
 
 def generate_sample_docx() -> bytes:
@@ -231,8 +290,10 @@ def run_smoke_test(
     expected_version: str,
     timeout: float = 60.0,
     log_dir: Path | None = None,
+    appimage_fuse: bool = False,
 ) -> None:
     """Execute end-to-end smoke test on the specified artifact."""
+    env = launch_env(artifact_type, appimage_fuse)
     if not artifact_path.is_file():
         raise FileNotFoundError(f"Target artifact does not exist: {artifact_path}")
 
@@ -267,9 +328,12 @@ def run_smoke_test(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            env=env,
         )
+        # An AppImage run with APPIMAGE_EXTRACT_AND_RUN unpacks itself (~280 MB) first.
+        selftest_timeout = 60.0 if artifact_type == "appimage" else 15.0
         try:
-            out, err = selftest_proc.communicate(timeout=15.0)
+            out, err = selftest_proc.communicate(timeout=selftest_timeout)
             if selftest_proc.returncode != 0:
                 record_summary_line(f"[SELFTEST] {artifact_path.name}: FAIL (exit code {selftest_proc.returncode})")
                 raise RuntimeError(
@@ -281,7 +345,7 @@ def run_smoke_test(
         except subprocess.TimeoutExpired as e:
             kill_process_tree(selftest_proc.pid)
             record_summary_line(f"[SELFTEST] {artifact_path.name}: TIMEOUT")
-            raise RuntimeError(f"--selftest timed out after 15s for {artifact_path.name}") from e
+            raise RuntimeError(f"--selftest timed out after {selftest_timeout:.0f}s for {artifact_path.name}") from e
 
         port = get_free_port()
         print(f"[*] Selected ephemeral port: {port}")
@@ -290,6 +354,7 @@ def run_smoke_test(
             kwargs: dict = {
                 "stdout": log_f,
                 "stderr": subprocess.STDOUT,
+                "env": env,
             }
             if sys.platform == "win32":
                 kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
@@ -355,6 +420,7 @@ def run_smoke_test(
                             raise RuntimeError(f"GUI process exited before 15 seconds with code {proc.returncode}")
                         time.sleep(0.5)
                     record_summary_line(f"[GUI] {artifact_path.name}: stayed alive for 15 seconds")
+                    check_window_rendered(artifact_path.name, log_dir)
 
                 # 3. Verify reported version matches expected tag/dev version
                 if reported_version != expected_version:
@@ -428,10 +494,12 @@ def main() -> int:
     parser.add_argument("--artifact", type=Path, required=True, help="Path to artifact to test.")
     parser.add_argument(
         "--type",
-        choices=["onefile", "zip", "installer"],
+        choices=["onefile", "zip", "appimage", "installer"],
         required=True,
         help="Artifact distribution packaging type.",
     )
+    parser.add_argument("--appimage-fuse", action="store_true",
+                        help="Run an AppImage through its FUSE mount instead of APPIMAGE_EXTRACT_AND_RUN.")
     parser.add_argument("--expected-version", required=True, help="Expected version reported by /health.")
     parser.add_argument("--timeout", type=float, default=60.0, help="Timeout in seconds for /health polling.")
     parser.add_argument("--log-dir", type=Path, default=None, help="Directory to save process logs.")
@@ -445,6 +513,7 @@ def main() -> int:
             expected_version=args.expected_version,
             timeout=args.timeout,
             log_dir=args.log_dir,
+            appimage_fuse=args.appimage_fuse,
         )
         return 0
     except Exception as e:

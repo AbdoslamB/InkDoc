@@ -150,21 +150,34 @@ Accepted for now, each needing write access to the folder involved or a local pr
 
 ## CI/CD (all in `.github/workflows/`)
 
-Interpreters: the Windows and macOS bundles ship the Python that `setup-python` installs
-(`python-version` in `release.yml` and `ci.yml`, now 3.14); Linux ships Ubuntu 22.04's own
-Python 3.10, because `python3-gi` comes from apt; the Docling pack has its own
-(`scripts/build_pack.py`). Each autumn, move the bundles to the next minor version while the
-current one still gets binary releases (a minor in security-only support stops at its last
-binary, as `"3.11"` stopped at 3.11.9), after `scripts/runtime_bench.py` shows no regression.
+Interpreters: every bundle ships the Python that `setup-python` installs (`python-version` in
+`release.yml` and `ci.yml`, now 3.14); the Docling pack has its own (`scripts/build_pack.py`).
+Each autumn, move the bundles to the next minor version while the current one still gets
+binary releases (a minor in security-only support stops at its last binary, as `"3.11"`
+stopped at 3.11.9), after `scripts/runtime_bench.py` shows no regression. The 3.10 floor for
+running from source is tested by `ci.yml`'s `source-floor` job only.
+
+Linux release: built on ubuntu-24.04, so the AppImage needs glibc 2.39 (`MIN_GLIBC` in
+`scripts/sign_manifest.py` names the same version; the updater refuses an update the system
+can't start). The window is the user's own WebKit2GTK, so the bundle must carry none of GTK,
+GLib, WebKit or the C++ runtime: a bundled copy is loaded first and the host's WebKit fails
+against it (how 1.2.0's zip broke on every newer distribution). Hence PyGObject from pip
+(compiled in CI, `gi.repository.*` excluded from PyInstaller), `scripts/linux_host_libs.py
+prune`/`check` after the build (only `libgirepository-2.0` stays), `app/core/linux_host.py`
+(GI_TYPELIB_PATH to the host's typelibs, and the host's LD_LIBRARY_PATH for xdg-open), and
+`scripts/build_appimage.py` (pinned appimagetool and static runtime). `linux-compat` in
+`release.yml` runs the AppImage's smoke test, window included, on ubuntu:24.04, debian:13
+and fedora:44.
 
 - `ci.yml` — on every push/PR to `main`: `ruff check .`, `python -m
-  compileall`, and the headless smoke test above, matrixed across
-  windows-latest/macos-latest/ubuntu-latest.
+  compileall`, the tests and the headless smoke test above, matrixed across
+  windows-latest/macos-latest/ubuntu-24.04, plus the 3.10 `source-floor` job.
 - `release.yml` — on any `vX.Y.Z` tag push: builds a PyInstaller
   `--onedir --windowed` bundle per OS (`--collect-all markitdown
   --collect-all magika`, needed because both do dynamic/plugin-style
-  imports PyInstaller's static analysis can't see), zips it, and attaches
-  it to the GitHub Release via `softprops/action-gh-release`.
+  imports PyInstaller's static analysis can't see), packages it (Windows
+  installer, onefile and zip; macOS zip; Linux AppImage), smoke-tests every
+  artifact and attaches them to the draft GitHub Release.
 - `dependabot.yml` — weekly PRs for `pip` and `github-actions` deps.
 
 Branch protection is enabled on `main` (required PR review) but

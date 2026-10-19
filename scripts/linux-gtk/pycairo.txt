@@ -1,0 +1,5 @@
+# Linux release build, pass 2 of 3: pycairo, compiled from its sdist with the tools of
+# build-tools.txt. PyGObject needs it to build; it is not in the bundle (release.yml
+# excludes the cairo module), the window uses the system's cairo.
+pycairo==1.29.2 \
+    --hash=sha256:3e69fff74fe64f5ba2dfa31f67c6bdf26413342574047437d2ac520d35e9a489

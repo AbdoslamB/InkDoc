@@ -200,8 +200,11 @@ def main() -> int:
         "inkdoc-setup.exe": "windows-x86_64-installer",
         "inkdoc-windows.zip": "windows-x86_64-portable",
         "inkdoc-macos.zip": "macos-arm64",
-        "inkdoc-linux.zip": "linux-x86_64",
+        "inkdoc-linux-x86_64.AppImage": "linux-x86_64",
     }
+    # The oldest glibc each asset runs on: the build host's (release.yml's runner). Clients
+    # from 1.3.0 on refuse an update their system can't start; older ones ignore the field.
+    MIN_GLIBC = {"linux-x86_64": "2.39"}
 
     manifest_assets: dict[str, Any] = {}
     temp_dir = Path(tempfile.mkdtemp(prefix="inkdoc_release_"))
@@ -264,13 +267,16 @@ def main() -> int:
                 return 1
 
             if name in TARGET_ASSETS:
-                manifest_assets[TARGET_ASSETS[name]] = {
+                key = TARGET_ASSETS[name]
+                manifest_assets[key] = {
                     "filename": name,
                     "url": canonical_url(name),
                     "sha256": compute_sha256(dest),
                     "size_bytes": dest.stat().st_size,
                     "install_method": "inno_silent" if name == "inkdoc-setup.exe" else "download_reveal",
                 }
+                if key in MIN_GLIBC:
+                    manifest_assets[key]["min_glibc"] = MIN_GLIBC[key]
 
         # Verify against SHA256SUMS if present
         for sums_file in temp_dir.glob("SHA256SUMS*.txt"):

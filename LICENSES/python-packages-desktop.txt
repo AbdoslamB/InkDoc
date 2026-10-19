@@ -8,9 +8,11 @@ altgraph, pefile, pywin32-ctypes) are left out. For each package, every license,
 copying file it ships is copied unchanged.
 
 requirements.txt uses minimum versions, so a release built on another day can contain newer
-versions. macOS builds also bundle pyobjc packages (pywebview's macOS backend) and Linux builds
-bundle PyGObject (gi) and GTK/WebKitGTK libraries from the build machine; those are NOT covered
-here and need release-build verification. pythonnet, clr_loader and pyreadline3 are Windows-only.
+versions. macOS builds also bundle pyobjc packages (pywebview's macOS backend); those are NOT
+covered here and need release-build verification. Linux builds bundle PyGObject (gi) and GLib's
+libgirepository-2.0, both LGPL-2.1-or-later (LGPL-2.1.txt), and no GTK or WebKitGTK libraries:
+the window uses the user's own. The Linux AppImage's runtime is in AppImage-runtime.txt.
+pythonnet, clr_loader and pyreadline3 are Windows-only.
 
 Packages (78):
   annotated-doc 0.0.5 -- MIT

@@ -158,10 +158,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     when converting it would leave less than 1 GB of disk free, and any
     upload the disk can't hold gets the same message instead of a server
     error.
-- **Python 3.14 inside the Windows and macOS apps** (was 3.11.9, which has had
-  no binary security release since April 2024). Conversions give the same
-  Markdown as before. While a document converts, InkDoc's conversion process
-  uses about 20 MB more memory. The Linux app is unchanged.
+- **Python 3.14 inside the apps** (Windows and macOS had 3.11.9, which has had
+  no binary security release since April 2024; Linux had 3.10). Conversions
+  give the same Markdown as before. While a document converts, InkDoc's
+  conversion process uses about 20 MB more memory.
+- **The Linux download is an AppImage** (`inkdoc-linux-x86_64.AppImage`, about
+  110 MB instead of a 150 MB zip): make it executable and start it, nothing
+  to unpack. It uses your system's own WebKit2GTK and GTK, and needs **Ubuntu
+  24.04, Debian 13, Fedora 40 or newer** (glibc 2.39). On Ubuntu 22.04 and
+  other older systems, keep using 1.2.0: updating from 1.2.0 there downloads
+  an AppImage that won't start. From this version on, the app doesn't offer
+  an update the system can't run, and a downloaded AppImage is made executable.
+  Without WebKit2GTK, InkDoc opens in your web browser and says what to
+  install; it keeps running until you stop it (`pkill -f inkdoc`).
 
 ### Fixed
 - The desktop app now remembers the **theme**, the **engine** you picked,

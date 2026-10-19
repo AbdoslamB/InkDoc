@@ -20,6 +20,8 @@ function slice(startMarker, endMarker) {
 
 const desktopSave = slice("  // ─── Desktop save (Download button)", "  // ─── End desktop save");
 const clickHandler = slice('  btnDownloadMarkdown.addEventListener("click"', "  // ─── Tab Switching");
+// What the handler downloads: the Raw view, or the whole result when the preview is cut.
+const fullMarkdown = slice("  function fullMarkdownFor(item) {", "  // ─── Switch Engine");
 
 function setup({ pywebview, editorValue = "" } = {}) {
     const toasts = [];
@@ -48,6 +50,7 @@ function setup({ pywebview, editorValue = "" } = {}) {
         const { window, document, Blob, URL, showToast, withWindowApi, rawEditor, btnDownloadMarkdown } = env;
         const queue = env.queue;
         const activeItemId = env.activeItemId;
+        ${fullMarkdown}
         ${desktopSave}
         ${clickHandler}
     `)(env);

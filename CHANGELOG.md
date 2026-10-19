@@ -135,6 +135,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   button, the reverse of the circle that grows when switching to light.
 - The lines between groups of settings are easier to see in the dark theme,
   and Display, Updates and the GLM-OCR options are now divided the same way.
+- **Files over 100 MB are converted.** They used to be refused (HTTP 413)
+  after the whole file had already been uploaded. Any size is now accepted;
+  InkDoc says that large files can take longer (a note when they are added
+  and a "Large file" label on their row while they convert) without stopping
+  anything. To keep the computer responsive with very large files:
+  - the preview shows the first 5 MB of a larger result (the saved file,
+    Copy and Download always have all of it);
+  - on Windows, a MarkItDown conversion may use at most half of the
+    computer's memory (at least 2 GB); past that it stops with a message
+    saying so, instead of the computer running out of memory;
+  - a file over 100 MB is refused, with a plain message (HTTP 507), only
+    when converting it would leave less than 1 GB of disk free, and any
+    upload the disk can't hold gets the same message instead of a server
+    error.
 
 ### Fixed
 - The desktop app now remembers the **theme**, the **engine** you picked,
@@ -154,8 +168,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   click on an ordinary link: web links open in your browser, and other links,
   such as links to files, are ignored instead of loading in InkDoc's window or
   being handed to the system to open.
-- API: a file refused as too large no longer leaves its job reported as
-  running by `GET /convert/progress/{job_id}`.
+- API: an upload refused because the disk is full no longer leaves its job
+  reported as running by `GET /convert/progress/{job_id}`.
+- On Windows, an upload that can't be stored no longer leaves a partial copy
+  in the temp folder (it was deleted while still open, which Windows refuses).
 
 ## [1.2.0] - 2026-10-14
 

@@ -9,12 +9,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+import errno
 import hmac
 import json
 import logging
 import os
 import re
 import secrets
+import shutil
 import sys
 import tempfile
 import threading
@@ -909,9 +911,18 @@ class SettingsPayload(BaseModel):
     )
 
 
-# Resource and DoS protection limits
-MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024  # 100 MB per file limit
+# Resource and DoS protection limits. There is no per-file size limit: Starlette
+# has already spooled the whole upload to disk before a handler runs, so refusing
+# a large file saved nothing and only threw the upload away. The page warns about
+# large files instead (LARGE_FILE_BYTES in app.js); what is refused is a copy the
+# temp disk can't hold.
 MAX_BATCH_FILES = 50                     # Maximum files per batch request
+DISK_FULL_DETAIL = "Not enough free disk space to convert this file. Free some space and try again."
+# A large upload (over 100 MB, the size the page warns about) is only copied when
+# that leaves this much free on the temp disk, so other programs aren't starved.
+# Smaller files only need room for the copy, as before.
+LARGE_UPLOAD_BYTES = 100 * 1024 * 1024
+LARGE_UPLOAD_FREE_SPACE_BYTES = 1024 * 1024 * 1024
 
 # MarkItDown plugin permissions (disabled by default to prevent arbitrary Python code execution)
 ALLOW_PLUGINS = os.environ.get("INKDOC_ALLOW_PLUGINS", "").lower() in ("1", "true")
@@ -965,34 +976,55 @@ def sanitize_conversion_error(exc: Exception, context_name: str = "document") ->
     return f"Conversion failed: {clean_msg}"
 
 
+def _disk_full_exception(detail: str = DISK_FULL_DETAIL) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_507_INSUFFICIENT_STORAGE, detail=detail)
+
+
 async def _save_upload_to_temp(file: UploadFile, ext: str) -> str:
-    """Stream an uploaded file to a temporary file while strictly validating size limits."""
+    """Stream an uploaded file to a temporary file. Any size is accepted.
+
+    Raises a 507 HTTPException when the temp disk can't hold the copy: up front
+    when the upload is larger than the free space (so a huge file fails at once,
+    not after writing gigabytes), or when a large upload would leave less than
+    LARGE_UPLOAD_FREE_SPACE_BYTES free; and on a disk-full error during the copy.
+    """
     # Sanitize extension to prevent extension-spoofing or traversal
     safe_ext = re.sub(r"[^a-zA-Z0-9_\.]", "", ext)[:10] if ext else ""
 
+    size = getattr(file, "size", None)
+    if size:
+        try:
+            free = shutil.disk_usage(tempfile.gettempdir()).free
+        except OSError:
+            free = None
+        if free is not None and size > free:
+            raise _disk_full_exception()
+        if free is not None and size > LARGE_UPLOAD_BYTES and free - size < LARGE_UPLOAD_FREE_SPACE_BYTES:
+            raise _disk_full_exception(
+                "Not enough free disk space for a file this large: converting it would leave "
+                "less than 1 GB free. Free some space and try again."
+            )
+
     with tempfile.NamedTemporaryFile(delete=False, suffix=safe_ext) as tmp:
         tmp_path = tmp.name
-        bytes_written = 0
-        chunk_size = 64 * 1024  # 64 KB chunks
+        chunk_size = 1024 * 1024  # 1 MB chunks
 
         try:
             while True:
                 chunk = await file.read(chunk_size)
                 if not chunk:
                     break
-                bytes_written += len(chunk)
-                if bytes_written > MAX_FILE_SIZE_BYTES:
-                    raise HTTPException(
-                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                        detail=f"File exceeds maximum allowed size of {MAX_FILE_SIZE_BYTES // (1024 * 1024)} MB.",
-                    )
                 tmp.write(chunk)
-        except Exception:
+            tmp.flush()
+        except Exception as exc:
+            tmp.close()
             if os.path.exists(tmp_path):
                 try:
                     os.remove(tmp_path)
                 except OSError:
                     pass
+            if isinstance(exc, OSError) and exc.errno == errno.ENOSPC:
+                raise _disk_full_exception() from exc
             raise
     return tmp_path
 
@@ -1719,7 +1751,7 @@ async def convert_file(
     try:
         tmp_path = await _save_upload_to_temp(file, ext)
     except HTTPException:
-        # Too large: end the job now, as /convert/batch does, so its progress
+        # Disk full: end the job now, as /convert/batch does, so its progress
         # doesn't report a conversion running until the registry expires it.
         job.finish("error")
         raise

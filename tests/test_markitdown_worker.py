@@ -538,3 +538,107 @@ def test_warmup_endpoint_needs_the_token_and_starts_the_worker(monkeypatch):
         assert shared.pid() is not None
     finally:
         shared.shutdown()
+
+
+# ─── Memory cap (large files) ────────────────────────────────────────────────
+
+def test_conversion_memory_limit_override(monkeypatch):
+    from app.core.engines import process_guard as pg
+
+    monkeypatch.setenv("INKDOC_CONVERSION_MEMORY_LIMIT_MB", "0")
+    assert pg.conversion_memory_limit() is None
+    monkeypatch.setenv("INKDOC_CONVERSION_MEMORY_LIMIT_MB", "512")
+    assert pg.conversion_memory_limit() == 512 * 1024 * 1024
+    monkeypatch.setenv("INKDOC_CONVERSION_MEMORY_LIMIT_MB", "lots")
+    default = pg.conversion_memory_limit()
+    if sys.platform == "win32":
+        assert default is not None and default >= pg.MIN_CONVERSION_MEMORY_BYTES
+    else:
+        assert default is None
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="the per-process memory cap is a Windows Job Object limit")
+def test_job_memory_limit_turns_a_runaway_allocation_into_memory_error():
+    from app.core.engines.process_guard import WindowsJob
+
+    child = textwrap.dedent("""
+        import sys
+        sys.stdin.readline()            # wait until the parent has put us in the job
+        try:
+            block = bytearray(600 * 1024 * 1024)
+            print("allocated", flush=True)
+        except MemoryError:
+            print("MemoryError", flush=True)
+    """)
+    job = WindowsJob(memory_limit_bytes=256 * 1024 * 1024)
+    proc = subprocess.Popen([sys.executable, "-c", child], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    try:
+        job.assign(proc)
+        out, _ = proc.communicate("go\n", timeout=60)
+        assert out.strip() == "MemoryError"
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        job.close()
+
+
+class _FakeStdin:
+    """Answers every request the way a worker that ran out of memory does."""
+
+    def __init__(self, worker) -> None:
+        self.worker = worker
+
+    def write(self, line: str) -> None:
+        rid = json.loads(line)["id"]
+        pending = self.worker._pending.pop(rid)
+        pending.response = {"id": rid, "ok": False, "error": "", "type": "MemoryError"}
+        pending.event.set()
+
+    def flush(self) -> None:
+        pass
+
+
+class _FakeProc:
+    def __init__(self, worker) -> None:
+        self.stdin = _FakeStdin(worker)
+
+    def poll(self):
+        return None
+
+
+def test_out_of_memory_in_the_worker_is_a_clear_error(worker, tmp_path, monkeypatch):
+    proc = _FakeProc(worker)
+    worker._proc = proc
+    monkeypatch.setattr(worker, "_wait_ready", lambda job=None: proc)
+
+    worker.memory_limit_bytes = 8 * 1024**3
+    with pytest.raises(mwc.MarkItDownOutOfMemoryError) as caught:
+        worker.convert(str(tmp_path / "big.txt"), ConversionOptions(), {}, None)
+    message = str(caught.value)
+    assert "more memory than InkDoc lets one conversion use (8 GB" in message
+    assert isinstance(caught.value, converter.UserFacingConversionError)  # shown as worded
+
+    worker.memory_limit_bytes = None
+    with pytest.raises(mwc.MarkItDownOutOfMemoryError, match="ran out of memory"):
+        worker.convert(str(tmp_path / "big.txt"), ConversionOptions(), {}, None)
+    worker._proc = None  # nothing real to shut down
+
+
+def test_worker_reports_memory_error_even_when_markitdown_wraps_it():
+    from app.core.engines.markitdown_worker import _error_type
+
+    class Attempt:
+        def __init__(self, exc):
+            self.converter = object()
+            self.exc_info = (type(exc), exc, None)
+
+    class FileConversionException(Exception):
+        def __init__(self, attempts):
+            super().__init__("File conversion failed after 1 attempts")
+            self.attempts = attempts
+
+    assert _error_type(MemoryError()) == "MemoryError"
+    assert _error_type(FileConversionException([Attempt(ValueError("bad")), Attempt(MemoryError())])) == "MemoryError"
+    assert _error_type(FileConversionException([Attempt(ValueError("bad"))])) == "FileConversionException"
+    assert _error_type(FileConversionException(None)) == "FileConversionException"
+    assert _error_type(ValueError("x")) == "ValueError"

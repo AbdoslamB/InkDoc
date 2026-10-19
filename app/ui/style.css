@@ -2755,6 +2755,15 @@ html[data-hidden-engines~="glm_ocr"] #engineCardGlmOcr .engine-hidden-chip {
   display: block;
 }
 
+/* End of a preview that shows only the start of a very large result */
+.preview-cut-note {
+  margin-top: 24px;
+  padding-top: 12px;
+  border-top: 1px solid var(--divider);
+  color: var(--muted);
+  font-size: 13px;
+}
+
 /* Empty State Hint */
 .empty-preview-hint {
   height: 100%;

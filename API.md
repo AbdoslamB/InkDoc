@@ -32,7 +32,7 @@ Once the server is running:
 Convert an uploaded document to Markdown.
 
 * **Multipart Form Fields**:
-  - `file`: The binary document file to convert.
+  - `file`: The binary document file to convert. Any size is accepted (the UI only warns that files over 100 MB can take longer). The upload is refused with `507` only when the temp disk can't hold its copy, or, for a file over 100 MB, when copying it would leave less than 1 GB free. On Windows a MarkItDown conversion may use at most half of the computer's memory (at least 2 GB; `INKDOC_CONVERSION_MEMORY_LIMIT_MB` overrides it, `0` turns it off); past that it fails with a message saying so.
 * **Query Parameters**:
   - `engine` *(string, optional, default: `'markitdown'`)*: Conversion engine choice:
     - `'markitdown'`: Microsoft MarkItDown engine (Office, PDF, audio, images).

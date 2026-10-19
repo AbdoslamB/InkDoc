@@ -78,6 +78,10 @@ class MarkItDownWorkerCrashedError(UserFacingConversionError):
     """The worker died while converting (a damaged or huge file, out of memory)."""
 
 
+class MarkItDownOutOfMemoryError(UserFacingConversionError):
+    """The conversion needed more memory than the worker may use (MemoryError in the worker)."""
+
+
 class MarkItDownConversionError(RuntimeError):
     """MarkItDown raised in the worker. str() is its message, unchanged."""
 
@@ -187,6 +191,8 @@ class MarkItDownWorker:
         self._job_tried = False
         self._atexit = False
         self.version: str | None = None
+        # The memory cap its Job Object enforces (Windows), for the error message.
+        self.memory_limit_bytes: int | None = None
 
     # ─── State ───────────────────────────────────────────────────────────────
 
@@ -294,9 +300,18 @@ class MarkItDownWorker:
         try:
             if self._job is None and not self._job_tried:
                 self._job_tried = True
-                from app.core.engines.process_guard import WindowsJob
+                from app.core.engines.process_guard import WindowsJob, conversion_memory_limit
 
-                self._job = WindowsJob()
+                limit = conversion_memory_limit()
+                try:
+                    self._job = WindowsJob(memory_limit_bytes=limit)
+                    self.memory_limit_bytes = limit
+                except OSError as exc:
+                    if not limit:
+                        raise
+                    # Contained without the cap rather than not contained at all.
+                    logger.debug("Memory limit not applied to the MarkItDown worker: %s", exc)
+                    self._job = WindowsJob()
             if self._job is not None:
                 self._job.assign(proc)
         except OSError as exc:
@@ -525,6 +540,8 @@ class MarkItDownWorker:
             response = pending.response or {"crashed": True}
             if response.get("crashed"):
                 raise MarkItDownWorkerCrashedError(crashed)
+            if not response.get("ok") and response.get("type") == "MemoryError":
+                raise MarkItDownOutOfMemoryError(self._out_of_memory_message())
             if not response.get("ok"):
                 raise MarkItDownConversionError(str(response.get("error", "")), str(response.get("type", "")))
             if not pending.output.exists():
@@ -539,6 +556,16 @@ class MarkItDownWorker:
                 self._active -= 1
                 if self._active == 0 and self._proc is not None and self._ready.is_set():
                     self._arm_idle_timer_locked()
+
+    def _out_of_memory_message(self) -> str:
+        if self.memory_limit_bytes:
+            gb = self.memory_limit_bytes / 1024**3
+            limit = f" ({gb:.0f} GB, so the rest of this computer keeps enough)" if gb >= 1 else ""
+            return (
+                f"This file needs more memory than InkDoc lets one conversion use{limit}. "
+                "Try another engine, or split the file into smaller parts."
+            )
+        return "This computer ran out of memory converting this file. Try another engine, or a smaller file."
 
     def _stop_for_cancel(self, rid: int, pending: _Pending, proc: subprocess.Popen) -> bool:
         """Cancel. True: the worker was stopped (this was its only conversion).

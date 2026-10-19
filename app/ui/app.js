@@ -262,6 +262,40 @@ document.addEventListener("DOMContentLoaded", () => {
     return `${b} B`;
   }
 
+  // Files of any size are converted. Over this size the page says, without
+  // stopping anything, that they can take longer: a toast when they are added
+  // and a chip on their queue row while they wait or convert.
+  const LARGE_FILE_BYTES = 100 * 1024 * 1024;
+
+  function isLargeFile(file) {
+    return Boolean(file) && Number(file.size) > LARGE_FILE_BYTES;
+  }
+
+  // The toast for files just added, or "" when none is large.
+  function largeFileNotice(files) {
+    const large = (files || []).filter(isLargeFile);
+    if (large.length === 0) return "";
+    if (large.length === 1) {
+      return `"${large[0].name}" is ${formatSize(large[0].size)}. Large files can take longer to convert.`;
+    }
+    return `${large.length} files are over 100 MB. Large files can take longer to convert.`;
+  }
+
+  // The preview draws at most this much Markdown (about 2,500 pages): drawing
+  // a 100 MB result would freeze the window. The saved file, Copy and Download
+  // always have all of it.
+  const PREVIEW_MAX_CHARS = 5 * 1000 * 1000;
+
+  // What the preview shows of `md`: all of it, or its start, ending at the last
+  // paragraph break before the limit when there is one in its second half.
+  function previewSlice(md) {
+    const text = md || "";
+    if (text.length <= PREVIEW_MAX_CHARS) return { text, cut: false };
+    const head = text.slice(0, PREVIEW_MAX_CHARS);
+    const end = head.lastIndexOf("\n\n");
+    return { text: end > PREVIEW_MAX_CHARS / 2 ? head.slice(0, end) : head, cut: true };
+  }
+
   // What a converting queue row says: "Page 7 / 30 · ~8 min left" while an
   // engine reports pages (GLM-OCR), otherwise the phase message.
   function formatJobProgress(p) {
@@ -4170,6 +4204,8 @@ document.addEventListener("DOMContentLoaded", () => {
       return { item, file };
     });
     renderQueue();
+    const largeNotice = largeFileNotice(files);
+    if (largeNotice) showToast(largeNotice, "info", { duration: 8000 });
     const start = () => pending.forEach(({ item, file }) => convertFileItem(item, file));
     if (selectedEngine === "glm_ocr") {
       confirmGlmJob(files).then((ok) => {
@@ -4517,7 +4553,10 @@ document.addEventListener("DOMContentLoaded", () => {
         const warnChip = warning
           ? `<span class="status-warn" title="${escapeHtml(warning.long)}" aria-label="Warning: ${escapeHtml(warning.long)}"><span aria-hidden="true">⚠</span> ${escapeHtml(warning.short)}</span>`
           : "";
-        const subLine = engineTag || warnChip ? `<div class="item-sub">${engineTag}${warnChip}</div>` : "";
+        const largeChip = (item.status === "pending" || item.status === "converting") && isLargeFile(item.fileRef)
+          ? `<span class="status-warn" title="Large files can take longer to convert" aria-label="Large file, ${escapeHtml(formatSize(item.fileRef.size))}: it can take longer to convert"><span aria-hidden="true">⚠</span> Large file · ${escapeHtml(formatSize(item.fileRef.size))}</span>`
+          : "";
+        const subLine = engineTag || warnChip || largeChip ? `<div class="item-sub">${engineTag}${warnChip}${largeChip}</div>` : "";
 
         const cancelBtn = item.status === "converting" && item.jobId && !item.cancelRequested
           ? `<button type="button" class="btn btn-icon queue-cancel" data-cancel="${item.id}" title="Cancel conversion" aria-label="Cancel converting ${escapeHtml(item.name)}">
@@ -5111,6 +5150,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!item) return;
 
     previewFilename.textContent = item.name;
+    rawEditor.readOnly = false;
 
     refreshSwitchEngineButton(item);
 
@@ -5204,11 +5244,18 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    const md = item.markdown || "";
+    // A very large result is previewed in part. The Raw view is then read-only,
+    // since an edit couldn't reach the part not shown; Copy and Download take
+    // the whole result (fullMarkdownFor).
+    const shown = previewSlice(item.markdown);
+    const md = shown.text;
+    item.previewCut = shown.cut;
     rawEditor.value = md;
+    rawEditor.readOnly = shown.cut;
 
     const words = item.wordCount || 0;
     previewStats.textContent = words > 0 ? `${words.toLocaleString()} words` : "";
+    if (shown.cut) previewStats.textContent += ` · preview shows the first ${formatSize(md.length)}`;
 
     updatePreviewBadges(item);
 
@@ -5265,8 +5312,21 @@ document.addEventListener("DOMContentLoaded", () => {
     wrapTables(renderedOutput);
     highlightCodeBlocks(renderedOutput);
     typesetMath(renderedOutput);
+    if (shown.cut) {
+      const note = document.createElement("p");
+      note.className = "preview-cut-note";
+      note.textContent = `The preview ends here: it shows the first ${formatSize(md.length)} of ${formatSize(item.markdown.length)}. `
+        + `${item.savedTo ? "The saved file, Copy and Download have" : "Copy and Download have"} all of it.`;
+      renderedOutput.appendChild(note);
+    }
 
     renderQueue();
+  }
+
+  // What Copy and Download take: the Raw view (it may have been edited), or the
+  // whole result when the preview shows only part of it.
+  function fullMarkdownFor(item) {
+    return item.previewCut ? item.markdown : (rawEditor.value || item.markdown);
   }
 
   // ─── Switch Engine (Re-convert) ──────────────────────────────────────────
@@ -5303,7 +5363,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     try {
-      await navigator.clipboard.writeText(rawEditor.value || item.markdown);
+      await navigator.clipboard.writeText(fullMarkdownFor(item));
       copyText.textContent = "Copied!";
       btnCopyMarkdown.style.borderColor = "var(--mark)";
       setTimeout(() => {
@@ -5415,7 +5475,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    const content  = rawEditor.value || item.markdown;
+    const content  = fullMarkdownFor(item);
     const baseName = item.name.replace(/\.[^/.]+$/, "");
     const fileName = `${baseName || "document"}.md`;
     if (window.pywebview) {

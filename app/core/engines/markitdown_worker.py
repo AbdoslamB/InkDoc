@@ -124,7 +124,22 @@ def _convert(request: dict, send) -> None:
     except Exception as exc:
         # The message exactly as an in-process conversion raised it: the server
         # words its error for the user from this text.
-        send({"id": rid, "ok": False, "error": str(exc), "type": type(exc).__name__})
+        send({"id": rid, "ok": False, "error": str(exc), "type": _error_type(exc)})
+
+
+def _error_type(exc: BaseException) -> str:
+    """The exception's type name, and "MemoryError" also when MarkItDown wrapped one.
+
+    MarkItDown reports a converter's MemoryError inside a FileConversionException
+    (in its `attempts`); the client words out-of-memory for the user from this.
+    """
+    if isinstance(exc, MemoryError):
+        return "MemoryError"
+    for attempt in getattr(exc, "attempts", None) or []:
+        info = getattr(attempt, "exc_info", None)
+        if info and len(info) > 1 and isinstance(info[1], MemoryError):
+            return "MemoryError"
+    return type(exc).__name__
 
 
 def _write_result(path: str, text: str) -> None:
@@ -163,7 +178,7 @@ def _tables(request: dict, send) -> None:
         _write_result(str(request["output"]), json.dumps(result))
         send({"id": rid, "ok": True, "none": False})
     except Exception as exc:
-        send({"id": rid, "ok": False, "error": str(exc), "type": type(exc).__name__})
+        send({"id": rid, "ok": False, "error": str(exc), "type": _error_type(exc)})
 
 
 def _layout(request: dict, send) -> None:
@@ -180,7 +195,7 @@ def _layout(request: dict, send) -> None:
         _write_result(str(request["output"]), json.dumps(result))
         send({"id": rid, "ok": True, "none": False})
     except Exception as exc:
-        send({"id": rid, "ok": False, "error": str(exc), "type": type(exc).__name__})
+        send({"id": rid, "ok": False, "error": str(exc), "type": _error_type(exc)})
 
 
 def main(argv: list[str]) -> int:

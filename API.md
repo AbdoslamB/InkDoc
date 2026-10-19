@@ -127,6 +127,8 @@ Convert a web page or YouTube video to Markdown.
   ```
   `engine`, `check_quality`, `auto_quality` and `job_id` work as for `/convert/file`. The response has the same `auto`, `quality` and `tables` fields: a URL that serves a PDF (detected by content, not name) is routed and checked like an uploaded one.
 
+  InkDoc runs none of a page's JavaScript. A page whose body shows no text without it (an app that builds the page in the browser) is converted from the copy it carries for search engines, its schema.org JSON-LD `JobPosting`, `Article`, `Product` or `Event`, and `warnings` says so. Without one, and when the page's `<noscript>` asks for JavaScript, the request is refused with `422` and a sentence saying what to do (print the page to PDF and convert that). Every other page is converted exactly as fetched; YouTube, Wikipedia and Bing pages are never inspected.
+
 **cURL Example**:
 ```bash
 curl -X POST "http://localhost:13118/convert/url?response_format=json" \

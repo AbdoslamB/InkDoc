@@ -1901,6 +1901,8 @@ async def convert_url(
         job.set_phase("fetching", "Downloading…")
         fetched = await asyncio.to_thread(open_url_source, item)
         job.raise_if_cancelled()
+        if fetched.notes:
+            options.engine_warnings = [*options.engine_warnings, *fetched.notes]
 
         if engine_kind == EngineKind.AUTO:
             markdown_text, saved_path_str = await _convert_auto(
@@ -1959,11 +1961,15 @@ async def convert_url(
         ) from exc
     except Exception as exc:
         from app.core.jobs import ConversionCancelledError
+        from app.core.web_shell import JavaScriptPageError
 
         if isinstance(exc, ConversionCancelledError):
             job.finish("cancelled")
             raise _cancelled_exception() from exc
         job.finish("error")
+        if isinstance(exc, JavaScriptPageError):
+            # Not a failure of InkDoc's: the page needs a browser. Said as worded.
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
         logger.exception("URL conversion failed for '%s': %s", url, exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

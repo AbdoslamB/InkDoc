@@ -335,6 +335,8 @@ class FetchedSource:
     filename: str
     content_type: str
     stream_info_kwargs: dict[str, str]
+    # Sentences for the response's warnings (a page rebuilt by app.core.web_shell).
+    notes: list[str] = field(default_factory=list)
 
     def cleanup(self) -> None:
         try:
@@ -385,13 +387,31 @@ def open_url_source(item: QueueItem) -> FetchedSource:
     if "charset" not in hints and fetched.charset:
         hints["charset"] = fetched.charset
 
-    return FetchedSource(
+    source = FetchedSource(
         path=fetched.temp_file_path,
         final_url=fetched.final_url,
         filename=fetched.filename,
         content_type=fetched.content_type or "",
         stream_info_kwargs=hints,
     )
+    # A page that builds its content with JavaScript: converted from the copy it
+    # carries for search engines, or refused with a sentence saying what to do.
+    # Not when the item says what the file is.
+    is_html = (hints.get("extension", "").lower() in (".html", ".htm", ".xhtml")
+               or hints.get("mimetype", "").lower() in ("text/html", "application/xhtml+xml"))
+    if is_html and not (item.extension_override.strip() or item.mimetype_override.strip()):
+        from app.core.web_shell import inspect_page
+
+        try:
+            rebuilt = inspect_page(source.path, url=source.final_url, charset=hints.get("charset"))
+            if rebuilt is not None:
+                source.path.write_bytes(rebuilt.html)
+                hints.update(extension=".html", mimetype="text/html", charset="utf-8")
+                source.notes.append(rebuilt.note)
+        except BaseException:
+            source.cleanup()  # the caller never gets the file to delete
+            raise
+    return source
 
 
 @contextmanager

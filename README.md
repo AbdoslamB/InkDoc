@@ -272,7 +272,7 @@ Each format has a recommended engine, which is what **Auto** uses, and you can a
 | 📊 | **Office documents** | Microsoft Word (`.docx`), Excel (`.xlsx`), PowerPoint (`.pptx`), CSV, TSV | `MarkItDown` |
 | 📕 | **PDFs & scanned docs** | Native PDF, scanned PDF (with OCR), multi-column articles, research papers | `MarkItDown` for digital PDFs, `GLM-OCR` or `Docling` for scanned pages |
 | 💻 | **Developer & data** | Jupyter Notebooks (`.ipynb`), YAML (`.yaml`, `.yml`), JSON, XML | `Markit` for YAML and XML, `MarkItDown` for notebooks and JSON |
-| 📚 | **Publications & web** | EPUB e-books, web URLs, YouTube links (transcripts are fetched from YouTube) | `MarkItDown` |
+| 📚 | **Publications & web** | EPUB e-books, web URLs (a page built with JavaScript, such as a job board, is read from the copy it carries for search engines), YouTube links (transcripts are fetched from YouTube) | `MarkItDown` |
 | 🎙️ | **Audio recordings** | WAV, MP3, M4A (speech-to-text through Google's speech-recognition service; MP3 and M4A also need ffmpeg) | `MarkItDown` |
 | 🖼️ | **Images & photos** | PNG, JPEG, TIFF, BMP, WebP, GIF (EXIF metadata & technical attributes) | `GLM-OCR` or `Docling` for OCR when installed, otherwise `MarkItDown` |
 

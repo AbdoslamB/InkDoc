@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Web pages built with JavaScript** (job boards such as Ashby, and other
+  apps that draw the page in the browser) no longer convert to a single line
+  such as "You need to enable JavaScript to run this app." InkDoc runs no
+  JavaScript; it now converts the copy such a page carries for search engines
+  (a job posting, article, product or event) and says so. A page without one
+  gets a message saying what to do (print it to PDF from your browser, then
+  convert that) instead of a one-line file. Other pages are unchanged.
+
 ## [1.3.0] - 2026-10-16
 
 ### Added

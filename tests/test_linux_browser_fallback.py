@@ -47,8 +47,18 @@ def test_no_gi_at_all_is_reported(monkeypatch):
     assert problem and "gi" in problem  # ModuleNotFoundError: import of gi halted
 
 
-def test_run_desktop_takes_the_browser_path_in_the_linux_release(monkeypatch, tmp_path):
+@pytest.fixture
+def isolated_run_desktop(monkeypatch, tmp_path):
+    """run_desktop's process-wide side effects, undone after the test: the server's port,
+    INKDOC_DESKTOP_RUNNER and the update manager's desktop mode (other tests rely on them)."""
     monkeypatch.setenv("INKDOC_ENGINES_DIR", str(tmp_path / "engines"))
+    monkeypatch.setenv("INKDOC_DESKTOP_RUNNER", "0")
+    monkeypatch.setattr("app.server.server.set_server_port", lambda port: None)
+    manager = types.SimpleNamespace(set_desktop_runner=lambda value: None)
+    monkeypatch.setattr("app.server.server.get_update_manager", lambda: manager)
+
+
+def test_run_desktop_takes_the_browser_path_in_the_linux_release(monkeypatch, isolated_run_desktop):
     monkeypatch.setattr(runner, "is_port_in_use", lambda port, host="127.0.0.1": True)
     monkeypatch.setattr(runner, "verify_inkdoc_server", lambda host, port: True)  # attach: no server thread
     monkeypatch.setattr(runner, "is_frozen_linux", lambda: True)
@@ -59,9 +69,8 @@ def test_run_desktop_takes_the_browser_path_in_the_linux_release(monkeypatch, tm
     assert calls == [("http://127.0.0.1:13987/InkDoc", None, "ValueError: Namespace WebKit2 not available")]
 
 
-def test_source_runs_never_take_the_browser_path(monkeypatch, tmp_path):
+def test_source_runs_never_take_the_browser_path(monkeypatch, isolated_run_desktop):
     # A checkout may use pywebview's Qt backend; only the release checks for GTK/WebKit2.
-    monkeypatch.setenv("INKDOC_ENGINES_DIR", str(tmp_path / "engines"))
     monkeypatch.setattr(runner, "is_port_in_use", lambda port, host="127.0.0.1": True)
     monkeypatch.setattr(runner, "verify_inkdoc_server", lambda host, port: True)
     monkeypatch.setattr(runner, "is_frozen_linux", lambda: False)

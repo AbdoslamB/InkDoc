@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gets a message saying what to do (print it to PDF from your browser, then
   convert that) instead of a one-line file. Other pages are unchanged.
 
-## [1.3.0] - 2026-10-16
+## [1.3.0] - 2026-11-01
 
 ### Added
 - **Auto quality** (Settings → General): *Fast* (the default; conversions are

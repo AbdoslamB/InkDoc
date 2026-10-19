@@ -80,6 +80,7 @@ try:
     from app.core.security import SSRFValidationError, validate_url_for_ssrf
     from app.core.thorough_passes import PASS_NAMES, catalogue, known_names
     from app.core.url_fetcher import (
+        UrlBlockedError,
         UrlFetchError,
         UrlFetchSizeExceededError,
         UrlFetchTimeoutError,
@@ -938,6 +939,30 @@ def _check_plugin_permission(enable_plugins: bool) -> None:
                 "Set environment variable INKDOC_ALLOW_PLUGINS=1 to enable."
             ),
         )
+
+
+SAVE_PAGE_IN_BROWSER = (
+    "Open the page in your browser, print it to PDF (or save it as \"Webpage, Complete\"), "
+    "then drop that file into InkDoc."
+)
+
+
+def url_fetch_failure(exc: Exception) -> str:
+    """Why a URL couldn't be fetched, in words for the user.
+
+    A site that refuses the request (UrlBlockedError) gets a sentence saying so
+    and how to get the page anyway, through the user's own browser; InkDoc
+    never retries or disguises the request. Any other failure is worded as before.
+    """
+    if not isinstance(exc, UrlBlockedError):
+        return str(exc)
+    if exc.challenge:
+        return f"This site blocks automated downloads, so InkDoc can't fetch this page. {SAVE_PAGE_IN_BROWSER}"
+    if exc.status == 429:
+        return "The site is limiting requests (HTTP 429). Try again in a few minutes."
+    if exc.status == 401:
+        return f"This page needs you to sign in (HTTP 401), so InkDoc can't fetch it. {SAVE_PAGE_IN_BROWSER}"
+    return f"The site refused access to this page (HTTP {exc.status}), so InkDoc can't fetch it. {SAVE_PAGE_IN_BROWSER}"
 
 
 def sanitize_conversion_error(exc: Exception, context_name: str = "document") -> str:
@@ -1930,7 +1955,7 @@ async def convert_url(
         job.finish("error")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"URL fetch failed: {exc}",
+            detail=f"URL fetch failed: {url_fetch_failure(exc)}",
         ) from exc
     except Exception as exc:
         from app.core.jobs import ConversionCancelledError

@@ -172,6 +172,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reported as running by `GET /convert/progress/{job_id}`.
 - On Windows, an upload that can't be stored no longer leaves a partial copy
   in the temp folder (it was deleted while still open, which Windows refuses).
+- **A web page whose site blocks automated downloads** (for example a job
+  board behind a Cloudflare bot check) now says so, with what to do instead:
+  open the page in your browser, print it to PDF or save it, and drop that
+  file into InkDoc. It used to show only "HTTP error 403". Sign-in pages
+  (401) and rate limits (429) get their own message. InkDoc makes one
+  request, as itself, and never retries or disguises it.
 
 ## [1.2.0] - 2026-10-14
 

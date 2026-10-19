@@ -43,6 +43,34 @@ class UrlFetchSizeExceededError(UrlFetchError):
     """Raised when remote response size exceeds permitted maximum."""
 
 
+# Statuses with which a site refuses the request itself (sign-in, access rules,
+# rate limit), as opposed to a page that is missing or a server that failed.
+BLOCKED_STATUSES = frozenset({401, 403, 429})
+
+
+class UrlBlockedError(UrlFetchError):
+    """The site refused the request: 401, 403 or 429, or a bot check (Cloudflare's
+    `cf-mitigated: challenge`) with any status.
+
+    That is the site's own access rule, so InkDoc doesn't retry or disguise the
+    request; the server tells the user how to get the page through their own
+    browser instead. str() is the same as for any other HTTP error.
+    """
+
+    def __init__(self, status: int, url: str, *, challenge: bool = False) -> None:
+        super().__init__(f"HTTP error {status} fetching '{url}'.")
+        self.status = status
+        self.challenge = challenge
+
+
+def _header(resp: Any, name: str) -> str:
+    """A response header by name, whatever its case."""
+    for key, value in (getattr(resp, "headers", None) or {}).items():
+        if str(key).lower() == name:
+            return str(value)
+    return ""
+
+
 @dataclass
 class FetchedUrlResult:
     """Represents a safely fetched remote document."""
@@ -180,8 +208,13 @@ def fetch_url_safely(
 
         # 4. Check for HTTP errors
         if resp.status >= 400:
+            # Only the status and headers are looked at: the body of a refusal
+            # (a bot-check page, say) is never read.
+            challenge = _header(resp, "cf-mitigated").strip().lower() == "challenge"
             resp.release_conn()
             pool.close()
+            if challenge or resp.status in BLOCKED_STATUSES:
+                raise UrlBlockedError(resp.status, norm_url, challenge=challenge)
             raise UrlFetchError(f"HTTP error {resp.status} fetching '{norm_url}'.")
 
         # 5. Fast-path check for Content-Length

@@ -435,6 +435,135 @@ def test_https_local_server_with_test_ca_cert_verification():
     print("[OK] test_https_local_server_with_test_ca_cert_verification passed")
 
 
+# ─── Sites that refuse the request (401, 403, 429, bot checks) ───────────────
+
+def _http_error(status: int, headers: dict | None = None):
+    resp = MagicMock()
+    resp.status = status
+    resp.headers = headers or {}
+    return resp
+
+
+def _fetch_with(resp):
+    """fetch_url_safely against a mocked reply; (the error raised, how many requests were made)."""
+    with (
+        patch("socket.getaddrinfo") as mock_dns,
+        patch.object(urllib3.HTTPSConnectionPool, "request", return_value=resp) as request,
+    ):
+        mock_dns.return_value = [(2, 1, 6, "", ("93.184.216.34", 443))]
+        try:
+            fetch_url_safely("https://jobs.example.com/job/123")
+        except UrlFetchError as exc:
+            return exc, request.call_count
+    raise AssertionError("an HTTP error was not raised")
+
+
+def test_refusals_are_told_apart_from_other_http_errors():
+    from app.core.url_fetcher import UrlBlockedError
+
+    cases = [
+        (403, {"Server": "cloudflare", "Cf-Mitigated": "challenge"}, True),
+        (503, {"cf-mitigated": "challenge"}, True),   # a bot check, whatever the status
+        (403, {}, False),
+        (401, {}, False),
+        (429, {"Retry-After": "120"}, False),
+    ]
+    for status, headers, challenge in cases:
+        exc, requests = _fetch_with(_http_error(status, headers))
+        assert isinstance(exc, UrlBlockedError), (status, headers)
+        assert isinstance(exc, UrlFetchError)          # every existing handler still catches it
+        assert exc.status == status and exc.challenge is challenge
+        # The same text as before, for anyone who reads str(exc).
+        assert str(exc) == f"HTTP error {status} fetching 'https://jobs.example.com/job/123'."
+        assert requests == 1, "a refused request was retried"
+
+    for status in (400, 404, 410, 500, 502):
+        exc, requests = _fetch_with(_http_error(status))
+        assert type(exc) is UrlFetchError, status
+        assert str(exc) == f"HTTP error {status} fetching 'https://jobs.example.com/job/123'."
+        assert requests == 1
+    print("[OK] test_refusals_are_told_apart_from_other_http_errors passed")
+
+
+def test_a_bot_check_from_a_real_http_server():
+    """urllib3's own header object (any case), through a real local server; one request only."""
+    import http.server
+    import threading
+
+    from app.core.url_fetcher import UrlBlockedError
+
+    hits = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            hits.append(self.headers.get("User-Agent"))
+            body = b"<title>Just a moment...</title>"
+            self.send_response(403)
+            self.send_header("CF-MITIGATED", "challenge")
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        try:
+            fetch_url_safely(f"http://127.0.0.1:{server.server_port}/job", allow_local=True)
+            raise AssertionError("a bot check was not reported")
+        except UrlBlockedError as exc:
+            assert exc.challenge is True and exc.status == 403
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert len(hits) == 1, "the request was retried"
+    assert "InkDoc" in hits[0], "the request was disguised"
+    print("[OK] test_a_bot_check_from_a_real_http_server passed")
+
+
+def test_url_route_says_why_a_site_refused_and_what_to_do():
+    import re
+
+    from app.core.jobs import JOBS
+    from app.core.url_fetcher import UrlBlockedError
+    from app.server.server import SAVE_PAGE_IN_BROWSER
+
+    url = "https://www.example-jobs.com/job/123"
+    cases = [
+        (UrlBlockedError(403, url, challenge=True), "This site blocks automated downloads", True),
+        (UrlBlockedError(403, url), "The site refused access to this page (HTTP 403)", True),
+        (UrlBlockedError(401, url), "This page needs you to sign in (HTTP 401)", True),
+        (UrlBlockedError(429, url), "The site is limiting requests (HTTP 429)", False),
+        (UrlFetchError(f"HTTP error 404 fetching '{url}'."), f"HTTP error 404 fetching '{url}'.", False),
+    ]
+    # The page shows any error containing these words as "this engine does not support the
+    # format" (classifyError in app.js); a refusal must read as an ordinary failure.
+    app_js = (REPO_ROOT / "app" / "ui" / "app.js").read_text(encoding="utf-8")
+    body = app_js[app_js.index("function classifyError(message)"):]
+    body = body[:body.index("return \"failed\"")]
+    unsupported_words = re.findall(r'msg\.includes\("([^"]+)"\)', body)
+    assert unsupported_words, "classifyError's words were not found"
+
+    for i, (error, expected, browser_hint) in enumerate(cases):
+        job_id = f"blocked-url-{i:04d}"
+        with (
+            patch("socket.getaddrinfo", return_value=[(2, 1, 6, "", ("93.184.216.34", 443))]),
+            patch("app.core.url_fetcher.fetch_url_safely", side_effect=error),
+        ):
+            resp = client.post("/convert/url?response_format=json", json={"url": url, "job_id": job_id})
+        assert resp.status_code == 502, resp.text          # as before
+        detail = resp.json()["detail"]
+        assert detail.startswith("URL fetch failed: ")      # as before
+        assert expected in detail, detail
+        assert (SAVE_PAGE_IN_BROWSER in detail) is browser_hint
+        assert not any(w in detail.lower() for w in unsupported_words), detail
+        assert JOBS.get(job_id)["status"] == "error"
+    print("[OK] test_url_route_says_why_a_site_refused_and_what_to_do passed")
+
+
 if __name__ == "__main__":
     test_redirect_to_127_0_0_1()
     test_redirect_to_169_254_169_254()
@@ -445,5 +574,8 @@ if __name__ == "__main__":
     test_ip_pinning()
     test_filename_and_extension_hints_preserved()
     test_https_local_server_with_test_ca_cert_verification()
+    test_refusals_are_told_apart_from_other_http_errors()
+    test_a_bot_check_from_a_real_http_server()
+    test_url_route_says_why_a_site_refused_and_what_to_do()
     print("\nALL URL FETCHER TESTS PASSED!")
 

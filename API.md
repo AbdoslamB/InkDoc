@@ -134,6 +134,8 @@ curl -X POST "http://localhost:13118/convert/url?response_format=json" \
   -d '{"url": "https://en.wikipedia.org/wiki/Markdown", "save_to_downloads": true}'
 ```
 
+A page that can't be fetched is refused with `502` and a `detail` starting `URL fetch failed:`. When the site itself refuses the request (`401`, `403`, `429`, or a bot check such as Cloudflare's, which answers with `cf-mitigated: challenge`), the detail says so and, except for `429`, how to convert the page anyway: open it in a browser, print it to PDF or save it, and convert that file. InkDoc makes one request, as itself, and never retries or disguises it; the refusal page is not read.
+
 ---
 
 ### `POST /convert/batch`

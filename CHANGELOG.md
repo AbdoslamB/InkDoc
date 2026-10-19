@@ -158,6 +158,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     when converting it would leave less than 1 GB of disk free, and any
     upload the disk can't hold gets the same message instead of a server
     error.
+- **Python 3.14 inside the Windows and macOS apps** (was 3.11.9, which has had
+  no binary security release since April 2024). Conversions give the same
+  Markdown as before. While a document converts, InkDoc's conversion process
+  uses about 20 MB more memory. The Linux app is unchanged.
 
 ### Fixed
 - The desktop app now remembers the **theme**, the **engine** you picked,

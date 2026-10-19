@@ -150,6 +150,13 @@ Accepted for now, each needing write access to the folder involved or a local pr
 
 ## CI/CD (all in `.github/workflows/`)
 
+Interpreters: the Windows and macOS bundles ship the Python that `setup-python` installs
+(`python-version` in `release.yml` and `ci.yml`, now 3.14); Linux ships Ubuntu 22.04's own
+Python 3.10, because `python3-gi` comes from apt; the Docling pack has its own
+(`scripts/build_pack.py`). Each autumn, move the bundles to the next minor version while the
+current one still gets binary releases (a minor in security-only support stops at its last
+binary, as `"3.11"` stopped at 3.11.9), after `scripts/runtime_bench.py` shows no regression.
+
 - `ci.yml` — on every push/PR to `main`: `ruff check .`, `python -m
   compileall`, and the headless smoke test above, matrixed across
   windows-latest/macos-latest/ubuntu-latest.

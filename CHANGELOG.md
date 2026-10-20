@@ -209,11 +209,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (a job posting, article, product or event) and says so. A page without one
   gets a message saying what to do (print it to PDF from your browser, then
   convert that) instead of a one-line file. Other pages are unchanged.
+- Docling's **Verify Integrity** now says how many files it checked (it said
+  "All undefined files verified"), and a Docling install that fails shows the
+  reason instead of "Unknown error".
 - A CSV or text file larger than 64 KB that has accented letters or other
   non-English characters only after its beginning (a long export with one
   "Zoë" near the end, say) now converts. MarkItDown guessed the file's
   encoding from its first 64 KB and failed with "'ascii' codec can't decode".
   InkDoc now tries such a file again as UTF-8 when it is valid UTF-8.
+
+### Security
+- **Docling 2.140.0, with security fixes.** If you have Docling, update it in
+  Settings → Engines → Docling. The card says how large the download is; your
+  Docling keeps working until you update, a conversion in progress finishes
+  first, and the code and formula recognition model is kept. Docling 2.130.0
+  could be made to use all its memory by a document: a web page, HTML file or
+  spreadsheet with a huge table cell span (GHSA-cgc7-9qp3-86m3), or a small
+  archive with millions of entries (GHSA-3cr3-8m4c-fpxw). The update also
+  brings Docling's newer reading order for PDFs and many fixes for Word
+  documents (Docling engine pack 2).
 
 ## [1.2.0] - 2026-10-14
 

@@ -31,7 +31,7 @@ def _assert_interpreter_runs_from(
 ) -> None:
     """Start the extracted interpreter and confirm it resolves itself inside the pack.
 
-    A pack can hash perfectly and still be unusable: docling-pack-v2 shipped a
+    A pack can hash perfectly and still be unusable: a pack built before 1.0.0 shipped a
     virtualenv whose standard library lived in the build runner's toolcache, so it
     started during the build and died on every user's machine with
     "Docling worker exited prematurely".
@@ -129,7 +129,7 @@ def verify_packs(manifest_path: Path, archives_dir: Path) -> None:
                 print(f"[PASS] {platform_key}: EngineManager extraction and launch integrity passed.")
 
                 # verify_launch_integrity() only re-hashes files. It cannot tell whether
-                # the interpreter can actually start, which is how docling-pack-v2 got
+                # the interpreter can actually start, which is how a pack built before 1.0.0 got
                 # published: it shipped a virtualenv whose stdlib lived in the build
                 # runner's toolcache, so every file hashed correctly and nothing ran.
                 # Only the pack matching this runner can be executed here.

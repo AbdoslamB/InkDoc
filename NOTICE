@@ -29,7 +29,7 @@ Optional components (downloaded only when you choose to)
 
 Docling engine pack
   Built by InkDoc from the upstream projects and hosted on InkDoc's own GitHub
-  release (docling-pack-v1), not downloaded from the Docling project.
+  release (docling-pack-v2), not downloaded from the Docling project.
   Contains Docling (MIT, https://github.com/docling-project/docling), the
   "heron" layout model weights (Apache-2.0), the TableFormer weights
   (CDLA-Permissive-2.0), RapidOCR and its PP-OCR models (Apache-2.0), a CPython

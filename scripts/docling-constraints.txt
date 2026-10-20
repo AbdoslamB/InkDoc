@@ -23,11 +23,20 @@
 # has none, so the same line selects 2.14.0+cpu from the CPU index on Windows and
 # Linux and 2.14.0 on macOS.
 
-docling==2.130.0
-docling-slim==2.130.0
-docling-core==2.98.0
+docling==2.140.0
+docling-slim==2.140.0
+docling-core==2.103.0
 docling-ibm-models==4.0.3
-docling-parse==7.21.0
+docling-parse==7.22.3
+
+# The OCR engine and the models the pack prefetches for it. Unpinned, a rebuild
+# picked up whatever rapidocr was newest that day; 3.9.2 is what docling-pack-v1
+# shipped.
+rapidocr==3.9.2
+# rapidocr's config library. worker.py's _patch_omegaconf() patches
+# omegaconf._utils.is_primitive_type and get_type_of, which 2.4.0 renamed and
+# removed, so under 2.4 the patch silently does nothing.
+omegaconf==2.3.1
 
 # Load the recognition and layout models; a change here can alter what a given
 # set of weights needs in order to load.

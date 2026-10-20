@@ -362,8 +362,10 @@ All mutating management endpoints require the `X-InkDoc-Token: <session_token>` 
 - `POST /engines/{engine_id}/install`: Starts streaming download and safe installation of the engine pack. *(Note: Disabled until official production release hashes are published)*
 - `GET /engines/{engine_id}/install/progress`: Polls real-time download and extraction percentage.
 - `POST /engines/{engine_id}/install/cancel`: Cancels an active download and cleans up staging files.
-- `POST /engines/{engine_id}/verify`: Performs full cryptographic SHA-256 tree verification against the bundled manifest.
+- `POST /engines/{engine_id}/verify`: Performs full cryptographic SHA-256 tree verification against the bundled manifest (`files_checked` in the answer). For an earlier Docling pack it checks only the interpreter and worker and answers `"outdated": true` with a `note`.
 - `POST /engines/{engine_id}/remove`: Uninstalls the engine pack and cleans up disk footprint.
+
+**Updating Docling.** Each InkDoc release names one Docling pack. An earlier pack that is already installed keeps working, and `/engines` reports it with `"update_available": true`, `version` (the installed pack), `pack_version` (the current one), `docling_version`, `latest_docling_version` and `security_fixes` (the published advisories in the installed pack's Docling that the update fixes, for example `["GHSA-cgc7-9qp3-86m3"]`; empty when there are none). It is never replaced automatically: `POST /engines/docling/install` replaces it when the user chooses. The new pack is downloaded and verified first. A Docling conversion in progress finishes before the swap, and none starts during it. Add-ons installed inside the old pack are moved into the new one and loaded once by its worker; one that no longer loads reports `pack_drift`. If anything fails, the installed pack is kept.
 
 ### <a id="glm-ocr"></a>GLM-OCR (`engine_id` = `glm_ocr`)
 

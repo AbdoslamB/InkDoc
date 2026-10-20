@@ -202,6 +202,61 @@ fallback would fail (the error names both sources).
 If the tracker fails, it records why in the issue and drafts nothing; users keep the
 last good pins.
 
+### Docling engine pack
+
+The Docling pack is not an app asset either. It is built by `build-packs.yml` on its own
+release (`docling-pack-vN`, never Latest; published assets are never replaced, so a
+rebuild always takes the next N). Each app release names one pack: `app/core/manifest.json`
+is that release's merged `manifest.json`, copied in unchanged. Users who have an earlier
+pack keep it, checked against its launch hashes in `engine_manifest.EARLIER_PACKS`,
+until they click **Update Docling** in Settings → Engines.
+
+**A new pack, before the app release that ships it** (1.3.0 ships `docling-pack-v2`):
+
+1. Set the versions in `scripts/docling-constraints.txt` and push the commit. CI's
+   `test_the_shipped_pack_matches_the_pin` fails from here until step 4, by design: the
+   pin no longer matches the pack in `manifest.json`.
+2. Build and publish the pack:
+   ```bash
+   git tag docling-pack-vN && git push origin docling-pack-vN
+   ```
+   The workflow builds on Windows, Linux and macOS, smoke-tests each pack (offline PDF
+   conversion), merges the three fragments, re-verifies the packs as `EngineManager`
+   installs them, publishes them with `manifest.json` (not Latest), attests provenance,
+   then re-downloads the public assets and checks their sizes and SHA-256s.
+3. Download that release's `manifest.json` and check it:
+   ```bash
+   gh release download docling-pack-vN --pattern manifest.json --dir /tmp/pack-vN --repo AbdoslamB/InkDoc
+   gh attestation verify /tmp/pack-vN/manifest.json --repo AbdoslamB/InkDoc
+   ```
+4. Before replacing the file, add the **outgoing** pack to `EARLIER_PACKS` in
+   `app/core/engine_manifest.py`: for each platform, its `interpreter_path`, `worker_script` and
+   their two hashes from the current `app/core/manifest.json`. Without this, everyone with
+   the outgoing pack gets "Launch integrity check failed" after updating InkDoc.
+   Then copy `/tmp/pack-vN/manifest.json` over `app/core/manifest.json`, unchanged.
+5. Bring the pack's license list up to date, then read the license of every package it
+   reports as new (PyPI metadata and the files in its dist-info) and write its row:
+   ```bash
+   python scripts/pack_license_list.py --write
+   python scripts/pack_license_list.py            # must end with [OK]
+   ```
+   Update the package count and release tag in `NOTICE` and `THIRD_PARTY_NOTICES.md`.
+6. Check the result:
+   ```bash
+   python scripts/verify_engine_manifest_guard.py       # hashes, sizes, asset presence
+   python -m pytest tests/ -q                           # the pin test passes again
+   ```
+7. The code & formula add-on: if the new Docling still looks for the model under the same
+   folder (`CodeFormulaModel._model_repo_folder`, `docling-project--CodeFormulaV2` in
+   Docling 2.130 and 2.140), the published add-on stays valid and needs no rebuild.
+   Installed copies are moved into the new pack and re-checked by its worker during the
+   update. Otherwise, publish `docling-addon-vN+1` with `build-addon.yml` after step 4.
+8. On a Windows PC with the outgoing pack installed, run the new build from source and
+   update Docling from Settings → Engines. Check that a scanned PDF converts with OCR,
+   and that the code & formula add-on is still usable afterwards.
+
+Then release the app as usual (Step 1 onwards).
+
 ---
 
 ## 4. Honest Assessment of Key Compromise & Rotation

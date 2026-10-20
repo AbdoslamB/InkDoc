@@ -147,18 +147,20 @@ const settle = () => new Promise((resolve) => setImmediate(resolve));
     }
 
     // The section of the version being released, if it is there yet.
-    // The release this was written for: two additions, two changes, one fix,
-    // rather than five additions.
+    // The release this was written for: two additions, a change, a fix and the
+    // Docling security update, rather than five additions.
     {
         const t = setup();
         t.renderReleaseNotes({ latest_version: "1.3.0", release_notes: section("1.3.0"), release_url: URL });
         const groups = readBody(t.updateNotesBody);
-        assert.deepStrictEqual(groups.map((g) => [g.group, g.items.length]), [["Added", 2], ["Changed", 2], ["Fixed", 1]]);
+        assert.deepStrictEqual(groups.map((g) => [g.group, g.items.length]),
+            [["Added", 2], ["Changed", 1], ["Fixed", 1], ["Security", 1]]);
         assert.ok(groups[0].items[0].startsWith("Auto quality"), groups[0].items[0]);
         assert.ok(groups[1].items[0].startsWith("Less memory while idle. MarkItDown now runs"), "a short lead-in takes the next sentence");
-        assert.strictEqual(groups[1].items[1], "Clearer Settings. Shorter descriptions throughout, and the settings you use most come first.");
         assert.strictEqual(groups[0].items[1].split(". ").length, 2, "Table check: its lead-in and one sentence");
         assert.ok(groups[2].items[0].startsWith("The desktop app now remembers"), groups[2].items[0]);
+        assert.strictEqual(groups[3].items[0],
+            "Docling 2.140.0, with security fixes. If you have Docling, update it in Settings → Engines → Docling.");
     }
 
     for (const version of ["1.1.0", "1.0.0"]) {

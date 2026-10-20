@@ -497,6 +497,62 @@ class AddonManager:
             )
         return ""
 
+    def carry_over(self, old_pack: Path, new_pack: Path) -> list[str]:
+        """Move the installed "docling_pack" add-ons from a replaced pack into the new one.
+
+        They live in the pack's models folder, so replacing the pack would otherwise
+        delete them (the code/formula model is 640 MB). The metadata file moves
+        last, as at install: a model without it reads as an unfinished install.
+        Returns the names moved; their recorded Docling version is the old pack's,
+        so `pack_drift` reports them until `reconfirm` succeeds.
+        """
+        moved: list[str] = []
+        for addon in self._load_catalogue().values():
+            if addon.target != TARGET_DOCLING_PACK or not addon.model_dir:
+                continue
+            meta_name = f"{_META_PREFIX}{addon.name}.json"
+            old_model = old_pack / "models" / addon.model_dir
+            old_meta = old_pack / "models" / meta_name
+            new_model = new_pack / "models" / addon.model_dir
+            if not (is_safe_path(old_pack / "models", old_model) and is_safe_path(new_pack / "models", new_model)):
+                logger.warning("Add-on '%s' names a folder outside the pack's models; not moved.", addon.name)
+                continue
+            if not (old_model.is_dir() and old_meta.is_file()) or new_model.exists():
+                continue
+            try:
+                new_model.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(old_model), str(new_model))
+                shutil.move(str(old_meta), str(new_pack / "models" / meta_name))
+                moved.append(addon.name)
+            except OSError as exc:
+                logger.warning("Could not keep add-on '%s' across the pack update: %s", addon.name, exc)
+        return moved
+
+    def reconfirm(self, name: str) -> bool:
+        """Have the current pack's worker load an add-on carried over from an earlier pack.
+
+        On success its record takes the current Docling version, which clears
+        `pack_drift`. Otherwise the record is left as it was, so the card keeps
+        asking for a reinstall rather than claiming a confirmation that never happened.
+        """
+        addon = self.get_addon(name)
+        record = self.read_install_metadata(name)
+        if not addon or not record:
+            return False
+        try:
+            # Moved between folders and about to be loaded by another Docling:
+            # its files must still be the ones the catalogue pins.
+            self._verify_tree(addon, self._model_path(addon))
+            fields = self._confirm_with_worker(addon)
+        except (AddonError, SecurityError) as exc:
+            logger.warning("Add-on '%s' does not load in the updated pack: %s", name, exc)
+            return False
+        if not fields.get("worker_verified"):
+            return False
+        record.update(fields)
+        self._meta_path(addon).write_text(json.dumps(record, indent=2) + chr(10), encoding="utf-8")
+        return True
+
     # ─── Derived state ───────────────────────────────────────────────────────
 
     def is_installed(self, name: str) -> bool:

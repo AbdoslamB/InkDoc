@@ -746,6 +746,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnDoclingVerify        = document.getElementById("btnDoclingVerify");
   const btnDoclingRemove        = document.getElementById("btnDoclingRemove");
   const btnDoclingCancel        = document.getElementById("btnDoclingCancel");
+  const btnDoclingUpdate        = document.getElementById("btnDoclingUpdate");
+  const doclingUpdateNote       = document.getElementById("doclingUpdateNote");
 
   // Recognition-model add-on (gates the two enrichment toggles above it).
   const addonTitleEl            = document.getElementById("addonTitle");
@@ -811,6 +813,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   let doclingState = "unknown";
   let pollInterval = null;
+  // What the running Docling download is, for the toast at the end: "install"
+  // or "update". The progress endpoint reports the same states for both.
+  let doclingOperation = "install";
+  let doclingInfo = null;
 
   // Update the single pill group to reflect selectedEngine. The group is a
   // radiogroup: exactly one pill is aria-checked, and only that pill is in the
@@ -1395,7 +1401,12 @@ document.addEventListener("DOMContentLoaded", () => {
           clearInterval(pollInterval);
           pollInterval = null;
         }
-        showToast("Docling engine pack installed and ready!", "success", { actions: showOnMainScreenAction("docling") });
+        if (doclingOperation === "update") {
+          showToast("Docling is updated.", "success");
+        } else {
+          showToast("Docling engine pack installed and ready!", "success", { actions: showOnMainScreenAction("docling") });
+        }
+        doclingOperation = "install";
         await refreshEngines();
         return;
       }
@@ -1405,7 +1416,11 @@ document.addEventListener("DOMContentLoaded", () => {
           clearInterval(pollInterval);
           pollInterval = null;
         }
-        showToast(`Installation failed: ${prog.error || "Unknown error"}`, "error");
+        const failed = doclingOperation === "update"
+          ? "Update failed; the installed Docling still works"
+          : "Installation failed";
+        showToast(`${failed}: ${prog.error_message || prog.error || "Unknown error"}`, "error");
+        doclingOperation = "install";
         await refreshEngines();
         return;
       }
@@ -1415,7 +1430,8 @@ document.addEventListener("DOMContentLoaded", () => {
           clearInterval(pollInterval);
           pollInterval = null;
         }
-        showToast("Installation cancelled.", "info");
+        showToast(doclingOperation === "update" ? "Update cancelled." : "Installation cancelled.", "info");
+        doclingOperation = "install";
         await refreshEngines();
         return;
       }
@@ -1431,10 +1447,33 @@ document.addEventListener("DOMContentLoaded", () => {
         doclingStatusBadge.className = "engine-badge engine-badge-busy";
       }
       if (btnDoclingInstall) btnDoclingInstall.style.display = "none";
+      if (btnDoclingUpdate) btnDoclingUpdate.style.display = "none";
       if (btnDoclingCancel) btnDoclingCancel.style.display = "inline-flex";
       if (btnDoclingVerify) btnDoclingVerify.style.display = "none";
       if (btnDoclingRemove) btnDoclingRemove.style.display = "none";
     } catch (_) {}
+  }
+
+  // An earlier Docling pack keeps working; the user chooses when to replace it.
+  function renderDoclingUpdate(docling) {
+    const offer = Boolean(docling && docling.status === "installed" && !docling.source_mode && docling.update_available);
+    if (btnDoclingUpdate) {
+      btnDoclingUpdate.style.display = offer ? "inline-flex" : "none";
+      btnDoclingUpdate.disabled = false;
+      btnDoclingUpdate.textContent = "Update Docling";
+    }
+    if (doclingUpdateNote) {
+      doclingUpdateNote.hidden = !offer;
+      if (offer) {
+        const from = docling.docling_version ? `Docling ${docling.docling_version}` : "Your Docling";
+        const to = docling.latest_docling_version ? `Docling ${docling.latest_docling_version}` : "A newer Docling";
+        const size = docling.download_size_bytes ? ` (${formatSize(docling.download_size_bytes)} download)` : "";
+        const security = Array.isArray(docling.security_fixes) && docling.security_fixes.length
+          ? ", with security fixes"
+          : "";
+        doclingUpdateNote.textContent = `${to} is available${size}${security}. ${from} keeps working until you update.`;
+      }
+    }
   }
 
   function startProgressPolling() {
@@ -1452,6 +1491,8 @@ document.addEventListener("DOMContentLoaded", () => {
       const engines = data.engines || data;
 
       const docling = engines.docling;
+      doclingInfo = docling || null;
+      renderDoclingUpdate(docling);
       const markitdown = engines.markitdown;
       const markit = engines.markit;
       if (engines.glm_ocr) renderGlm(engines.glm_ocr);
@@ -3572,6 +3613,39 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  if (btnDoclingUpdate) {
+    btnDoclingUpdate.addEventListener("click", async () => {
+      const d = doclingInfo || {};
+      const to = d.latest_docling_version ? `Docling ${d.latest_docling_version}` : "the new Docling";
+      const ok = await confirmDialog({
+        title: "Update Docling?",
+        message: `Downloads ${to} (${formatSize(d.download_size_bytes)}) and replaces the installed pack once it is verified. If anything fails, the installed Docling keeps working. A Docling conversion in progress finishes first.`,
+        confirmText: "Update",
+        cancelText: "Not now",
+        danger: false,
+        focusCancel: true,
+      });
+      if (!ok) return;
+      btnDoclingUpdate.disabled = true;
+      btnDoclingUpdate.textContent = "Starting…";
+      try {
+        const resp = await fetchWithToken(`${apiBase}/engines/docling/install`, { method: "POST" });
+        if (resp.ok) {
+          doclingOperation = "update";
+          showToast("Downloading the Docling update...", "info");
+          startProgressPolling();
+        } else {
+          const err = await resp.json().catch(() => ({ detail: "Failed to start the update" }));
+          showToast(`Error: ${err.detail}`, "error");
+          renderDoclingUpdate(doclingInfo);
+        }
+      } catch (e) {
+        showToast(`Error starting the update: ${e.message}`, "error");
+        renderDoclingUpdate(doclingInfo);
+      }
+    });
+  }
+
   if (btnDoclingCancel) {
     btnDoclingCancel.addEventListener("click", async () => {
       try {
@@ -3591,7 +3665,9 @@ document.addEventListener("DOMContentLoaded", () => {
           method: "POST",
         });
         const res = await resp.json();
-        if (res.valid) {
+        if (res.valid && res.outdated) {
+          showToast(res.note, "info");
+        } else if (res.valid) {
           showToast(`Integrity check passed! All ${res.files_checked} files verified against SHA-256 signatures.`, "success");
         } else {
           showToast(`Integrity check failed: ${res.reason || "Hash mismatch"}`, "error");

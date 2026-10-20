@@ -143,6 +143,10 @@ jobs:
         if: runner.os == 'Linux'
         run: node tests/notice_dismiss_ui.test.js
 
+      - name: Test the Docling update offer
+        if: runner.os == 'Linux'
+        run: node tests/docling_update_ui.test.js
+
       # installer.iss is otherwise only compiled by release.yml, after the tag is
       # pushed, so a mistake in its Pascal [Code] cost a version number. Compile
       # it here against a stand-in bundle (only the script is being checked).

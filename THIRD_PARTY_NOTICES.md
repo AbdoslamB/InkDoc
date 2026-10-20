@@ -45,7 +45,7 @@ The package list in [python-packages-desktop.txt](LICENSES/python-packages-deskt
 
 ## 2. Docling engine pack (optional, re-hosted by InkDoc)
 
-InkDoc builds this pack from the upstream projects and publishes it on its GitHub release [`docling-pack-v1`](https://github.com/AbdoslamB/InkDoc/releases/tag/docling-pack-v1). It is downloaded only when you install Docling from Settings. The full list of its 107 Python packages and their licenses is in [LICENSES/docling-pack-packages.md](LICENSES/docling-pack-packages.md).
+InkDoc builds this pack from the upstream projects and publishes it on its GitHub release [`docling-pack-v2`](https://github.com/AbdoslamB/InkDoc/releases/tag/docling-pack-v2). It is downloaded only when you install Docling from Settings. The full list of its 107 Python packages and their licenses is in [LICENSES/docling-pack-packages.md](LICENSES/docling-pack-packages.md).
 
 | Component | Used for | Upstream | Copyright holder | License | Distribution | Text |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |

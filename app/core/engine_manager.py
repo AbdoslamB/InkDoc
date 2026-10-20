@@ -32,9 +32,12 @@ from app.core.download_utils import (
     validate_download_url,
 )
 from app.core.engine_manifest import (
+    EARLIER_PACK_ADVISORIES,
+    EARLIER_PACKS,
     EngineManifest,
     EngineStatus,
     PlatformPackInfo,
+    docling_version_in,
     get_current_platform_key,
     is_valid_sha256,
     load_engine_manifest,
@@ -54,6 +57,19 @@ def to_long_path_safe(p: Path) -> Path:
     except Exception:
         pass
     return p
+
+
+def _rename_retrying(src: Path, dst: Path, attempts: int = 5, delay: float = 0.5) -> None:
+    """os.rename, retried briefly: on Windows a process that has only just exited,
+    or an antivirus scan, can keep a file of the folder open for a moment."""
+    for attempt in range(attempts):
+        try:
+            os.rename(src, dst)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(delay)
 
 
 class EngineInstallError(Exception):
@@ -307,6 +323,7 @@ class EngineManager:
         self._cancel_events: dict[str, threading.Event] = {}
         self._progress: dict[str, InstallProgress] = {}
         self._settings_cache: dict[str, Any] | None = None
+        self._latest_docling: tuple[PlatformPackInfo, str] | None = None
         self._settings_lock = threading.Lock()
         # Serialises writes of settings.json. Held while the file is written,
         # which _settings_lock never is, so readers don't wait on the disk.
@@ -491,13 +508,78 @@ class EngineManager:
         if not target_dir.is_dir():
             return False
 
-        pack_info = self.get_platform_pack_info(engine_name)
-        if not pack_info:
+        launch = self._launch_files(engine_name)
+        if not launch:
             return False
 
-        interpreter = target_dir / pack_info.interpreter_path
-        worker_script = target_dir / pack_info.worker_script
+        interpreter = target_dir / launch[0]
+        worker_script = target_dir / launch[2]
         return interpreter.is_file() and worker_script.is_file()
+
+    def installed_pack_version(self, engine_name: str = "docling") -> str | None:
+        """The pack version recorded when the installed pack was set up, or None."""
+        meta_file = self.get_engine_dir(engine_name) / "pack_meta.json"
+        try:
+            version = json.loads(meta_file.read_text(encoding="utf-8")).get("pack_version")
+        except (OSError, ValueError, AttributeError):
+            return None
+        return version if isinstance(version, str) and version else None
+
+    def is_pack_outdated(self, engine_name: str = "docling") -> bool:
+        """True when the installed pack is an earlier one this app still knows how to check."""
+        installed = self.installed_pack_version(engine_name)
+        return (
+            installed is not None
+            and installed != self.manifest.pack_version
+            and self.platform_key in EARLIER_PACKS.get(installed, {})
+        )
+
+    def _launch_files(self, engine_name: str = "docling") -> tuple[str, str | None, str, str | None] | None:
+        """(interpreter path, its SHA-256, worker path, its SHA-256) for the installed pack.
+
+        The manifest's pack, unless an earlier pack is installed: that one is checked
+        against its own launch hashes, so it keeps working until the user updates.
+        A hash is None when the manifest lists none for that file; one it lists,
+        even empty, must be valid.
+        """
+        if self.is_pack_outdated(engine_name):
+            files = EARLIER_PACKS[self.installed_pack_version(engine_name) or ""][self.platform_key]
+            return files.interpreter_path, files.interpreter_sha256, files.worker_script, files.worker_sha256
+        pack_info = self.get_platform_pack_info(engine_name)
+        if not pack_info:
+            return None
+        hashes = pack_info.sha256_files or {}
+        interp = pack_info.interpreter_path.replace("\\", "/")
+        worker = pack_info.worker_script.replace("\\", "/")
+        return interp, hashes.get(interp), worker, hashes.get(worker)
+
+    def launch_paths(self, engine_name: str = "docling") -> tuple[Path, Path] | None:
+        """The interpreter and worker script to launch: the ones verify_launch_integrity checks."""
+        launch = self._launch_files(engine_name)
+        if not launch:
+            return None
+        target_dir = self.get_engine_dir(engine_name)
+        return target_dir / launch[0], target_dir / launch[2]
+
+    def installed_docling_version(self, engine_name: str = "docling") -> str:
+        """Docling's version in the installed pack, from its dist-info folder name, or ""."""
+        root = self.get_engine_dir(engine_name) / "python"
+        for pattern in ("Lib/site-packages/docling-*.dist-info", "lib/python3*/site-packages/docling-*.dist-info"):
+            for dist in root.glob(pattern):
+                version = dist.name[len("docling-"):-len(".dist-info")]
+                if version[:1].isdigit():
+                    return version
+        return ""
+
+    def latest_docling_version(self, engine_name: str = "docling") -> str:
+        """Docling's version in the pack the manifest describes for this platform, or ""."""
+        pack_info = self.get_platform_pack_info(engine_name)
+        if not pack_info:
+            return ""
+        # Read once per manifest entry: the file list has ~32,000 names.
+        if self._latest_docling is None or self._latest_docling[0] is not pack_info:
+            self._latest_docling = (pack_info, docling_version_in(pack_info.sha256_files or {}))
+        return self._latest_docling[1]
 
     def is_engine_installed(self, engine_name: str = "docling") -> bool:
         """Return True if engine pack is installed OR system Docling detected in source mode."""
@@ -573,15 +655,7 @@ class EngineManager:
         # Docling info
         if is_pack:
             pack_ver = self.manifest.pack_version
-            meta_file = docling_dir / "pack_meta.json"
-            installed_ver = None
-            if meta_file.is_file():
-                try:
-                    meta = json.loads(meta_file.read_text(encoding="utf-8"))
-                    installed_ver = meta.get("pack_version")
-                except Exception:
-                    pass
-            installed_ver = installed_ver or pack_ver
+            installed_ver = self.installed_pack_version("docling") or pack_ver
 
             engines_data["docling"] = {
                 "name": "Docling",
@@ -600,6 +674,14 @@ class EngineManager:
                 "update_available": (
                     installed_ver is not None and installed_ver != pack_ver
                 ),
+                # The installed pack's published advisories the update fixes.
+                "security_fixes": (
+                    list(EARLIER_PACK_ADVISORIES.get(installed_ver, ()))
+                    if installed_ver is not None and installed_ver != pack_ver else []
+                ),
+                # Docling's own versions, for the card's "update available" line.
+                "docling_version": self.installed_docling_version("docling"),
+                "latest_docling_version": self.latest_docling_version("docling"),
             }
         elif is_sys:
             engines_data["docling"] = {
@@ -830,6 +912,7 @@ class EngineManager:
                 progress.percent = (downloaded / total) * 100.0
 
         try:
+            self._recover_interrupted_update(engine_name, target_dir)
             # Combined disk space check (download size + uncompressed footprint)
             self._check_disk_space(target_dir, pack_info.size_bytes, pack_info.uncompressed_size_bytes)
 
@@ -943,21 +1026,37 @@ class EngineManager:
             (staging_dir / "pack_meta.json").write_text(json.dumps(meta_payload, indent=2), encoding="utf-8")
 
             # 4. Atomic Install
+            carried: list[str] = []
             if target_dir.exists():
+                # An update. The running worker has the old pack's files open
+                # (Windows refuses to rename them), so it is stopped first, after
+                # any conversion it is doing, and none starts until the swap is done.
+                from app.core.engines.docling_worker_client import DoclingWorkerClient
+
                 old_backup = target_dir.parent / f"{engine_name}.old.tmp"
-                if old_backup.exists():
-                    shutil.rmtree(old_backup, ignore_errors=True)
-                os.rename(target_dir, old_backup)
-                try:
-                    os.rename(staging_dir, target_dir)
-                    shutil.rmtree(old_backup, ignore_errors=True)
-                except Exception:
-                    # Restore on failure
-                    if old_backup.exists() and not target_dir.exists():
-                        os.rename(old_backup, target_dir)
-                    raise
+                with DoclingWorkerClient.get_instance().paused():
+                    if old_backup.exists():
+                        shutil.rmtree(old_backup, ignore_errors=True)
+                    _rename_retrying(target_dir, old_backup)
+                    try:
+                        os.rename(staging_dir, target_dir)
+                    except Exception:
+                        # Restore on failure
+                        if old_backup.exists() and not target_dir.exists():
+                            os.rename(old_backup, target_dir)
+                        raise
+                    carried = self._carry_over_addons(old_backup, target_dir)
+                # Outside the pause: the old pack is tens of thousands of files, and
+                # with antivirus scanning deleting them can take minutes.
+                shutil.rmtree(old_backup, ignore_errors=True)
             else:
                 os.rename(staging_dir, target_dir)
+
+            if carried:
+                # The add-on came from a pack with another Docling; have the new
+                # pack's worker confirm it still loads, so it needn't be downloaded again.
+                progress.status = "verifying"
+                self._confirm_carried_addons(carried)
 
             progress.status = "complete"
             progress.percent = 100.0
@@ -986,6 +1085,51 @@ class EngineManager:
             self._install_lock.release()
             self._cancel_events.pop(engine_name, None)
 
+    @staticmethod
+    def _recover_interrupted_update(engine_name: str, target_dir: Path) -> None:
+        """Undo an update that stopped between its two renames (InkDoc closed or
+        crashed): the previous pack is left in <name>.old.tmp and none is installed.
+        With a pack installed, a leftover <name>.old.tmp is only waste. Runs under
+        the install lock, so no update of this process is half-way through."""
+        old_backup = target_dir.parent / f"{engine_name}.old.tmp"
+        if not old_backup.exists():
+            return
+        try:
+            if not target_dir.exists():
+                os.rename(old_backup, target_dir)
+                logger.warning("Restored the %s pack left by an update that did not finish.", engine_name)
+            else:
+                shutil.rmtree(old_backup, ignore_errors=True)
+        except OSError as exc:
+            logger.warning("Could not tidy up after an unfinished %s update: %s", engine_name, exc)
+
+    @staticmethod
+    def _carry_over_addons(old_pack: Path, new_pack: Path) -> list[str]:
+        """Keep the add-ons installed inside the replaced pack. Never fails the update."""
+        try:
+            from app.core.addon_manager import AddonManager
+
+            return AddonManager.get_instance().carry_over(old_pack, new_pack)
+        except Exception as exc:
+            logger.warning("Could not keep the add-ons across the pack update: %s", exc)
+            return []
+
+    @staticmethod
+    def _confirm_carried_addons(names: list[str]) -> None:
+        """Ask the new pack's worker to load each carried add-on. Never fails the update."""
+        try:
+            from app.core.addon_manager import AddonManager
+
+            mgr = AddonManager.get_instance()
+        except Exception as exc:
+            logger.warning("Could not confirm the add-ons with the updated pack: %s", exc)
+            return
+        for name in names:
+            try:
+                mgr.reconfirm(name)
+            except Exception as exc:
+                logger.warning("Could not confirm the add-on '%s' with the updated pack: %s", name, exc)
+
     # ─── Removal & Integrity Verification ────────────────────────────────────
 
     def remove_engine(self, engine_name: str = "docling") -> bool:
@@ -1012,40 +1156,33 @@ class EngineManager:
 
     def verify_launch_integrity(self, engine_name: str = "docling") -> bool:
         """Re-hash interpreter and worker script before every launch (Security Item #7)."""
-        pack_info = self.get_platform_pack_info(engine_name)
-        if not pack_info:
+        launch = self._launch_files(engine_name)
+        if not launch:
             return False
+        interp_rel, interp_sha, worker_rel, worker_sha = launch
 
         target_dir = self.get_engine_dir(engine_name)
-        interpreter = target_dir / pack_info.interpreter_path
-        worker_script = target_dir / pack_info.worker_script
+        interpreter = target_dir / interp_rel
+        worker_script = target_dir / worker_rel
 
         if not interpreter.is_file() or not worker_script.is_file():
             return False
 
-        # If file hashes are provided in the manifest, verify them
-        if pack_info.sha256_files:
-            rel_interp = pack_info.interpreter_path.replace("\\", "/")
-            if rel_interp in pack_info.sha256_files:
-                exp = pack_info.sha256_files[rel_interp].lower().strip() if pack_info.sha256_files[rel_interp] else ""
-                if not is_valid_sha256(exp):
-                    logger.error("Invalid SHA-256 in manifest for interpreter: %r", exp)
-                    return False
-                actual_hash = hashlib.sha256(interpreter.read_bytes()).hexdigest().lower()
-                if actual_hash != exp:
-                    logger.error("Interpreter integrity check failed for %s", interpreter)
-                    return False
-
-            rel_worker = pack_info.worker_script.replace("\\", "/")
-            if rel_worker in pack_info.sha256_files:
-                exp = pack_info.sha256_files[rel_worker].lower().strip() if pack_info.sha256_files[rel_worker] else ""
-                if not is_valid_sha256(exp):
-                    logger.error("Invalid SHA-256 in manifest for worker script: %r", exp)
-                    return False
-                actual_hash = hashlib.sha256(worker_script.read_bytes()).hexdigest().lower()
-                if actual_hash != exp:
-                    logger.error("Worker script integrity check failed for %s", worker_script)
-                    return False
+        # A file the manifest lists no hash for is not checked (as before);
+        # one it lists must be a valid hash, and match.
+        for label, path, expected in (
+            ("interpreter", interpreter, interp_sha),
+            ("worker script", worker_script, worker_sha),
+        ):
+            if expected is None:
+                continue
+            exp = expected.lower().strip()
+            if not is_valid_sha256(exp):
+                logger.error("Invalid SHA-256 in manifest for %s: %r", label, exp)
+                return False
+            if hashlib.sha256(path.read_bytes()).hexdigest().lower() != exp:
+                logger.error("%s integrity check failed for %s", label.capitalize(), path)
+                return False
 
         return True
 
@@ -1058,6 +1195,28 @@ class EngineManager:
         target_dir = self.get_engine_dir(engine_name)
         if not target_dir.is_dir():
             return {"valid": False, "reason": "Engine pack is not installed"}
+
+        # An earlier pack: this app holds only its launch hashes, not its full file list.
+        if self.is_pack_outdated(engine_name):
+            installed = self.installed_pack_version(engine_name)
+            if not self.verify_launch_integrity(engine_name):
+                return {
+                    "valid": False,
+                    "outdated": True,
+                    "reason": f"Docling pack {installed} failed its check. Update Docling to replace it.",
+                }
+            return {
+                "valid": True,
+                "outdated": True,
+                "engine": engine_name,
+                "pack_version": installed,
+                "latest_pack_version": self.manifest.pack_version,
+                "path": str(target_dir),
+                "note": (
+                    f"Docling pack {installed} is an earlier version: only its interpreter and "
+                    "worker were checked. Update Docling to get the current pack."
+                ),
+            }
 
         # Check interpreter & worker script existence
         interpreter = target_dir / pack_info.interpreter_path
@@ -1094,5 +1253,6 @@ class EngineManager:
             "valid": True,
             "engine": engine_name,
             "pack_version": self.manifest.pack_version,
+            "files_checked": len(pack_info.sha256_files),
             "path": str(target_dir),
         }

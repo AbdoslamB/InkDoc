@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.3.0] - 2026-11-01
 
+**Upgrading from 1.2:** your settings, engines and add-ons are kept. On Linux,
+1.3.0 needs Ubuntu 24.04, Debian 13, Fedora 40 or newer; on older systems, keep
+1.2.0. On a Mac, the download is now a disk image. If you use Docling, update it
+afterwards in Settings → Engines → Docling: the update includes security fixes.
+
 ### Added
 - **Auto quality** (Settings → General): *Fast* (the default; conversions are
   exactly as before), *Balanced* or *Thorough*. The API has a matching
@@ -55,18 +60,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine choice and hidden engines, auto-save, Auto's tips, the Docling
   fallback, the PDF check, Auto quality and its steps, layout width, text size,
   math formulas and the daily update check back to how InkDoc starts out, after
-  asking. Installed engines
-  and add-ons and their settings, the save folder and converted files are kept.
-  The API has a matching `POST /settings/reset`.
+  asking. Installed engines and add-ons and their settings, the save folder and
+  converted files are kept. The API has a matching `POST /settings/reset`.
 - **Tables on scanned pages (Thorough).** With GLM-OCR and the layout model,
   InkDoc finds each table on a scanned page and has GLM-OCR read it on its
   own. That reading takes the place of what GLM-OCR wrote for the whole page
   (often plain lines, side-by-side tables run together, or a shifted header)
   only when it holds the same words; a note or source line next to the table
-  stays where it was. Each rebuilt table is
-  marked in the file (`source=glm-ocr checked=layout,page-reading`). On
-  InkDoc's table test pages scanned at 200 DPI, tables read exactly went from
-  4 to 9 of 13, with no invented cells.
+  stays where it was. Each rebuilt table is marked in the file
+  (`source=glm-ocr checked=layout,page-reading`). On InkDoc's table test pages
+  scanned at 200 DPI, tables read exactly went from 4 to 9 of 13, with no
+  invented cells.
 - **Tables without lines (Thorough).** A borderless table that the engine
   wrote as loose text or dropped is found from the positions of the PDF's
   words. It is rebuilt only when GLM-OCR's own reading of that area agrees,
@@ -220,18 +224,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "Zoë" near the end, say) now converts. MarkItDown guessed the file's
   encoding from its first 64 KB and failed with "'ascii' codec can't decode".
   InkDoc now tries such a file again as UTF-8 when it is valid UTF-8.
-- On Windows, the window can now be **resized from its top edge** and its top
-  corners, like any other window; only the sides, bottom and outer corners
-  worked before. The whole title bar, including its top and bottom margins and
-  the gaps between its buttons, now moves the window, and double-clicking it
-  maximises and restores the window through Windows itself, so it also snaps
-  as usual.
-- On Windows, switching between the light and dark theme no longer turns the
-  maximise button to the new colour before the rest of the title bar (most
-  visibly when switching to dark): it now changes as the animation reaches it.
-- On Windows, a second InkDoc window opened while another one is open now gets
-  its own resizable border, Snap Layouts and maximise button. They could be set
-  up on the other InkDoc window instead, which has the same title.
+- **The Windows title bar behaves like any other window's.** The window can be
+  resized from its top edge and top corners (only the sides, bottom and outer
+  corners worked before). The whole title bar, its margins and the gaps
+  between its buttons included, moves the window, and a double-click
+  maximises and restores it, with Windows' own snapping. Switching the theme
+  no longer turns the maximise button to the new colour before the rest of
+  the title bar. A second InkDoc window now gets its own resizable border,
+  Snap Layouts and maximise button, instead of these being set up on the
+  first one.
 
 ### Security
 - **Docling 2.140.0, with security fixes.** If you have Docling, update it in

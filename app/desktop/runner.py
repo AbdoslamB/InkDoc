@@ -208,14 +208,68 @@ _GWL_STYLE = -16
 _SWP_FLAGS = 0x0002 | 0x0001 | 0x0004 | 0x0020  # NOMOVE|NOSIZE|NOZORDER|FRAMECHANGED
 
 
+def _pick_own_window(windows, title: str, pid: int) -> int:
+    """The first of (hwnd, owner pid, visible, title) rows that is this process's
+    visible window with this title, or 0."""
+    for hwnd, owner, visible, text in windows:
+        if owner == pid and visible and text == title:
+            return hwnd
+    return 0
+
+
+def _top_level_windows():
+    """(hwnd, owner pid, visible, title) for every top-level window, in z-order.
+
+    Titles are read only for this process's visible windows, and with
+    InternalGetWindowText, which reads the stored text: GetWindowTextW sends
+    WM_GETTEXT to a window of this process owned by another thread, and this
+    runs on pywebview's event thread, so it would wait on the UI thread.
+    """
+    import ctypes
+    import ctypes.wintypes as wt
+
+    # A private handle, so these argtypes don't change ctypes.windll.user32 for
+    # the rest of the process.
+    user32 = ctypes.WinDLL("user32")
+    user32.GetWindowThreadProcessId.argtypes = [wt.HWND, ctypes.POINTER(wt.DWORD)]
+    user32.IsWindowVisible.argtypes = [wt.HWND]
+    user32.InternalGetWindowText.argtypes = [wt.HWND, wt.LPWSTR, ctypes.c_int]
+    me = os.getpid()
+    rows = []
+
+    @ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+    def visit(hwnd, _):
+        try:
+            owner = wt.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+            visible = bool(user32.IsWindowVisible(hwnd))
+            text = ""
+            if owner.value == me and visible:
+                buf = ctypes.create_unicode_buffer(256)
+                user32.InternalGetWindowText(hwnd, buf, 256)
+                text = buf.value
+            rows.append((hwnd or 0, owner.value, visible, text))
+        except Exception:
+            pass  # one window that can't be read; keep going
+        return True
+
+    user32.EnumWindows(visit, 0)
+    return rows
+
+
 def _find_window_handle(title: str) -> int:
-    """Return the top-level HWND for our window, or 0."""
+    """Return the top-level HWND for our window, or 0.
+
+    Only a window of this process counts. FindWindowW matched the title in any
+    process, and every InkDoc window has the same title: with a second InkDoc
+    open (another copy, or a window attached to this one's server) the chrome
+    could be installed on that window instead, or fail on it when it runs
+    elevated, leaving this one without Snap Layouts or its native button.
+    """
     if not USE_CUSTOM_TITLEBAR:
         return 0
     try:
-        import ctypes
-
-        return ctypes.windll.user32.FindWindowW(None, title) or 0
+        return _pick_own_window(_top_level_windows(), title, os.getpid())
     except Exception:
         return 0
 

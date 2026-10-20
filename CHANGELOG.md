@@ -229,6 +229,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - On Windows, switching between the light and dark theme no longer turns the
   maximise button to the new colour before the rest of the title bar (most
   visibly when switching to dark): it now changes as the animation reaches it.
+- On Windows, a second InkDoc window opened while another one is open now gets
+  its own resizable border, Snap Layouts and maximise button. They could be set
+  up on the other InkDoc window instead, which has the same title.
 
 ### Security
 - **Docling 2.140.0, with security fixes.** If you have Docling, update it in

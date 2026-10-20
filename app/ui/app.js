@@ -3913,11 +3913,8 @@ document.addEventListener("DOMContentLoaded", () => {
         withWindowApi((api) => api.close_window().catch(() => {}));
       });
     }
-
-    // Double-clicking the title bar toggles maximise, as every platform expects.
-    document.querySelectorAll(".pywebview-drag-region").forEach((region) => {
-      region.addEventListener("dblclick", toggleMaximize);
-    });
+    // Dragging the header and double-clicking it are Windows' own: the header
+    // is a native caption region (app-region in style.css).
   }
 
   // ─── Theme Toggle ────────────────────────────────────────────────────────

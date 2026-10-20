@@ -23,9 +23,9 @@
   <div class="app-container">
     <!-- Header -->
     <header class="app-header">
-      <!-- pywebview walks up from the click target to find a drag region, so the
-           buttons must sit outside it or every click would also drag the window. -->
-      <div class="brand pywebview-drag-region">
+      <!-- In the frameless Windows window the whole header is the caption
+           (app-region in style.css); its buttons opt out there. -->
+      <div class="brand">
         <div class="brand-icon">
           <img src="/static/logo.svg" alt="InkDoc Logo" width="36" height="36" class="brand-logo-img">
         </div>
@@ -34,7 +34,7 @@
         </div>
       </div>
 
-      <div class="titlebar-drag-spacer pywebview-drag-region" id="titlebarDragSpacer"></div>
+      <div class="titlebar-drag-spacer" id="titlebarDragSpacer"></div>
 
       <div class="header-actions">
         <button id="themeToggle" class="btn btn-icon" title="Toggle Light/Dark theme">

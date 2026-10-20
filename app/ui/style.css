@@ -274,18 +274,21 @@ html[data-layout-width="full"] {
   min-width: 0;
 }
 
-/* Hands the drag strip to WebView2 as a real caption region, so the shell sees
-   a native drag (edge snapping, drag-to-top maximise) instead of the JavaScript
-   SetWindowPos loop pywebview falls back to. Only takes effect once
-   IsNonClientRegionSupportEnabled is set on the WebView2; ignored otherwise.
-   The window buttons opt back out so their clicks still reach the DOM. */
-.has-custom-titlebar .pywebview-drag-region {
+/* The whole header is the window's caption. WebView2 hands it to Windows as
+   one (IsNonClientRegionSupportEnabled), so dragging, double-click to maximise,
+   edge snapping and the system menu are the shell's own, with no JavaScript.
+   Its buttons opt back out so their clicks still reach the page, and so do the
+   Settings drawer and scrim, which sit inside the header in the DOM. Over a
+   caption region WebView2 itself makes the top few pixels the resize edge. */
+.has-custom-titlebar .app-header {
   -webkit-app-region: drag;
   app-region: drag;
 }
 
 .has-custom-titlebar .window-control,
-.has-custom-titlebar .btn-icon {
+.has-custom-titlebar .btn-icon,
+.has-custom-titlebar .settings-scrim,
+.has-custom-titlebar .settings-drawer {
   -webkit-app-region: no-drag;
   app-region: no-drag;
 }

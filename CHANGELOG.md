@@ -220,6 +220,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "Zoë" near the end, say) now converts. MarkItDown guessed the file's
   encoding from its first 64 KB and failed with "'ascii' codec can't decode".
   InkDoc now tries such a file again as UTF-8 when it is valid UTF-8.
+- On Windows, the window can now be **resized from its top edge** and its top
+  corners, like any other window; only the sides, bottom and outer corners
+  worked before. The whole title bar, including its top and bottom margins and
+  the gaps between its buttons, now moves the window, and double-clicking it
+  maximises and restores the window through Windows itself, so it also snaps
+  as usual.
 
 ### Security
 - **Docling 2.140.0, with security fixes.** If you have Docling, update it in

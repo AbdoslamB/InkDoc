@@ -897,9 +897,11 @@ def run_desktop(
         background_color=_window_background(settings),  # no flash of the other theme
         text_select=True,
         frameless=USE_CUSTOM_TITLEBAR,
-        # Only elements marked .pywebview-drag-region move the window. easy_drag would
-        # make the whole surface draggable, so selecting text or dragging a file onto
-        # the drop zone would move the window instead.
+        # The header moves the window as a native caption region (app-region in
+        # style.css), so the page carries no .pywebview-drag-region and pywebview's
+        # JavaScript move loop never runs. easy_drag would make the whole surface
+        # draggable, so selecting text or dragging a file onto the drop zone would
+        # move the window instead.
         easy_drag=False,
     )
     window_controls._attach(window, app_url, owns_server=server_thread is not None)

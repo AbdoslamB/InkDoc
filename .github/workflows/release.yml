@@ -297,12 +297,20 @@ jobs:
           python scripts/linux_host_libs.py check "$bundle/_internal"
           echo "Linux bundle after pruning: $(du -sh "$bundle" | cut -f1)"
 
-      - name: Package (macOS zip)
+      # A read-only disk image (lzfse) holding inkdoc.app and a link to /Applications. The
+      # script checks the app's signature before packaging and inside the mounted image.
+      - name: Package (macOS disk image)
         if: runner.os == 'macOS'
         shell: bash
-        run: |
-          cd dist
-          ditto -c -k --keepParent inkdoc.app "../inkdoc-macos.zip"
+        run: python scripts/build_dmg.py dist/inkdoc.app inkdoc-macos.dmg
+
+      # Manual runs only, never a tagged release: each compression format's size and mount
+      # time, in the job summary, for choosing between them.
+      - name: Compare disk image formats (macOS, manual runs)
+        if: runner.os == 'macOS' && github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        shell: bash
+        run: python scripts/build_dmg.py dist/inkdoc.app --compare-formats
 
       - name: Package (Linux AppImage)
         if: runner.os == 'Linux'
@@ -316,6 +324,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path release
           if (Test-Path "inkdoc-${{ matrix.asset_name }}.zip") { Copy-Item "inkdoc-${{ matrix.asset_name }}.zip" release/ }
+          if (Test-Path "inkdoc-macos.dmg") { Copy-Item "inkdoc-macos.dmg" release/ }
           if (Test-Path "inkdoc-linux-x86_64.AppImage") { Copy-Item "inkdoc-linux-x86_64.AppImage" release/ }
           if (Test-Path "dist-onefile/inkdoc.exe") { Copy-Item "dist-onefile/inkdoc.exe" release/ }
           if (Test-Path "dist-installer/inkdoc-setup.exe") { Copy-Item "dist-installer/inkdoc-setup.exe" release/ }
@@ -368,11 +377,12 @@ jobs:
           python scripts/smoke_test_artifact.py --artifact release/inkdoc.exe --type onefile --expected-version "${{ steps.ver.outputs.version }}"
           python scripts/smoke_test_artifact.py --artifact release/inkdoc-windows.zip --type zip --expected-version "${{ steps.ver.outputs.version }}"
 
-      - name: Smoke-test macOS zip artifact
+      # Mounted read-only, the app copied out of it (as a user drags it), then run from there.
+      - name: Smoke-test macOS disk image artifact
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          python scripts/smoke_test_artifact.py --artifact release/inkdoc-macos.zip --type zip --expected-version "${{ steps.ver.outputs.version }}"
+          python scripts/smoke_test_artifact.py --artifact release/inkdoc-macos.dmg --type dmg --expected-version "${{ steps.ver.outputs.version }}"
 
       # The GUI path (a window under Xvfb, checked to have drawn something) with
       # APPIMAGE_EXTRACT_AND_RUN, then once more through the FUSE mount when the runner has it.
@@ -400,12 +410,14 @@ jobs:
           # baseline + 6%, so a real regression trips the guard while normal drift does
           # not. Re-measure after each release rather than letting these go stale: the
           # caps before this were still set against v1.0.1 and left 1.4 MB of headroom
-          # on inkdoc-macos.zip, which the engine manifest alone would have exceeded.
+          # on the macOS zip, which the engine manifest alone would have exceeded.
           # The AppImage baseline is the 1.3.0 prototype built in an ubuntu:24.04 container
           # with this workflow's steps (2026-10-19); re-measure it from the first CI build.
+          # The macOS disk image (1.3.0) still carries the last macOS zip's numbers: replace
+          # them with the size the first CI build reports.
           $limits = @{
             "inkdoc-linux-x86_64.AppImage" = @{ Baseline = 113646072; Cap = 120464836 }
-            "inkdoc-macos.zip" = @{ Baseline = 120399830; Cap = 127623819 }
+            "inkdoc-macos.dmg" = @{ Baseline = 120399830; Cap = 127623819 }
             "inkdoc-windows.zip" = @{ Baseline = 125443527; Cap = 132970138 }
             "inkdoc.exe" = @{ Baseline = 122880190; Cap = 130253001 }
             "inkdoc-setup.exe" = @{ Baseline = 93829365; Cap = 99459126 }
@@ -413,7 +425,7 @@ jobs:
           if ($env:RUNNER_OS -eq "Linux") {
             $names = @("inkdoc-linux-x86_64.AppImage")
           } elseif ($env:RUNNER_OS -eq "macOS") {
-            $names = @("inkdoc-macos.zip")
+            $names = @("inkdoc-macos.dmg")
           } else {
             $names = @("inkdoc-windows.zip", "inkdoc.exe", "inkdoc-setup.exe")
           }
@@ -568,7 +580,9 @@ jobs:
         run: |
           TAG="${{ github.ref_name }}"
           assets=$(gh release view "$TAG" -R "${{ github.repository }}" --json assets -q '.assets[].name')
-          for required in inkdoc-setup.exe inkdoc.exe inkdoc-windows.zip inkdoc-macos.zip inkdoc-linux-x86_64.AppImage; do
+          # The same names as sign_manifest.py's TARGET_ASSETS plus inkdoc.exe
+          # (tests/test_release_assets.py).
+          for required in inkdoc-setup.exe inkdoc.exe inkdoc-windows.zip inkdoc-macos.dmg inkdoc-linux-x86_64.AppImage; do
             if ! printf '%s\n' "$assets" | grep -Fxq "$required"; then
               echo "::error::Draft release '$TAG' is missing required asset: $required"
               exit 1

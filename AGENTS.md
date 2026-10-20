@@ -177,8 +177,11 @@ and fedora:44.
   `--onedir --windowed` bundle per OS (`--collect-all markitdown
   --collect-all magika`, needed because both do dynamic/plugin-style
   imports PyInstaller's static analysis can't see), packages it (Windows
-  installer, onefile and zip; macOS zip; Linux AppImage), smoke-tests every
-  artifact and attaches them to the draft GitHub Release.
+  installer, onefile and zip; macOS disk image, `scripts/build_dmg.py`;
+  Linux AppImage), smoke-tests every artifact (the disk image mounted
+  read-only and its app copied out first) and attaches them to the draft
+  GitHub Release. Every list of asset names (the publish job's, the size caps,
+  `sign_manifest.py`'s `TARGET_ASSETS`) must agree: `tests/test_release_assets.py`.
 - `dependabot.yml` — weekly PRs for `pip` and `github-actions` deps.
 
 Branch protection is enabled on `main` (required PR review) but

@@ -104,7 +104,7 @@ git push origin vX.Y.Z
 ```
 
 GitHub Actions will automatically run `.github/workflows/release.yml`, which:
-- Compiles binaries for Windows (`inkdoc-setup.exe`, `inkdoc.exe`, `inkdoc-windows.zip`), macOS (`inkdoc-macos.zip`), and Linux (`inkdoc-linux-x86_64.AppImage`, from 1.3.0; earlier releases shipped `inkdoc-linux.zip`).
+- Compiles binaries for Windows (`inkdoc-setup.exe`, `inkdoc.exe`, `inkdoc-windows.zip`), macOS (`inkdoc-macos.dmg`, from 1.3.0; earlier releases shipped `inkdoc-macos.zip`), and Linux (`inkdoc-linux-x86_64.AppImage`, from 1.3.0; earlier releases shipped `inkdoc-linux.zip`).
 - Runs the Linux AppImage's smoke test on Ubuntu 24.04, Debian 13 and Fedora 44 (`linux-compat`); the `publish-release` job (its asset check, and publishing for pre-releases) runs only when all three pass.
 - Injects the build version dynamically into `app/_version.py`.
 - Generates SHA-256 checksums (`SHA256SUMS-*.txt`).
@@ -151,7 +151,8 @@ upon their next check — provided their embedded public keys include the key th
 this manifest.
 
 6. **Only now** push a commit that renames a download in `README.md` or `docs/index.html`
-   (as 1.3.0's switch from `inkdoc-linux.zip` to `inkdoc-linux-x86_64.AppImage` does). Their
+   (as 1.3.0's switches from `inkdoc-linux.zip` to `inkdoc-linux-x86_64.AppImage` and from
+   `inkdoc-macos.zip` to `inkdoc-macos.dmg` do). Their
    links go through `/releases/latest/download/`, and the landing page pins them to the
    newest stable tag, so a new file name 404s until the release that has it is Latest.
 

@@ -166,6 +166,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an update the system can't run, and a downloaded AppImage is made executable.
   Without WebKit2GTK, InkDoc opens in your web browser and says what to
   install; it keeps running until you stop it (`pkill -f inkdoc`).
+- **The macOS download is a disk image** (`inkdoc-macos.dmg` instead of
+  `inkdoc-macos.zip`): open it and drag InkDoc onto Applications. Updating
+  from 1.2 on a Mac saves the disk image to Downloads.
 - **MarkItDown 0.1.8**, a release of bug fixes. In CSV files, a `|` or a line
   break inside a value no longer breaks the table, and a byte-order mark no
   longer ends up in the first column's name. Underlined and double-struck text

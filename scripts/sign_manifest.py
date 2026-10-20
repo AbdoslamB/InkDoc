@@ -42,6 +42,18 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 DEFAULT_KEY_PATH = Path.home() / ".inkdoc-keys" / "inkdoc_signing_key.pem"
 
+# Release asset file name -> the platform key the updater looks up. Every asset release.yml
+# requires is here except inkdoc.exe, which has no update path (tests/test_release_assets.py).
+TARGET_ASSETS = {
+    "inkdoc-setup.exe": "windows-x86_64-installer",
+    "inkdoc-windows.zip": "windows-x86_64-portable",
+    "inkdoc-macos.dmg": "macos-arm64",
+    "inkdoc-linux-x86_64.AppImage": "linux-x86_64",
+}
+# The oldest glibc each asset runs on: the build host's (release.yml's runner). Clients
+# from 1.3.0 on refuse an update their system can't start; older ones ignore the field.
+MIN_GLIBC = {"linux-x86_64": "2.39"}
+
 
 def compute_sha256(file_path: Path) -> str:
     h = hashlib.sha256()
@@ -194,17 +206,6 @@ def main() -> int:
     if not assets:
         print("[Error] No assets found in target release.", file=sys.stderr)
         return 1
-
-    # Mapping from asset file name to expected platform asset key
-    TARGET_ASSETS = {
-        "inkdoc-setup.exe": "windows-x86_64-installer",
-        "inkdoc-windows.zip": "windows-x86_64-portable",
-        "inkdoc-macos.zip": "macos-arm64",
-        "inkdoc-linux-x86_64.AppImage": "linux-x86_64",
-    }
-    # The oldest glibc each asset runs on: the build host's (release.yml's runner). Clients
-    # from 1.3.0 on refuse an update their system can't start; older ones ignore the field.
-    MIN_GLIBC = {"linux-x86_64": "2.39"}
 
     manifest_assets: dict[str, Any] = {}
     temp_dir = Path(tempfile.mkdtemp(prefix="inkdoc_release_"))

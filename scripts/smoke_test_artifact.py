@@ -16,6 +16,11 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
+try:  # imported by the tests, from the repo root
+    from scripts.build_dmg import copy_app, mounted, verify_signature
+except ImportError:  # run as a script: scripts/ is sys.path[0]
+    from build_dmg import copy_app, mounted, verify_signature
+
 
 def get_free_port() -> int:
     """Find a random ephemeral port that is free on 127.0.0.1."""
@@ -85,14 +90,25 @@ def prepare_target_executable(artifact_path: Path, artifact_type: str, temp_dir:
         extract_dir = temp_dir / "unpacked"
         extract_dir.mkdir(parents=True, exist_ok=True)
         print(f"[*] Unpacking {artifact_path.name} to {extract_dir} ...")
-        if sys.platform == "darwin":
-            subprocess.run(["ditto", "-x", "-k", str(artifact_path), str(extract_dir)], check=True)
-        elif shutil.which("unzip"):
+        if shutil.which("unzip"):
             subprocess.run(["unzip", "-q", str(artifact_path), "-d", str(extract_dir)], check=True)
         else:
             with zipfile.ZipFile(artifact_path, "r") as z:
                 z.extractall(extract_dir)
         return find_executable(extract_dir)
+
+    if artifact_type == "dmg":
+        if sys.platform != "darwin":
+            raise RuntimeError("Disk image smoke testing is only supported on macOS runners.")
+        mountpoint = temp_dir / "mnt"
+        app_dir = temp_dir / "app"
+        app_dir.mkdir(parents=True, exist_ok=True)
+        print(f"[*] Mounting {artifact_path.name} at {mountpoint} ...")
+        with mounted(artifact_path, mountpoint):
+            # What a user does: drag the app out of the image into a folder of theirs.
+            copy_app(mountpoint / "inkdoc.app", app_dir / "inkdoc.app")
+        verify_signature(app_dir / "inkdoc.app")
+        return find_executable(app_dir)
 
     if artifact_type == "appimage":
         if not sys.platform.startswith("linux"):
@@ -122,7 +138,9 @@ def prepare_target_executable(artifact_path: Path, artifact_type: str, temp_dir:
             )
         return find_executable(install_dir)
 
-    raise ValueError(f"Unknown artifact type '{artifact_type}'. Expected: onefile, zip, appimage, or installer.")
+    raise ValueError(
+        f"Unknown artifact type '{artifact_type}'. Expected: onefile, zip, dmg, appimage, or installer."
+    )
 
 
 def launch_env(artifact_type: str, use_fuse: bool = False) -> dict[str, str]:
@@ -494,7 +512,7 @@ def main() -> int:
     parser.add_argument("--artifact", type=Path, required=True, help="Path to artifact to test.")
     parser.add_argument(
         "--type",
-        choices=["onefile", "zip", "appimage", "installer"],
+        choices=["onefile", "zip", "dmg", "appimage", "installer"],
         required=True,
         help="Artifact distribution packaging type.",
     )

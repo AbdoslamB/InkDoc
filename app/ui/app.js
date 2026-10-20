@@ -3925,11 +3925,49 @@ document.addEventListener("DOMContentLoaded", () => {
   let requestedTheme = document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";
   let themeRun = 0; // the newest switch; only it may clean up after itself
 
-  function applyTheme(theme) {
-    document.documentElement.setAttribute("data-theme", theme);
-    // The maximise button is drawn natively, so it can't pick up the new
-    // palette from CSS on its own.
+  // The maximise button is drawn natively, so it can't pick up the new
+  // palette from CSS on its own.
+  function syncTitlebar() {
     if (window.__inkdocSyncTitlebar) window.__inkdocSyncTitlebar();
+  }
+
+  function applyTheme(theme, sync = true) {
+    document.documentElement.setAttribute("data-theme", theme);
+    if (sync) syncTitlebar();
+  }
+
+  // The natively drawn maximise button sits outside the page, so the circle
+  // can't reveal it: it switches all at once, when told. Tell it when the
+  // circle's edge reaches its centre, one frame early for the trip to Windows
+  // and its repaint (about 15 ms). Shrinking, that is near the end of the
+  // circle, since the button is close to its centre.
+  function syncTitlebarAsCircleCrosses(circle, cx, cy, radius, shrinking, sync) {
+    const button = document.getElementById("winMaximize");
+    if (!button || !window.__inkdocSyncTitlebar || typeof window.requestAnimationFrame !== "function") {
+      sync();
+      return;
+    }
+    const b = button.getBoundingClientRect();
+    const reach = Math.hypot(b.left + b.width / 2 - cx, b.top + b.height / 2 - cy) / radius;
+    // The eased progress at which the edge is at the button. A window with no
+    // size has none; the transition's end syncs it then.
+    const at = shrinking ? 1 - reach : reach;
+    if (!Number.isFinite(at)) return;
+    let last = null;
+    const step = () => {
+      const timing = circle.effect && circle.effect.getComputedTiming();
+      const progress = timing ? timing.progress : null;
+      // Ended, cancelled or never started: the transition's end syncs it.
+      if (typeof progress !== "number") return;
+      const next = last === null ? progress : progress + (progress - last);
+      if (next >= at) {
+        sync();
+        return;
+      }
+      last = progress;
+      window.requestAnimationFrame(step);
+    };
+    window.requestAnimationFrame(step);
   }
 
   // Without the circle: Restore defaults, another window's change, an import.
@@ -3966,6 +4004,19 @@ document.addEventListener("DOMContentLoaded", () => {
     if (toDark) root.classList.add("theme-to-dark");
     else root.classList.remove("theme-to-dark");
     let circle = null;
+    // The title bar button gets this switch's palette once: when the circle
+    // reaches it, or at the end if the circle never ran. Only while this is
+    // the newest switch; a newer one syncs for itself.
+    let synced = false;
+    const syncOnce = () => {
+      if (synced || run !== themeRun) return;
+      try {
+        syncTitlebar();
+        synced = true;
+      } catch (_) {
+        // Left for the transition's end to try again.
+      }
+    };
     // A newer click starts its own transition and skips this one; this one's
     // end must not take the classes away from it. The circle is cancelled
     // either way: held at its end (below), it would otherwise clip the next
@@ -3975,13 +4026,14 @@ document.addEventListener("DOMContentLoaded", () => {
       if (run !== themeRun) return;
       root.classList.remove("theme-switching");
       root.classList.remove("theme-to-dark");
+      syncOnce();
     };
 
     let transition;
     try {
-      transition = document.startViewTransition(() => applyTheme(next));
+      transition = document.startViewTransition(() => applyTheme(next, false));
     } catch (_) {
-      applyTheme(next);
+      applyTheme(next, false);
       finish();
       return;
     }
@@ -4003,6 +4055,7 @@ document.addEventListener("DOMContentLoaded", () => {
             pseudoElement: toDark ? "::view-transition-old(root)" : "::view-transition-new(root)",
           }
         );
+        syncTitlebarAsCircleCrosses(circle, x, y, radius, toDark, syncOnce);
       })
       .catch(() => {});
     transition.finished.then(finish, finish);

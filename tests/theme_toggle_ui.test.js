@@ -5,7 +5,9 @@
 // back into the button. Without them, or with reduced motion, the theme
 // switches at once. Either way the theme is saved (settings.json, through
 // savePrefs; browser storage doesn't survive the desktop window) and the
-// natively drawn Windows title bar button is re-synced.
+// natively drawn Windows title bar button is re-synced: at once without the
+// circle, and with it when the circle's edge reaches the button (a frame early),
+// or at the transition's end if the circle never got there.
 //
 // Follows save_folder_ui.test.js: slice the block out of the source, run it
 // against stubs, no npm dependency.
@@ -18,7 +20,12 @@ const end = source.indexOf("  // ─── Auto-save Toggle ", start);
 if (start < 0 || end < 0) throw new Error("could not locate the theme toggle block in app.js");
 const block = source.slice(start, end);
 
-function setup({ initial = "dark", viewTransitions = false, reduceMotion = false, failReady = false, throwOnStart = false } = {}) {
+function setup({
+    initial = "dark", viewTransitions = false, reduceMotion = false, failReady = false,
+    throwOnStart = false, maximizeButton = null, nativeTitlebar = true,
+    syncThrows = 0, innerWidth = 1200, innerHeight = 800,
+    toggleRect = { left: 1100, top: 10, width: 40, height: 40 },
+} = {}) {
     // The server sets data-theme before first paint.
     const attrs = { "data-theme": initial };
     const classes = new Set();
@@ -26,7 +33,9 @@ function setup({ initial = "dark", viewTransitions = false, reduceMotion = false
     const prefs = { theme: initial };
     const animations = [];
     const transitions = [];
-    let syncs = 0;
+    let frames = [];
+    // The theme each title bar sync saw: it reads the page's colours then.
+    const syncedThemes = [];
     let listener = null;
 
     const root = {
@@ -34,12 +43,22 @@ function setup({ initial = "dark", viewTransitions = false, reduceMotion = false
         setAttribute: (n, v) => { attrs[n] = v; },
         classList: { add: (c) => classes.add(c), remove: (c) => classes.delete(c) },
         animate: (keyframes, options) => {
-            const a = { keyframes, options, cancelled: false, cancel() { this.cancelled = true; } };
+            // progress: the eased progress the engine reports; null once it ends.
+            const a = {
+                keyframes, options, cancelled: false, progress: 0,
+                cancel() { this.cancelled = true; this.progress = null; },
+                effect: { getComputedTiming: () => ({ progress: a.progress }) },
+            };
             animations.push(a);
             return a;
         },
     };
-    const document = { documentElement: root };
+    const document = {
+        documentElement: root,
+        getElementById: (id) => (id === "winMaximize" && maximizeButton
+            ? { getBoundingClientRect: () => maximizeButton }
+            : null),
+    };
     if (viewTransitions) {
         document.startViewTransition = (callback) => {
             if (throwOnStart) throw new Error("not allowed");
@@ -59,14 +78,24 @@ function setup({ initial = "dark", viewTransitions = false, reduceMotion = false
         };
     }
     const window = {
-        innerWidth: 1200,
-        innerHeight: 800,
+        innerWidth,
+        innerHeight,
         matchMedia: (q) => ({ matches: q === "(prefers-reduced-motion: reduce)" && reduceMotion }),
-        __inkdocSyncTitlebar: () => { syncs++; },
+        requestAnimationFrame: (fn) => { frames.push(fn); return frames.length; },
     };
+    let throwsLeft = syncThrows;
+    if (nativeTitlebar) {
+        window.__inkdocSyncTitlebar = () => {
+            if (throwsLeft > 0) {
+                throwsLeft--;
+                throw new Error("bridge unavailable");
+            }
+            syncedThemes.push(attrs["data-theme"]);
+        };
+    }
     const themeToggle = {
         addEventListener: (type, fn) => { if (type === "click") listener = fn; },
-        getBoundingClientRect: () => ({ left: 1100, top: 10, width: 40, height: 40 }),
+        getBoundingClientRect: () => toggleRect,
     };
 
     const api = new Function("env", `
@@ -82,8 +111,16 @@ function setup({ initial = "dark", viewTransitions = false, reduceMotion = false
         ...api,
         click: () => listener(),
         theme: () => attrs["data-theme"],
-        saves, prefs, classes, animations, transitions,
-        syncs: () => syncs,
+        saves, prefs, classes, animations, transitions, syncedThemes,
+        syncs: () => syncedThemes.length,
+        pendingFrames: () => frames.length,
+        // Runs one animation frame with the newest circle at this eased progress.
+        frame: (progress) => {
+            if (animations.length) animations[animations.length - 1].progress = progress;
+            const due = frames;
+            frames = [];
+            due.forEach((fn) => fn());
+        },
     };
 }
 
@@ -226,6 +263,124 @@ const full = `circle(${radius}px at ${x}px ${y}px)`;
         t.click();
         await settle();
         assert.strictEqual(t.theme(), "dark", "the next click starts from it");
+    }
+
+    // 8. The native maximise button follows the circle's edge, not the click.
+    //    The circle is centred on the theme button (1120, 30); the maximise
+    //    button's centre (1184, 30) is 64 px away, a reach of 64 / radius.
+    const maximizeButton = { left: 1170, top: 18, width: 28, height: 24 };
+    const reach = 64 / radius;
+    {
+        // To light: the growing circle reaches it early on.
+        const t = setup({ viewTransitions: true, maximizeButton });
+        t.click();
+        await settle();
+        assert.strictEqual(t.theme(), "light");
+        assert.strictEqual(t.syncs(), 0, "not when the page's theme changes under the old view");
+        t.frame(reach * 0.2); // no speed known yet
+        t.frame(reach * 0.45); // next frame ~0.7 of the way: not yet
+        assert.strictEqual(t.syncs(), 0);
+        t.frame(reach * 0.75); // next frame passes it: sync now, a frame early
+        assert.deepStrictEqual(t.syncedThemes, ["light"]);
+        assert.strictEqual(t.pendingFrames(), 0, "stops watching once synced");
+        t.transitions[0].end();
+        await settle();
+        assert.strictEqual(t.syncs(), 1, "the end does not sync again");
+    }
+    {
+        // To dark: the shrinking light view uncovers it only near the end.
+        const t = setup({ initial: "light", viewTransitions: true, maximizeButton });
+        t.click();
+        await settle();
+        const at = 1 - reach;
+        // Steps of 0.02: each frame predicts the next one 0.02 further on.
+        for (const p of [at - 0.07, at - 0.05, at - 0.03]) t.frame(p);
+        assert.strictEqual(t.syncs(), 0, "most of the circle is still light over it");
+        t.frame(at - 0.01); // next frame passes it
+        assert.deepStrictEqual(t.syncedThemes, ["dark"]);
+        t.transitions[0].end();
+        await settle();
+        assert.strictEqual(t.syncs(), 1);
+    }
+    {
+        // The circle ends (or is cancelled) before a frame saw it cross:
+        // the transition's end syncs it.
+        const t = setup({ initial: "light", viewTransitions: true, maximizeButton });
+        t.click();
+        await settle();
+        t.frame(0.3);
+        t.frame(null);
+        assert.strictEqual(t.syncs(), 0);
+        assert.strictEqual(t.pendingFrames(), 0, "no frame loop left running");
+        t.transitions[0].end();
+        await settle();
+        assert.deepStrictEqual(t.syncedThemes, ["dark"]);
+    }
+    {
+        // Skipped before the circle starts: synced once, at the end.
+        const t = setup({ viewTransitions: true, failReady: true, maximizeButton });
+        t.click();
+        await settle();
+        assert.strictEqual(t.animations.length, 0);
+        assert.deepStrictEqual(t.syncedThemes, ["light"]);
+    }
+    {
+        // startViewTransition throws: an instant switch, synced at once.
+        const t = setup({ initial: "light", viewTransitions: true, throwOnStart: true, maximizeButton });
+        t.click();
+        assert.deepStrictEqual(t.syncedThemes, ["dark"]);
+    }
+    {
+        // Two quick clicks: only the newest switch syncs, and it ends on its theme.
+        const t = setup({ viewTransitions: true, maximizeButton });
+        t.click(); // to light
+        t.click(); // to dark
+        await settle();
+        assert.strictEqual(t.theme(), "dark");
+        t.transitions[0].end(); // the skipped first one
+        await settle();
+        assert.strictEqual(t.syncs(), 0, "the skipped switch must not sync");
+        t.frame(0.5);
+        t.frame(0.99);
+        assert.deepStrictEqual(t.syncedThemes, ["dark"]);
+        t.transitions[1].end();
+        await settle();
+        assert.deepStrictEqual(t.syncedThemes, ["dark"]);
+    }
+    {
+        // The sync throws at the crossing: the classes still come off at the
+        // end, and the end tries the sync again.
+        const t = setup({ initial: "light", viewTransitions: true, maximizeButton, syncThrows: 1 });
+        t.click();
+        await settle();
+        t.frame(0.97);
+        t.frame(0.99);
+        assert.strictEqual(t.syncs(), 0, "the first attempt threw");
+        t.transitions[0].end();
+        await settle();
+        assert.ok(!t.classes.has("theme-switching") && !t.classes.has("theme-to-dark"));
+        assert.deepStrictEqual(t.syncedThemes, ["dark"], "retried at the end");
+    }
+    {
+        // A window with no size: no crossing to find, so the end syncs it.
+        const t = setup({ viewTransitions: true, maximizeButton: { left: 0, top: 0, width: 0, height: 0 },
+            innerWidth: 0, innerHeight: 0, toggleRect: { left: 0, top: 0, width: 0, height: 0 } });
+        t.click();
+        await settle();
+        assert.strictEqual(t.pendingFrames(), 0, "no frame loop");
+        t.transitions[0].end();
+        await settle();
+        assert.deepStrictEqual(t.syncedThemes, ["light"]);
+    }
+    {
+        // A browser tab: no native title bar, no frame loop, nothing breaks.
+        const t = setup({ viewTransitions: true, maximizeButton, nativeTitlebar: false });
+        t.click();
+        await settle();
+        assert.strictEqual(t.pendingFrames(), 0);
+        t.transitions[0].end();
+        await settle();
+        assert.strictEqual(t.theme(), "light");
     }
 
     // The CSS that pauses colour fades and stacks the shrinking view is in place.

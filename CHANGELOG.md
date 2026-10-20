@@ -226,6 +226,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the gaps between its buttons, now moves the window, and double-clicking it
   maximises and restores the window through Windows itself, so it also snaps
   as usual.
+- On Windows, switching between the light and dark theme no longer turns the
+  maximise button to the new colour before the rest of the title bar (most
+  visibly when switching to dark): it now changes as the animation reaches it.
 
 ### Security
 - **Docling 2.140.0, with security fixes.** If you have Docling, update it in

@@ -2564,7 +2564,7 @@
                 <path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 20h14" />
               </svg><span class="lbl">Download for Windows</span></a>
             <a class="btn btn-ghost" data-os="mac"
-              href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-macos.zip"
+              href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-macos.dmg"
               aria-label="Download for macOS"><img class="os-i" src="icons/apple.svg" width="17" height="17"
                 alt="" /><svg class="dl-i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -2896,8 +2896,8 @@
           <p class="req" data-i18n="dl.mac.req">Apple Silicon (M1 or newer) · macOS 12 or later</p>
           <div class="btns">
             <a class="btn btn-primary btn-sm"
-              href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-macos.zip"
-              data-i18n="dl.zip">Download (.zip)</a>
+              href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-macos.dmg"
+              data-i18n="dl.dmg">Download (.dmg)</a>
           </div>
         </article>
         <article class="os rv" style="--d:.16s" data-os="linux">
@@ -2907,7 +2907,7 @@
           <div class="btns">
             <a class="btn btn-primary btn-sm"
               href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-linux-x86_64.AppImage"
-              data-i18n="dl.zip">Download (.zip)</a>
+              data-i18n="dl.appimage">Download (.AppImage)</a>
           </div>
         </article>
       </div>
@@ -2942,6 +2942,7 @@
           </summary>
           <div class="q-body" data-i18n-html="dl.maca">
             <ol>
+              <li>Open the .dmg and drag InkDoc onto <strong>Applications</strong>.</li>
               <li>Open the app once and close the warning.</li>
               <li>Go to <strong>System Settings → Privacy &amp; Security</strong>.</li>
               <li>Click <strong>Open Anyway</strong> next to the message about InkDoc.</li>
@@ -3082,11 +3083,11 @@ python3 -m pip install -r requirements.txt
           "fmt.images": "Images", "fmt.audio": "Audio", "fmt.zip": "ZIP archives", "fmt.youtube": "YouTube links", "fmt.web": "Web pages",
           "dl.kicker": "Download", "dl.title": "Get InkDoc for free", "dl.lead": "For Windows, macOS and Linux. No Python needed.", "dl.latest": "Latest release", "dl.mine": "Your system",
           "dl.win.req": "Windows 10 or 11 · 64-bit", "dl.mac.req": "Apple Silicon (M1 or newer) · macOS 12 or later", "dl.linux.req": "64-bit · Ubuntu 24.04 or similar · needs WebKit2GTK",
-          "dl.installer": "Installer (.exe)", "dl.portable": "Portable (.exe)", "dl.zip": "Download (.zip)",
+          "dl.installer": "Installer (.exe)", "dl.portable": "Portable (.exe)", "dl.dmg": "Download (.dmg)", "dl.appimage": "Download (.AppImage)",
           "dl.winq": "Windows says “Windows protected your PC”",
           "dl.wina": "<ol><li>Click <strong>More info</strong>.</li><li>Click <strong>Run anyway</strong>.</li></ol><p>This appears because InkDoc isn't signed with a paid certificate. Every release is built on GitHub Actions and lists SHA-256 checksums you can verify.</p>",
           "dl.macq": "macOS says the app can't be opened",
-          "dl.maca": "<ol><li>Open the app once and close the warning.</li><li>Go to <strong>System Settings → Privacy &amp; Security</strong>.</li><li>Click <strong>Open Anyway</strong> next to the message about InkDoc.</li></ol><p>On macOS 14 and earlier you can also right-click the app and choose <strong>Open</strong>.</p>",
+          "dl.maca": "<ol><li>Open the .dmg and drag InkDoc onto <strong>Applications</strong>.</li><li>Open the app once and close the warning.</li><li>Go to <strong>System Settings → Privacy &amp; Security</strong>.</li><li>Click <strong>Open Anyway</strong> next to the message about InkDoc.</li></ol><p>On macOS 14 and earlier you can also right-click the app and choose <strong>Open</strong>.</p>",
           "dl.src": "Run from source", "dl.srcNote": "For developers. Needs Python 3.10 or newer.",
           "dl.verify": "Every release lists " + a(SUMS, "SHA-256 checksums") + " so you can verify your download.",
           "copy": "Copy", "copied": "Copied",
@@ -3126,11 +3127,11 @@ python3 -m pip install -r requirements.txt
           "fmt.images": "Imágenes", "fmt.audio": "Audio", "fmt.zip": "Archivos ZIP", "fmt.youtube": "Enlaces de YouTube", "fmt.web": "Páginas web",
           "dl.kicker": "Descargar", "dl.title": "Consigue InkDoc gratis", "dl.lead": "Para Windows, macOS y Linux. No necesitas Python.", "dl.latest": "Última versión", "dl.mine": "Tu sistema",
           "dl.win.req": "Windows 10 u 11 · 64 bits", "dl.mac.req": "Apple Silicon (M1 o posterior) · macOS 12 o posterior", "dl.linux.req": "64 bits · Ubuntu 24.04 o similar · requiere WebKit2GTK",
-          "dl.installer": "Instalador (.exe)", "dl.portable": "Portable (.exe)", "dl.zip": "Descargar (.zip)",
+          "dl.installer": "Instalador (.exe)", "dl.portable": "Portable (.exe)", "dl.dmg": "Descargar (.dmg)", "dl.appimage": "Descargar (.AppImage)",
           "dl.winq": "Windows dice «Windows protegió su PC»",
           "dl.wina": "<ol><li>Haz clic en <strong>Más información</strong>.</li><li>Haz clic en <strong>Ejecutar de todas formas</strong>.</li></ol><p>Aparece porque InkDoc no está firmado con un certificado de pago. Cada versión se compila en GitHub Actions y publica sumas SHA-256 que puedes comprobar.</p>",
           "dl.macq": "macOS dice que la app no se puede abrir",
-          "dl.maca": "<ol><li>Abre la app una vez y cierra el aviso.</li><li>Ve a <strong>Ajustes del Sistema → Privacidad y seguridad</strong>.</li><li>Haz clic en <strong>Abrir igualmente</strong> junto al mensaje sobre InkDoc.</li></ol><p>En macOS 14 y anteriores también puedes hacer clic derecho en la app y elegir <strong>Abrir</strong>.</p>",
+          "dl.maca": "<ol><li>Abre el .dmg y arrastra InkDoc a <strong>Applications</strong>.</li><li>Abre la app una vez y cierra el aviso.</li><li>Ve a <strong>Ajustes del Sistema → Privacidad y seguridad</strong>.</li><li>Haz clic en <strong>Abrir igualmente</strong> junto al mensaje sobre InkDoc.</li></ol><p>En macOS 14 y anteriores también puedes hacer clic derecho en la app y elegir <strong>Abrir</strong>.</p>",
           "dl.src": "Ejecutar desde el código fuente", "dl.srcNote": "Para desarrolladores. Requiere Python 3.10 o posterior.",
           "dl.verify": "Cada versión publica " + a(SUMS, "sumas de verificación SHA-256") + " para que puedas comprobar tu descarga.",
           "copy": "Copiar", "copied": "Copiado",
@@ -3170,11 +3171,11 @@ python3 -m pip install -r requirements.txt
           "fmt.images": "الصور", "fmt.audio": "الصوت", "fmt.zip": "ملفات ZIP", "fmt.youtube": "روابط YouTube", "fmt.web": "صفحات الويب",
           "dl.kicker": "التنزيل", "dl.title": "احصل على InkDoc مجاناً", "dl.lead": "لأنظمة Windows وmacOS وLinux. لا حاجة إلى Python.", "dl.latest": "أحدث إصدار", "dl.mine": "نظامك",
           "dl.win.req": "Windows 10 أو 11 · 64 بت", "dl.mac.req": "Apple Silicon (M1 أو أحدث) · macOS 12 أو أحدث", "dl.linux.req": "64 بت · Ubuntu 24.04 أو ما يماثله · يتطلب WebKit2GTK",
-          "dl.installer": "المثبّت ⁦(.exe)⁩", "dl.portable": "نسخة محمولة ⁦(.exe)⁩", "dl.zip": "تنزيل ⁦(.zip)⁩",
+          "dl.installer": "المثبّت ⁦(.exe)⁩", "dl.portable": "نسخة محمولة ⁦(.exe)⁩", "dl.dmg": "تنزيل ⁦(.dmg)⁩", "dl.appimage": "تنزيل ⁦(.AppImage)⁩",
           "dl.winq": "يعرض Windows رسالة «قام Windows بحماية الكمبيوتر»",
           "dl.wina": "<ol><li>انقر <strong>مزيد من المعلومات</strong>.</li><li>انقر <strong>تشغيل على أي حال</strong>.</li></ol><p>تظهر الرسالة لأن InkDoc غير موقّع بشهادة مدفوعة. يُبنى كل إصدار على GitHub Actions ويُنشر معه مجموع SHA-256 للتحقق منه.</p>",
           "dl.macq": "يقول macOS إنه لا يمكن فتح التطبيق",
-          "dl.maca": "<ol><li>افتح التطبيق مرة واحدة وأغلق التحذير.</li><li>اذهب إلى <strong>إعدادات النظام ← الخصوصية والأمن</strong>.</li><li>انقر <strong>فتح على أي حال</strong> بجانب الرسالة الخاصة بـ InkDoc.</li></ol><p>في macOS 14 وما قبله يمكنك أيضاً النقر بزر الفأرة الأيمن على التطبيق واختيار <strong>فتح</strong>.</p>",
+          "dl.maca": "<ol><li>افتح ملف ⁦.dmg⁩ واسحب InkDoc إلى <strong>Applications</strong>.</li><li>افتح التطبيق مرة واحدة وأغلق التحذير.</li><li>اذهب إلى <strong>إعدادات النظام ← الخصوصية والأمن</strong>.</li><li>انقر <strong>فتح على أي حال</strong> بجانب الرسالة الخاصة بـ InkDoc.</li></ol><p>في macOS 14 وما قبله يمكنك أيضاً النقر بزر الفأرة الأيمن على التطبيق واختيار <strong>فتح</strong>.</p>",
           "dl.src": "التشغيل من الشيفرة المصدرية", "dl.srcNote": "للمطوّرين. يتطلب Python 3.10 أو أحدث.",
           "dl.verify": "ينشر كل إصدار " + a(SUMS, "مجاميع تحقق SHA-256") + " لتتأكد من سلامة ملفك.",
           "copy": "نسخ", "copied": "نُسخ",
@@ -3256,11 +3257,12 @@ python3 -m pip install -r requirements.txt
           "dl.linux.req": "64-Bit · Ubuntu 24.04 o. Ä. · benötigt WebKit2GTK",
           "dl.installer": "Installer (.exe)",
           "dl.portable": "Portable Version (.exe)",
-          "dl.zip": "Herunterladen (.zip)",
+          "dl.dmg": "Herunterladen (.dmg)",
+          "dl.appimage": "Herunterladen (.AppImage)",
           "dl.winq": "Windows meldet „Der Computer wurde durch Windows geschützt“",
           "dl.wina": "<ol><li>Klicke auf <strong>Weitere Informationen</strong>.</li><li>Klicke auf <strong>Trotzdem ausführen</strong>.</li></ol><p>Die Meldung erscheint, weil InkDoc nicht mit einem kostenpflichtigen Zertifikat signiert ist. Jede Version wird mit GitHub Actions erstellt und listet SHA-256-Prüfsummen, die du prüfen kannst.</p>",
           "dl.macq": "macOS meldet, dass die App nicht geöffnet werden kann",
-          "dl.maca": "<ol><li>Öffne die App einmal und schließe die Warnung.</li><li>Gehe zu <strong>Systemeinstellungen → Datenschutz &amp; Sicherheit</strong>.</li><li>Klicke neben der Meldung zu InkDoc auf <strong>Dennoch öffnen</strong>.</li></ol><p>Unter macOS 14 und älter kannst du auch mit der rechten Maustaste auf die App klicken und <strong>Öffnen</strong> wählen.</p>",
+          "dl.maca": "<ol><li>Öffne die .dmg-Datei und ziehe InkDoc auf <strong>Applications</strong>.</li><li>Öffne die App einmal und schließe die Warnung.</li><li>Gehe zu <strong>Systemeinstellungen → Datenschutz &amp; Sicherheit</strong>.</li><li>Klicke neben der Meldung zu InkDoc auf <strong>Dennoch öffnen</strong>.</li></ol><p>Unter macOS 14 und älter kannst du auch mit der rechten Maustaste auf die App klicken und <strong>Öffnen</strong> wählen.</p>",
           "dl.src": "Aus dem Quellcode starten",
           "dl.srcNote": "Für Entwickler. Benötigt Python 3.10 oder neuer.",
           "dl.verify": "Jede Version listet " + a(SUMS, "SHA-256-Prüfsummen") + ", damit du deinen Download prüfen kannst.",
@@ -3345,11 +3347,12 @@ python3 -m pip install -r requirements.txt
           "dl.linux.req": "64 bits · Ubuntu 24.04 ou équivalent · nécessite WebKit2GTK",
           "dl.installer": "Installateur (.exe)",
           "dl.portable": "Version portable (.exe)",
-          "dl.zip": "Télécharger (.zip)",
+          "dl.dmg": "Télécharger (.dmg)",
+          "dl.appimage": "Télécharger (.AppImage)",
           "dl.winq": "Windows affiche « Windows a protégé votre ordinateur »",
           "dl.wina": "<ol><li>Cliquez sur <strong>Informations complémentaires</strong>.</li><li>Cliquez sur <strong>Exécuter quand même</strong>.</li></ol><p>Ce message s’affiche parce qu’InkDoc n’est pas signé avec un certificat payant. Chaque version est compilée sur GitHub Actions et publie des sommes de contrôle SHA-256 que vous pouvez vérifier.</p>",
           "dl.macq": "macOS indique que l’app ne peut pas être ouverte",
-          "dl.maca": "<ol><li>Ouvrez l’app une fois, puis fermez l’avertissement.</li><li>Allez dans <strong>Réglages Système → Confidentialité et sécurité</strong>.</li><li>Cliquez sur <strong>Ouvrir quand même</strong> à côté du message concernant InkDoc.</li></ol><p>Sous macOS 14 et versions antérieures, vous pouvez aussi faire un clic droit sur l’app et choisir <strong>Ouvrir</strong>.</p>",
+          "dl.maca": "<ol><li>Ouvrez le fichier .dmg et faites glisser InkDoc sur <strong>Applications</strong>.</li><li>Ouvrez l’app une fois, puis fermez l’avertissement.</li><li>Allez dans <strong>Réglages Système → Confidentialité et sécurité</strong>.</li><li>Cliquez sur <strong>Ouvrir quand même</strong> à côté du message concernant InkDoc.</li></ol><p>Sous macOS 14 et versions antérieures, vous pouvez aussi faire un clic droit sur l’app et choisir <strong>Ouvrir</strong>.</p>",
           "dl.src": "Lancer depuis le code source",
           "dl.srcNote": "Pour les développeurs. Nécessite Python 3.10 ou plus récent.",
           "dl.verify": "Chaque version publie des " + a(SUMS, "sommes de contrôle SHA-256") + " pour vérifier votre téléchargement.",
@@ -3434,11 +3437,12 @@ python3 -m pip install -r requirements.txt
           "dl.linux.req": "64-bit · Ubuntu 24.04 atau sejenisnya · memerlukan WebKit2GTK",
           "dl.installer": "Penginstal (.exe)",
           "dl.portable": "Versi portabel (.exe)",
-          "dl.zip": "Unduh (.zip)",
+          "dl.dmg": "Unduh (.dmg)",
+          "dl.appimage": "Unduh (.AppImage)",
           "dl.winq": "Windows menampilkan “Windows melindungi PC Anda”",
           "dl.wina": "<ol><li>Klik <strong>Info selengkapnya</strong>.</li><li>Klik <strong>Tetap jalankan</strong>.</li></ol><p>Pesan ini muncul karena InkDoc tidak ditandatangani dengan sertifikat berbayar. Setiap rilis dibangun di GitHub Actions dan mencantumkan checksum SHA-256 yang dapat Anda periksa.</p>",
           "dl.macq": "macOS menyatakan aplikasi tidak dapat dibuka",
-          "dl.maca": "<ol><li>Buka aplikasi sekali, lalu tutup peringatannya.</li><li>Buka <strong>Pengaturan Sistem → Privasi &amp; Keamanan</strong>.</li><li>Klik <strong>Tetap Buka</strong> di samping pesan tentang InkDoc.</li></ol><p>Di macOS 14 dan sebelumnya, Anda juga bisa mengeklik kanan aplikasi lalu memilih <strong>Buka</strong>.</p>",
+          "dl.maca": "<ol><li>Buka file .dmg, lalu seret InkDoc ke <strong>Applications</strong>.</li><li>Buka aplikasi sekali, lalu tutup peringatannya.</li><li>Buka <strong>Pengaturan Sistem → Privasi &amp; Keamanan</strong>.</li><li>Klik <strong>Tetap Buka</strong> di samping pesan tentang InkDoc.</li></ol><p>Di macOS 14 dan sebelumnya, Anda juga bisa mengeklik kanan aplikasi lalu memilih <strong>Buka</strong>.</p>",
           "dl.src": "Jalankan dari kode sumber",
           "dl.srcNote": "Untuk pengembang. Memerlukan Python 3.10 atau lebih baru.",
           "dl.verify": "Setiap rilis mencantumkan " + a(SUMS, "checksum SHA-256") + " agar Anda dapat memverifikasi unduhan.",
@@ -3523,11 +3527,12 @@ python3 -m pip install -r requirements.txt
           "dl.linux.req": "64 bit · Ubuntu 24.04 veya benzeri · WebKit2GTK gerekir",
           "dl.installer": "Yükleyici (.exe)",
           "dl.portable": "Taşınabilir (.exe)",
-          "dl.zip": "İndir (.zip)",
+          "dl.dmg": "İndir (.dmg)",
+          "dl.appimage": "İndir (.AppImage)",
           "dl.winq": "Windows “Windows bilgisayarınızı korudu” uyarısı veriyor",
           "dl.wina": "<ol><li><strong>Ek bilgi</strong> bağlantısına tıklayın.</li><li><strong>Yine de çalıştır</strong> düğmesine tıklayın.</li></ol><p>Bu uyarı, InkDoc ücretli bir sertifikayla imzalanmadığı için görünür. Her sürüm GitHub Actions üzerinde derlenir ve doğrulayabileceğiniz SHA-256 sağlama toplamlarını listeler.</p>",
           "dl.macq": "macOS uygulamanın açılamadığını söylüyor",
-          "dl.maca": "<ol><li>Uygulamayı bir kez açın ve uyarıyı kapatın.</li><li><strong>Sistem Ayarları → Gizlilik ve Güvenlik</strong> bölümüne gidin.</li><li>InkDoc ile ilgili mesajın yanındaki <strong>Yine de Aç</strong> düğmesine tıklayın.</li></ol><p>macOS 14 ve öncesinde uygulamaya sağ tıklayıp <strong>Aç</strong> seçeneğini de kullanabilirsiniz.</p>",
+          "dl.maca": "<ol><li>.dmg dosyasını açın ve InkDoc'u <strong>Applications</strong> klasörüne sürükleyin.</li><li>Uygulamayı bir kez açın ve uyarıyı kapatın.</li><li><strong>Sistem Ayarları → Gizlilik ve Güvenlik</strong> bölümüne gidin.</li><li>InkDoc ile ilgili mesajın yanındaki <strong>Yine de Aç</strong> düğmesine tıklayın.</li></ol><p>macOS 14 ve öncesinde uygulamaya sağ tıklayıp <strong>Aç</strong> seçeneğini de kullanabilirsiniz.</p>",
           "dl.src": "Kaynak koddan çalıştır",
           "dl.srcNote": "Geliştiriciler için. Python 3.10 veya üzeri gerekir.",
           "dl.verify": "Her sürüm, indirdiğiniz dosyayı doğrulayabilmeniz için " + a(SUMS, "SHA-256 sağlama toplamlarını") + " listeler.",
@@ -3612,11 +3617,12 @@ python3 -m pip install -r requirements.txt
           "dl.linux.req": "64 ビット · Ubuntu 24.04 など · WebKit2GTK が必要",
           "dl.installer": "インストーラー (.exe)",
           "dl.portable": "ポータブル版 (.exe)",
-          "dl.zip": "ダウンロード (.zip)",
+          "dl.dmg": "ダウンロード (.dmg)",
+          "dl.appimage": "ダウンロード (.AppImage)",
           "dl.winq": "Windows に「Windows によって PC が保護されました」と表示される",
           "dl.wina": "<ol><li><strong>詳細情報</strong> をクリックします。</li><li><strong>実行</strong> をクリックします。</li></ol><p>InkDoc は有料の証明書で署名されていないため、この画面が表示されます。各リリースは GitHub Actions でビルドされ、確認用の SHA-256 チェックサムが公開されています。</p>",
           "dl.macq": "macOS でアプリを開けないと表示される",
-          "dl.maca": "<ol><li>アプリを一度開き、警告を閉じます。</li><li><strong>システム設定 → プライバシーとセキュリティ</strong> を開きます。</li><li>InkDoc に関するメッセージの横にある <strong>このまま開く</strong> をクリックします。</li></ol><p>macOS 14 以前では、アプリを右クリックして <strong>開く</strong> を選ぶこともできます。</p>",
+          "dl.maca": "<ol><li>.dmg ファイルを開き、InkDoc を <strong>Applications</strong> にドラッグします。</li><li>アプリを一度開き、警告を閉じます。</li><li><strong>システム設定 → プライバシーとセキュリティ</strong> を開きます。</li><li>InkDoc に関するメッセージの横にある <strong>このまま開く</strong> をクリックします。</li></ol><p>macOS 14 以前では、アプリを右クリックして <strong>開く</strong> を選ぶこともできます。</p>",
           "dl.src": "ソースコードから実行",
           "dl.srcNote": "開発者向け。Python 3.10 以降が必要です。",
           "dl.verify": "各リリースには、ダウンロードしたファイルを確認できる " + a(SUMS, "SHA-256 チェックサム") + " が掲載されています。",
@@ -3701,11 +3707,12 @@ python3 -m pip install -r requirements.txt
           "dl.linux.req": "64 位 · Ubuntu 24.04 或类似系统 · 需要 WebKit2GTK",
           "dl.installer": "安装程序 (.exe)",
           "dl.portable": "便携版 (.exe)",
-          "dl.zip": "下载 (.zip)",
+          "dl.dmg": "下载 (.dmg)",
+          "dl.appimage": "下载 (.AppImage)",
           "dl.winq": "Windows 提示“Windows 已保护你的电脑”",
           "dl.wina": "<ol><li>点击<strong>更多信息</strong>。</li><li>点击<strong>仍要运行</strong>。</li></ol><p>出现此提示是因为 InkDoc 没有使用付费证书签名。每个版本都在 GitHub Actions 上构建，并附有可供核验的 SHA-256 校验和。</p>",
           "dl.macq": "macOS 提示无法打开该应用",
-          "dl.maca": "<ol><li>先打开一次应用，然后关闭警告。</li><li>前往<strong>系统设置 → 隐私与安全性</strong>。</li><li>在关于 InkDoc 的提示旁点击<strong>仍要打开</strong>。</li></ol><p>在 macOS 14 及更早版本中，也可以右键点击应用并选择<strong>打开</strong>。</p>",
+          "dl.maca": "<ol><li>打开 .dmg 文件，将 InkDoc 拖到 <strong>Applications</strong>。</li><li>先打开一次应用，然后关闭警告。</li><li>前往<strong>系统设置 → 隐私与安全性</strong>。</li><li>在关于 InkDoc 的提示旁点击<strong>仍要打开</strong>。</li></ol><p>在 macOS 14 及更早版本中，也可以右键点击应用并选择<strong>打开</strong>。</p>",
           "dl.src": "从源代码运行",
           "dl.srcNote": "面向开发者。需要 Python 3.10 或更高版本。",
           "dl.verify": "每个版本都列出了 " + a(SUMS, "SHA-256 校验和") + "，方便你核验下载的文件。",

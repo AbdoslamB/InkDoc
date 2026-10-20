@@ -933,7 +933,7 @@
           <div class="preview-body">
             <!-- Conversion Notice Banner (failed / unsupported / empty results, missing-text
                  warnings and Auto tips). A polite live region; app.js switches it to
-                 assertive for failures only. -->
+                 assertive for failures only. The × is shown only on a result's note. -->
             <div class="conversion-notice" id="conversionNoticeBar" role="status" aria-live="polite">
               <span class="conversion-notice-icon" id="conversionNoticeIcon" aria-hidden="true"></span>
               <div class="conversion-notice-body">
@@ -942,6 +942,12 @@
                 <div class="conversion-notice-actions" id="conversionNoticeActions" hidden></div>
                 <ul class="conversion-notice-details" id="conversionNoticeDetails" hidden></ul>
               </div>
+              <button type="button" class="conversion-notice-close" id="conversionNoticeClose" title="Dismiss" aria-label="Dismiss note" hidden>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+              </button>
             </div>
 
             <!-- Rendered HTML Tab -->

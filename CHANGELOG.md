@@ -135,6 +135,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   button, the reverse of the circle that grows when switching to light.
 - The lines between groups of settings are easier to see in the dark theme,
   and Display, Updates and the GLM-OCR options are now divided the same way.
+- The note above a converted result (a warning, a tip or tables rebuilt) has
+  a **×** to close it once read. It comes back when you open the result again
+  after another one, or convert the file again. A failed conversion's message
+  can't be closed.
 - **Files over 100 MB are converted.** They used to be refused (HTTP 413)
   after the whole file had already been uploaded. Any size is now accepted;
   InkDoc says that large files can take longer (a note when they are added

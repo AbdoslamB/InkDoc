@@ -643,12 +643,20 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const conversionNoticeActions = document.getElementById("conversionNoticeActions");
   const conversionNoticeDetails = document.getElementById("conversionNoticeDetails");
+  const conversionNoticeClose   = document.getElementById("conversionNoticeClose");
+
+  // The item whose note was closed with ×. Opening another item or converting
+  // this one again clears it, so the note comes back; a redraw of the same
+  // result (the math switch, a click on its row) keeps it closed.
+  let noticeDismissedFor = null;
 
   // opts.actions: [{ label, onClick, primary }]; opts.details: [string] shown
-  // behind a "Details" toggle. Everything is set with textContent: messages can
-  // carry file names and server text.
+  // behind a "Details" toggle; opts.dismissible: show the × (a result's note,
+  // never a failure). Everything is set with textContent: messages can carry
+  // file names and server text.
   function showConversionNotice(type, title, detail, opts = {}) {
     conversionNoticeBar.className = `conversion-notice notice-${type} visible`;
+    if (conversionNoticeClose) conversionNoticeClose.hidden = !opts.dismissible;
     // Failures interrupt; warnings and tips wait for a pause.
     conversionNoticeBar.setAttribute("aria-live", type === "failed" ? "assertive" : "polite");
     conversionNoticeIcon.innerHTML = ICONS[type] || ICONS.failed;
@@ -700,6 +708,7 @@ document.addEventListener("DOMContentLoaded", () => {
     conversionNoticeTitle.textContent = "";
     conversionNoticeDetail.textContent = "";
     conversionNoticeIcon.innerHTML = "";
+    if (conversionNoticeClose) conversionNoticeClose.hidden = true;
     if (conversionNoticeActions) {
       conversionNoticeActions.replaceChildren();
       conversionNoticeActions.hidden = true;
@@ -708,6 +717,16 @@ document.addEventListener("DOMContentLoaded", () => {
       conversionNoticeDetails.replaceChildren();
       conversionNoticeDetails.hidden = true;
     }
+  }
+
+  if (conversionNoticeClose) {
+    conversionNoticeClose.addEventListener("click", () => {
+      const hadFocus = document.activeElement === conversionNoticeClose;
+      noticeDismissedFor = activeItemId;
+      hideConversionNotice();
+      // The button goes away with the note: keep keyboard focus in the preview.
+      if (hadFocus) (tabRaw.classList.contains("active") ? tabRaw : tabRendered).focus();
+    });
   }
 
   // ─── Engine Management & Session Security ────────────────────────────────
@@ -4268,6 +4287,7 @@ document.addEventListener("DOMContentLoaded", () => {
     item.engine          = engine;
     item.status          = "converting";
     item.jobId           = newJobId();
+    if (noticeDismissedFor === item.id) noticeDismissedFor = null; // a new result, a new note
     item.progressMessage = "";
     item.cancelRequested = false;
     item.error           = "";
@@ -5145,6 +5165,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function selectItem(id) {
     cancelMath(); // formulas still being drawn belong to the previous preview
+    if (id !== activeItemId) noticeDismissedFor = null;
     activeItemId = id;
     const item = queue.find((i) => i.id === id);
     if (!item) return;
@@ -5261,36 +5282,40 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // One notice, most important first: a missing-text warning, a table that
     // may be wrong, then a Docling fallback, then Auto's install tip, then
-    // plain information (tables rebuilt, engine notes).
+    // plain information (tables rebuilt, engine notes). Each can be closed with
+    // × (noticeDismissedFor), since there is a result to read below it.
     const warning = formatQualityWarning(item.quality);
     const tableNote = formatTableNote(item.tables);
     const details = conversionDetailLines(item);
+    const notice = noticeDismissedFor === item.id
+      ? () => {}
+      : (type, title, detail, opts) => showConversionNotice(type, title, detail, { ...opts, dismissible: true });
     if (warning) {
-      showConversionNotice("warning", warning.title, warning.long, {
+      notice("warning", warning.title, warning.long, {
         actions: qualityNoticeActions(item),
         details,
       });
     } else if (tableNote && tableNote.warning) {
-      showConversionNotice("warning", tableNote.title, tableNote.long, { details });
+      notice("warning", tableNote.title, tableNote.long, { details });
     } else if (item.fallbackOccurred) {
-      showConversionNotice(
+      notice(
         "unsupported",
         "Docling Fallback: Converted with MarkItDown",
         `Docling was unable to parse this document${item.fallbackReason ? " (" + item.fallbackReason + ")" : ""}. Conversion automatically fell back to MarkItDown.`,
         { details }
       );
     } else if (item.auto && visibleHint(item.auto.hint, prefs.hidden_engines)) {
-      showConversionNotice("info", "Tip", item.auto.hint, {
+      notice("info", "Tip", item.auto.hint, {
         actions: [{ label: item.auto.hint.includes("Docling") ? "Install Docling" : "Open Settings", onClick: (e) => openSettings(e, "engines") }],
         details,
       });
     } else if (tableNote) {
-      showConversionNotice("info", tableNote.title, tableNote.long, { details });
+      notice("info", tableNote.title, tableNote.long, { details });
     } else if (item.warnings && item.warnings.length) {
-      showConversionNotice("info", "Note", item.warnings[0], { details });
+      notice("info", "Note", item.warnings[0], { details });
     } else if (item.quality && item.quality.image_pages && item.quality.image_pages.length) {
       const note = (item.quality.details || []).find((line) => line.includes("full-page image"));
-      if (note) showConversionNotice("info", "Note", note, { details });
+      if (note) notice("info", "Note", note, { details });
     }
 
     // Rendered HTML (Sanitized against DOM XSS)

@@ -3225,6 +3225,40 @@ html[data-hidden-engines~="glm_ocr"] #engineCardGlmOcr .engine-hidden-chip {
   display: none;
 }
 
+/* Closes a result's note: in the note's own colour, at the end of the row so
+   text wraps before it rather than running under it. */
+.conversion-notice-close {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin: -3px -6px 0 auto;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  opacity: 0.7;
+  cursor: pointer;
+}
+
+.conversion-notice-close:hover {
+  opacity: 1;
+  background-color: rgba(127, 127, 127, 0.16);
+}
+
+.conversion-notice-close:focus-visible {
+  opacity: 1;
+  outline: 2px solid currentColor;
+  outline-offset: 1px;
+}
+
+.conversion-notice-close[hidden] {
+  display: none;
+}
+
 .conversion-notice-details {
   margin: 4px 0 0 16px;
   font-weight: 400;

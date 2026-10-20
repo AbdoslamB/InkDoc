@@ -244,7 +244,7 @@ curl http://localhost:13118/health
 {
   "status": "ok",
   "version": "1.0.0",
-  "markitdown_version": "0.1.7",
+  "markitdown_version": "0.1.8",
   "docling_available": true,
   "docling_version": "2.128.0",
   "markit_available": true,
@@ -273,7 +273,7 @@ curl http://localhost:13118/engines
       "name": "MarkItDown",
       "available": true,
       "installed": true,
-      "version": "0.1.7",
+      "version": "0.1.8",
       "optional": false
     },
     "docling": {

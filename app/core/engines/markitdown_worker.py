@@ -17,7 +17,7 @@ Protocol, one JSON object per line:
             {"id": 9, "action": "layout", "source": "...", "output": "...",
              "pages": [2], "model_dir": "...", "sha256": "...", "time_budget_s": 60}
             {"action": "shutdown"}
-    stdout  {"status": "ready", "pid": 1234, "markitdown": "0.1.7"}   once, when warm
+    stdout  {"status": "ready", "pid": 1234, "markitdown": "0.1.8"}   once, when warm
             {"status": "error", "error": "..."}                         instead, if it can't load
             {"id": 7, "ok": true, "none": false}
             {"id": 7, "ok": false, "error": "...", "type": "FileConversionException"}

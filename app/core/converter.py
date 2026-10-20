@@ -1,6 +1,6 @@
 """MarkItDown wrapper and background conversion workers.
 
-Wires the GUI to the real markitdown 0.1.7 API as found in
+Wires the GUI to the real markitdown 0.1.8 API as found in
 markitdown/_markitdown.py, markitdown/_stream_info.py and
 markitdown/converters/_doc_intel_converter.py / _cu_converter.py:
 
@@ -32,6 +32,8 @@ markitdown/converters/_markdownify.py).
 """
 from __future__ import annotations
 
+import codecs
+import logging
 import os
 import re
 import warnings
@@ -64,6 +66,8 @@ if TYPE_CHECKING:
     from markitdown import MarkItDown
 
 from app.core.queue_model import EngineKind, QueueItem, SourceKind
+
+logger = logging.getLogger(__name__)
 
 _ILLEGAL_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
@@ -500,8 +504,45 @@ def run_markitdown(
         convert_kwargs["url"] = url
 
     stream_info = StreamInfo(**stream_info_kwargs) if stream_info_kwargs else None
-    result = md.convert_local(source, stream_info=stream_info, **convert_kwargs)
+    try:
+        result = md.convert_local(source, stream_info=stream_info, **convert_kwargs)
+    except Exception as exc:
+        # MarkItDown guesses a text file's charset from its first 64 KB, so a file
+        # that is plain ASCII there and UTF-8 further on (a CSV export with one
+        # accented name near the end) fails with UnicodeDecodeError. Such a file
+        # is retried once as UTF-8, if the whole of it decodes as UTF-8. A charset
+        # given explicitly is never second-guessed.
+        if "charset" in stream_info_kwargs or not _failed_on_decoding(exc) or not _is_utf8_file(source):
+            raise
+        logger.info("Retrying %s as UTF-8 after a wrong charset guess.", os.path.basename(source))
+        result = md.convert_local(
+            source, stream_info=StreamInfo(**{**stream_info_kwargs, "charset": "utf-8"}), **convert_kwargs
+        )
     return result.text_content
+
+
+def _failed_on_decoding(exc: BaseException) -> bool:
+    """True when a MarkItDown failure came from decoding text with the wrong charset."""
+    if isinstance(exc, UnicodeDecodeError):
+        return True
+    for attempt in getattr(exc, "attempts", None) or []:
+        info = getattr(attempt, "exc_info", None)
+        if info and isinstance(info[1], UnicodeDecodeError):
+            return True
+    return False
+
+
+def _is_utf8_file(path: str, chunk_size: int = 1 << 20) -> bool:
+    """True when the file decodes as UTF-8 from start to end. Reads it in 1 MB pieces."""
+    decoder = codecs.getincrementaldecoder("utf-8")()
+    try:
+        with open(path, "rb") as fh:
+            while chunk := fh.read(chunk_size):
+                decoder.decode(chunk)
+            decoder.decode(b"", final=True)
+    except (OSError, UnicodeDecodeError):
+        return False
+    return True
 
 
 def convert_item(

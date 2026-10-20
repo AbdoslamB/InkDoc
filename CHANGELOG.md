@@ -166,6 +166,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an update the system can't run, and a downloaded AppImage is made executable.
   Without WebKit2GTK, InkDoc opens in your web browser and says what to
   install; it keeps running until you stop it (`pkill -f inkdoc`).
+- **MarkItDown 0.1.8**, a release of bug fixes. In CSV files, a `|` or a line
+  break inside a value no longer breaks the table, and a byte-order mark no
+  longer ends up in the first column's name. Underlined and double-struck text
+  in Word files, and struck-out text on web pages, are now kept. A link with an
+  encoded `/` (`%2F`) now keeps pointing where it did, and Atom feeds keep their
+  formatted content. Other output is unchanged. InkDoc now pins the exact
+  MarkItDown version it was tested with.
 
 ### Fixed
 - The desktop app now remembers the **theme**, the **engine** you picked,
@@ -202,6 +209,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (a job posting, article, product or event) and says so. A page without one
   gets a message saying what to do (print it to PDF from your browser, then
   convert that) instead of a one-line file. Other pages are unchanged.
+- A CSV or text file larger than 64 KB that has accented letters or other
+  non-English characters only after its beginning (a long export with one
+  "Zoë" near the end, say) now converts. MarkItDown guessed the file's
+  encoding from its first 64 KB and failed with "'ascii' codec can't decode".
+  InkDoc now tries such a file again as UTF-8 when it is valid UTF-8.
 
 ## [1.2.0] - 2026-10-14
 

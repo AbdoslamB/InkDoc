@@ -892,6 +892,11 @@ def run_desktop(
             server_thread.stop()
         return 1
 
+    # Before any window: the page's policy forbids eval, which pywebview's bridge uses.
+    from app.desktop.webview_bridge import apply as apply_webview_bridge
+
+    apply_webview_bridge()
+
     # The release only: a source checkout may use pywebview's Qt backend instead of GTK.
     if is_frozen_linux():
         problem = linux_webview_problem()
@@ -1018,15 +1023,101 @@ def run_selftest() -> int:
         return 1
 
 
+BRIDGE_PAGE = """<!doctype html>
+<html><head><meta charset="utf-8"><title>InkDoc bridge self-test</title></head>
+<body><p>InkDoc bridge self-test</p>
+<script nonce="{nonce}">
+window.addEventListener("pywebviewready", function () {{
+  window.pywebview.api.bridge_echo("inkdoc").then(function (value) {{
+    window.pywebview.api.bridge_done(value);
+  }}, function (error) {{
+    window.pywebview.api.bridge_done("rejected: " + (error && error.message));
+  }});
+}});
+</script></body></html>"""
+
+
+def run_bridge_selftest(timeout: float = 30.0) -> int:
+    """Open a window on a page under InkDoc's own policy and make one page -> app -> page
+    round trip: 0 when it completes. The page calls bridge_echo, gets its result back, and
+    reports it through bridge_done, so both directions of the bridge are checked."""
+    import http.server
+    import secrets
+
+    print("[*] Running InkDoc page bridge self-test...")
+    try:
+        import webview
+
+        from app.desktop.webview_bridge import apply as apply_webview_bridge
+        from app.server.server import page_csp
+
+        patched = apply_webview_bridge()
+        nonce = secrets.token_hex(16)
+        body = BRIDGE_PAGE.format(nonce=nonce).encode("utf-8")
+        policy = page_csp(nonce)
+
+        class Page(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Security-Policy", policy)
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Page)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        result: dict[str, str] = {}
+        window = webview.create_window(
+            "InkDoc bridge self-test", f"http://127.0.0.1:{server.server_port}/", width=480, height=240
+        )
+
+        def bridge_echo(value):
+            return f"echo:{value}"
+
+        def bridge_done(value):
+            result["value"] = str(value)
+            window.destroy()
+
+        def give_up():
+            time.sleep(timeout)
+            if "value" not in result:
+                window.destroy()
+
+        window.expose(bridge_echo, bridge_done)
+        threading.Thread(target=give_up, daemon=True).start()
+        webview.start(debug=False)
+        server.shutdown()
+    except Exception as e:
+        print(f"[FAIL] Page bridge self-test failed: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return 1
+
+    value = result.get("value")
+    if value == "echo:inkdoc":
+        print(f"[ALL PASS] Page bridge self-test succeeded (pywebview patched: {patched}).")
+        return 0
+    print(f"[FAIL] Page bridge self-test: the page's call {'returned ' + repr(value) if value else 'never returned'} "
+          f"within {timeout:.0f} s (pywebview patched: {patched}).", file=sys.stderr)
+    return 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="InkDoc Multi-Engine Workbench")
     parser.add_argument("--port", type=int, default=None, help="Port to run the local server on")
     parser.add_argument("--headless", action="store_true", help="Run in headless server mode without window")
     parser.add_argument("--selftest", action="store_true", help="Run self-test importing GUI backend and exit 0")
+    parser.add_argument("--selftest-bridge", action="store_true",
+                        help="Open a window under the page's policy and check one page -> app call; exit 0 on success")
 
     args = parser.parse_args()
     if args.selftest:
         return run_selftest()
+    if args.selftest_bridge:
+        return run_bridge_selftest()
     return run_desktop(port=args.port, headless=args.headless)
 
 

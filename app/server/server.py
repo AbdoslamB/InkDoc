@@ -1163,21 +1163,27 @@ def _serve_bench_html() -> HTMLResponse:
         elif "</head>" in html_content:
             html_content = html_content.replace("</head>", f"  {token_injection}\n</head>", 1)
 
-        csp_policy = (
-            "default-src 'self'; "
-            f"script-src 'self' 'nonce-{nonce}'; "
-            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-            "font-src 'self' https://fonts.gstatic.com data:; "
-            "img-src 'self' data: blob: https:; "
-            "connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; "
-            "frame-ancestors 'none'; "
-            "base-uri 'self'; "
-            "form-action 'self';"
-        )
         response = HTMLResponse(html_content)
-        response.headers["Content-Security-Policy"] = csp_policy
+        response.headers["Content-Security-Policy"] = page_csp(nonce)
         return response
     raise HTTPException(status_code=404, detail="Web UI static files not found.")
+
+
+def page_csp(nonce: str) -> str:
+    """The page's Content-Security-Policy. Scripts only from InkDoc and the nonce, never
+    eval: app/desktop/webview_bridge.py makes pywebview work without it, and
+    `--selftest-bridge` checks that under this exact policy."""
+    return (
+        "default-src 'self'; "
+        f"script-src 'self' 'nonce-{nonce}'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com data:; "
+        "img-src 'self' data: blob: https:; "
+        "connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; "
+        "frame-ancestors 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self';"
+    )
 
 
 @app.get("/InkDoc", tags=["Web UI"], response_class=HTMLResponse)

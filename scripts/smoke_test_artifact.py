@@ -365,6 +365,31 @@ def run_smoke_test(
             record_summary_line(f"[SELFTEST] {artifact_path.name}: TIMEOUT")
             raise RuntimeError(f"--selftest timed out after {selftest_timeout:.0f}s for {artifact_path.name}") from e
 
+        # 1b. A real window under the page's own policy: one page -> app -> page round trip
+        # (app/desktop/webview_bridge.py). The app gives up after 30 s by itself.
+        print(f"[*] Running page bridge self-test: {exe_path} --selftest-bridge")
+        bridge_proc = subprocess.Popen(
+            [str(exe_path), "--selftest-bridge"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+        bridge_timeout = selftest_timeout + 60.0
+        try:
+            out, err = bridge_proc.communicate(timeout=bridge_timeout)
+        except subprocess.TimeoutExpired as e:
+            kill_process_tree(bridge_proc.pid)
+            record_summary_line(f"[BRIDGE] {artifact_path.name}: TIMEOUT")
+            raise RuntimeError(f"--selftest-bridge timed out after {bridge_timeout:.0f}s for {artifact_path.name}") from e
+        if bridge_proc.returncode != 0:
+            record_summary_line(f"[BRIDGE] {artifact_path.name}: FAIL (exit code {bridge_proc.returncode})")
+            raise RuntimeError(
+                f"--selftest-bridge failed with code {bridge_proc.returncode}: the page could not reach "
+                f"the window's functions.\nSTDOUT:\n{out}\nSTDERR:\n{err}"
+            )
+        record_summary_line(f"[BRIDGE] {artifact_path.name}: PASS")
+
         port = get_free_port()
         print(f"[*] Selected ephemeral port: {port}")
 

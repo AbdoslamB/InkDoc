@@ -18,5 +18,8 @@ markdown>=3.6
 fastapi>=0.110.0
 uvicorn[standard]>=0.28.0
 python-multipart>=0.0.9
-pywebview>=5.0
+# Pinned exactly: app/desktop/webview_bridge.py replaces two parts of this version's page
+# bridge so it works under the page's policy (no eval); tests/test_webview_bridge.py
+# checks them. Move the pin only together with that file.
+pywebview==6.2.1
 cryptography>=42.0.0

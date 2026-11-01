@@ -235,6 +235,11 @@ afterwards in Settings → Engines → Docling: the update includes security fix
   the title bar. A second InkDoc window now gets its own resizable border,
   Snap Layouts and maximise button, instead of these being set up on the
   first one.
+- **On Linux, the window's own functions work**: the Download button's Save
+  dialog, choosing a save folder in Settings, and links that open in your
+  browser. The page couldn't reach them, because the window component builds
+  that connection with code the page's security policy refuses to run. InkDoc
+  now builds it without that, and the policy stays as strict as before.
 
 ### Security
 - **Docling 2.140.0, with security fixes.** If you have Docling, update it in

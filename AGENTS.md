@@ -202,3 +202,10 @@ README; update both when a user-facing feature changes. Respects
 `prefers-color-scheme` plus a `data-theme` override, and fetches a live
 GitHub star count client-side (`fetch` against the public GitHub REST
 API, no auth, degrades silently if it fails/rate-limits).
+
+`docs/support/index.html` is the app's support address
+(`https://abdoslamb.github.io/InkDoc/support/`, `SUPPORT_URL` in `app.js`):
+it forwards at once to the support platform (Buy Me a Coffee). Released apps
+link only there, so changing platform means editing that page, never the app.
+Never remove or rename it, and it must be live on `main` before a release
+that links to it is published. The landing page links the platform directly.

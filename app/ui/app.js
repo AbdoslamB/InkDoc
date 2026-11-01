@@ -3808,8 +3808,10 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // The support links (Settings sidebar heart, About) open this one address,
-  // never whatever href the link carries.
-  const SUPPORT_URL = "https://buymeacoffee.com/abdoslamb";
+  // never whatever href the link carries. It is the website's /support/ page,
+  // which forwards to the support platform, so released apps never need to
+  // change when the platform does.
+  const SUPPORT_URL = "https://abdoslamb.github.io/InkDoc/support/";
   document.querySelectorAll("[data-support-link]").forEach((link) => {
     link.addEventListener("click", (e) => {
       if (!window.pywebview) return;

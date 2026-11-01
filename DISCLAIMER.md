@@ -51,7 +51,7 @@ Most conversions run entirely on your computer. InkDoc's local server listens on
 **Other connections**
 
 - **Fonts.** The interface loads the Inter and JetBrains Mono fonts from Google Fonts (`fonts.googleapis.com`, `fonts.gstatic.com`). This can cause the app to contact Google even when you have not converted a file. How often depends on caching.
-- **Links you click**, such as the website link in Settings, open in your browser.
+- **Links you click**, such as the website link in Settings, open in your browser. The support links go through InkDoc's website (GitHub Pages) to Buy Me a Coffee.
 
 **Fully local**
 

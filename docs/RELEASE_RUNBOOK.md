@@ -137,6 +137,10 @@ Once the GitHub Actions workflow finishes:
 
 ### Step 4: Publish the Release
 
+0. Open `https://abdoslamb.github.io/InkDoc/support/` and check that it lands on
+   Buy Me a Coffee. The app's support links open that page (from 1.3.0), and
+   GitHub Pages serves it from `main`, so `docs/support/index.html` must be on
+   `main` before anyone can download the release.
 1. Navigate to the GitHub Releases page: `https://github.com/AbdoslamB/InkDoc/releases`.
 2. Open the draft release for `vX.Y.Z`.
 3. Confirm that `inkdoc-update-manifest.json` is present among the release assets.

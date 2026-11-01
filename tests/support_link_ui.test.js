@@ -1,9 +1,13 @@
-// Tests the Buy Me a Coffee support links: in the app (the heart at the foot
-// of the Settings sidebar, and About's "Buy me a coffee"), and on the landing
-// page (the heart in the header, and the footer's link).
+// Tests the support links: in the app (the heart at the foot of the Settings
+// sidebar, and About's "Buy me a coffee"), the website's /support/ page they
+// open, and the landing page's own links (the heart in the header, and the
+// footer's link).
 //
-// Both places use one heart (an outline, never filled) and one address. In
-// the desktop app a click opens that fixed address in the system browser,
+// The app links to the website's /support/ page, never to the platform: a
+// released app can't be changed, the page can. The page forwards at once to
+// Buy Me a Coffee. The landing page links the platform directly, since it can
+// be changed any time. Both places use one heart (an outline, never filled).
+// In the desktop app a click opens the fixed address in the system browser,
 // whatever href the link carries; in a browser tab the link opens a new tab.
 //
 // Follows preview_links_ui.test.js: slice the block out of the source, run it
@@ -11,19 +15,22 @@
 const assert = require("assert");
 const fs = require("fs");
 
-const URL = "https://buymeacoffee.com/abdoslamb";
+const URL = "https://abdoslamb.github.io/InkDoc/support/";
+const PLATFORM = "https://buymeacoffee.com/abdoslamb";
 const source = fs.readFileSync("app/ui/app.js", "utf8");
 const html = fs.readFileSync("app/ui/index.html", "utf8");
 const css = fs.readFileSync("app/ui/style.css", "utf8");
 const site = fs.readFileSync("docs/index.html", "utf8");
+const page = fs.readFileSync("docs/support/index.html", "utf8");
 
-const anchors = (text) => text.match(/<a\b[^>]*buymeacoffee[^>]*>/g) || [];
+const anchors = (text, mark) => text.match(new RegExp(`<a\\b[^>]*${mark}[^>]*>`, "g")) || [];
 const href = (tag) => (tag.match(/href=["']([^"']*)["']/) || [])[1];
 
 // ─── App: markup ───────────────────────────────────────────────────────────
 {
-    const links = anchors(html);
+    const links = anchors(html, "data-support-link");
     assert.strictEqual(links.length, 2, "the sidebar heart and About's link");
+    assert.ok(!html.includes("buymeacoffee") && !source.includes("buymeacoffee"), "the app never names the platform's address");
     links.forEach((tag) => {
         assert.strictEqual(href(tag), URL);
         assert.ok(tag.includes('target="_blank"') && tag.includes('rel="noopener noreferrer"'), tag);
@@ -44,7 +51,7 @@ const href = (tag) => (tag.match(/href=["']([^"']*)["']/) || [])[1];
     const side = html.indexOf('id="settingsSupportLink"');
     assert.ok(nav > 0 && side > navEnd, "after </nav>");
     const sideTag = html.slice(html.lastIndexOf("<a", side), html.indexOf("</a>", side));
-    assert.ok(sideTag.includes('aria-label="Support InkDoc on Buy Me a Coffee"') && sideTag.includes('title="Support InkDoc"'));
+    assert.ok(sideTag.includes('aria-label="Support InkDoc"') && sideTag.includes('title="Support InkDoc"'));
     assert.strictEqual(sideTag.replace(/<[^>]*>/g, "").trim(), "", "icon only");
 
     // About: the line, then the same heart and the words.
@@ -105,13 +112,33 @@ function setup({ desktop }) {
     assert.deepStrictEqual(t.opened, []);
 }
 
+// ─── Website: /support/ forwards at once ───────────────────────────────────
+{
+    // GitHub Pages serves docs/ at /InkDoc/; the trailing slash saves a hop.
+    assert.ok(URL.startsWith("https://abdoslamb.github.io/InkDoc/") && URL.endsWith("/support/"));
+    // Forwarded before anything is drawn: the refresh (no delay) and the
+    // script both sit in <head>; the body's link is for anyone with neither.
+    const head = page.slice(0, page.indexOf("</head>"));
+    assert.ok(head.includes(`<meta http-equiv="refresh" content="0; url=${PLATFORM}" />`));
+    assert.ok(head.includes(`<script>location.replace("${PLATFORM}");</script>`));
+    const body = page.slice(page.indexOf("<body>"));
+    assert.deepStrictEqual(anchors(body, "href").map(href), [PLATFORM]);
+    // One destination, kept out of search results and the sitemap.
+    assert.deepStrictEqual([...new Set(page.match(/https:\/\/[^"'<)\s]+/g))], [PLATFORM]);
+    assert.ok(head.includes('<meta name="robots" content="noindex" />'));
+    assert.ok(!fs.readFileSync("docs/sitemap.xml", "utf8").includes("/support"));
+    // Nothing else runs or loads: one inline script, no external files.
+    assert.strictEqual((page.match(/<script\b/g) || []).length, 1);
+    assert.ok(!/\bsrc=/.test(page) && !/stylesheet/.test(page));
+}
+
 // ─── Landing page ──────────────────────────────────────────────────────────
 {
     // One address, in the header and the footer, both opening a new tab.
-    const links = anchors(site);
+    const links = anchors(site, "buymeacoffee");
     assert.strictEqual(links.length, 2, "the header and the footer");
     links.forEach((tag) => {
-        assert.strictEqual(href(tag), URL);
+        assert.strictEqual(href(tag), PLATFORM);
         assert.ok(tag.includes('target="_blank"') && tag.includes('rel="noopener noreferrer"'), tag);
     });
     assert.strictEqual((site.match(/buymeacoffee\.com/g) || []).length, 2, "no other copy of the address");

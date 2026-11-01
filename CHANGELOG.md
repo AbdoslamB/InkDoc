@@ -95,9 +95,11 @@ afterwards in Settings → Engines → Docling: the update includes security fix
   skipped (for example "needs Docling and GLM-OCR").
 - **Support InkDoc**: a small red heart at the foot of the Settings sidebar
   and a "Buy me a coffee" link in Settings → About open
-  [Buy Me a Coffee](https://buymeacoffee.com/abdoslamb) in your browser. The
-  sidebar heart is hidden on About, which has its own link. Nothing is loaded
-  until you click. The website has the same heart in its header and footer.
+  [Buy Me a Coffee](https://buymeacoffee.com/abdoslamb) in your browser,
+  through the website's support page, so the address can change without an
+  update. The sidebar heart is hidden on About, which has its own link.
+  Nothing is loaded until you click. The website has the same heart in its
+  header and footer.
 
 ### Changed
 - **Less memory while idle.** MarkItDown now runs in a separate process that

@@ -1,8 +1,8 @@
 # Docling engine pack: contents and licenses
 
-InkDoc builds the Docling engine pack itself (`scripts/build_pack.py`) and publishes it on its own GitHub release [`docling-pack-v1`](https://github.com/AbdoslamB/InkDoc/releases/tag/docling-pack-v1). When you install Docling from Settings, InkDoc downloads the pack from there, not from IBM or the Docling project. Everything listed below stays under its own license.
+InkDoc builds the Docling engine pack itself (`scripts/build_pack.py`) and publishes it on its own GitHub release [`docling-pack-v2`](https://github.com/AbdoslamB/InkDoc/releases/tag/docling-pack-v2). When you install Docling from Settings, InkDoc downloads the pack from there, not from IBM or the Docling project. Everything listed below stays under its own license.
 
-This list was generated on 2026-10-01 from the per-file manifest in [`app/core/manifest.json`](../app/core/manifest.json) (pack version 1). Licenses come from each package's PyPI metadata for the exact version shipped.
+This list was generated on 2026-11-01 from the per-file manifest in [`app/core/manifest.json`](../app/core/manifest.json) (pack version 2). Licenses come from each package's PyPI metadata for the exact version shipped.
 
 ## Where the license texts are
 
@@ -48,26 +48,26 @@ opencv-python's notice says Qt 5 comes only with the non-headless wheels; the pa
 | [anyio](https://anyio.readthedocs.io/en/stable/versionhistory.html) | 4.15.1 | MIT | Linux, Windows, macOS | yes |
 | [attrs](https://www.attrs.org/en/stable/changelog.html) | 26.1.0 | MIT | Linux, Windows, macOS | yes |
 | [beautifulsoup4](https://www.crummy.com/software/BeautifulSoup/bs4/) | 4.15.0 | MIT License | Linux, Windows, macOS | yes |
-| [certifi](https://github.com/certifi/python-certifi) | 2026.7.22 | MPL-2.0 | Linux, Windows, macOS | yes |
-| [charset_normalizer](https://github.com/jawah/charset_normalizer/blob/master/CHANGELOG.md) | 3.5.1 | MIT | Linux, Windows, macOS | yes |
+| [certifi](https://github.com/certifi/python-certifi) | 2026.10.23 | MPL-2.0 | Linux, Windows, macOS | yes |
+| [charset_normalizer](https://github.com/jawah/charset_normalizer/blob/master/CHANGELOG.md) | 3.5.2 | MIT | Linux, Windows, macOS | yes |
 | [click](https://github.com/pallets/click/) | 8.5.0 | BSD-3-Clause | Linux, Windows, macOS | yes |
 | [colorama](https://github.com/tartley/colorama) | 0.4.6 | BSD License | Windows | yes |
 | [colorlog](https://github.com/borntyping/python-colorlog) | 6.12.0 | MIT License | Linux, Windows, macOS | yes |
 | [defusedxml](https://github.com/tiran/defusedxml) | 0.7.1 | PSFL | Linux, Windows, macOS | yes |
 | [dill](https://github.com/uqfoundation/dill) | 0.4.1 | BSD-3-Clause | Linux, Windows, macOS | yes |
-| [doclang](https://www.doclang.ai/) | 0.7.3 | Apache-2.0 | Linux, Windows, macOS | yes |
-| [docling](https://github.com/docling-project/docling/blob/main/CHANGELOG.md) | 2.130.0 | MIT | Linux, Windows, macOS | supplement |
-| [docling_core](https://github.com/docling-project/docling-core/blob/main/CHANGELOG.md) | 2.98.0 | MIT | Linux, Windows, macOS | yes |
+| [doclang](https://www.doclang.ai/) | 0.7.4 | Apache-2.0 | Linux, Windows, macOS | yes |
+| [docling](https://github.com/docling-project/docling/blob/main/CHANGELOG.md) | 2.140.0 | MIT | Linux, Windows, macOS | supplement |
+| [docling_core](https://github.com/docling-project/docling-core/blob/main/CHANGELOG.md) | 2.103.0 | MIT | Linux, Windows, macOS | yes |
 | [docling_ibm_models](https://github.com/docling-project/docling-ibm-models/blob/main/CHANGELOG.md) | 4.0.3 | MIT | Linux, Windows, macOS | yes |
-| [docling_parse](https://github.com/docling-project/docling-parse) | 7.21.0 | MIT | Linux, Windows, macOS | yes |
-| [docling_slim](https://github.com/docling-project/docling/blob/main/CHANGELOG.md) | 2.130.0 | MIT | Linux, Windows, macOS | yes |
+| [docling_parse](https://github.com/docling-project/docling-parse) | 7.22.3 | MIT | Linux, Windows, macOS | yes |
+| [docling_slim](https://github.com/docling-project/docling/blob/main/CHANGELOG.md) | 2.140.0 | MIT | Linux, Windows, macOS | yes |
 | [et_xmlfile](https://foss.heptapod.net/openpyxl/et_xmlfile) | 2.0.0 | MIT | Linux, Windows, macOS | yes |
-| [faker](https://github.com/joke2k/faker) | 40.39.0 | MIT License | Linux, Windows, macOS | yes |
-| [filelock](https://github.com/tox-dev/py-filelock) | 4.0.4 | MIT | Linux, Windows, macOS | yes |
+| [faker](https://github.com/joke2k/faker) | 40.44.0 | MIT License | Linux, Windows, macOS | yes |
+| [filelock](https://github.com/tox-dev/py-filelock) | 4.2.6 | MIT | Linux, Windows, macOS | yes |
 | [filetype](https://github.com/h2non/filetype.py) | 1.2.0 | MIT | Linux, Windows, macOS | yes |
 | [fsspec](https://github.com/fsspec/filesystem_spec) | 2026.9.0 | BSD-3-Clause | Linux, Windows, macOS | yes |
 | [h11](https://github.com/python-hyper/h11) | 0.16.0 | MIT | Linux, Windows, macOS | yes |
-| [hf_xet](https://github.com/huggingface/xet-core) | 1.6.0 | Apache-2.0 | Linux, Windows, macOS | yes |
+| [hf_xet](https://github.com/huggingface/xet-core) | 1.8.0 | Apache-2.0 | Linux, Windows, macOS | yes |
 | [httpcore](https://www.encode.io/httpcore/) | 1.0.9 | BSD-3-Clause | Linux, Windows, macOS | yes |
 | [httpx](https://github.com/encode/httpx) | 0.28.1 | BSD-3-Clause | Linux, Windows, macOS | yes |
 | [huggingface_hub](https://github.com/huggingface/huggingface_hub) | 1.32.0 | Apache-2.0 | Linux, Windows, macOS | yes |
@@ -79,10 +79,10 @@ opencv-python's notice says Qt 5 comes only with the non-headless wheels; the pa
 | [langcodes](https://github.com/georgkrause/langcodes) | 3.5.1 | MIT License | Linux, Windows, macOS | yes |
 | [latex2mathml](https://www.buymeacoffee.com/roniemartinez) | 3.81.1 | MIT | Linux, Windows, macOS | supplement |
 | [lxml](https://lxml.de/) | 6.1.3 | BSD-3-Clause | Linux, Windows, macOS | yes |
-| [mail_parser](https://github.com/SpamScope/mail-parser) | 4.6.5 | Apache-2.0 | Linux, Windows, macOS | yes |
+| [mail_parser](https://github.com/SpamScope/mail-parser) | 4.10.0 | Apache-2.0 | Linux, Windows, macOS | yes |
 | [markdown_it_py](https://github.com/executablebooks/markdown-it-py) | 4.2.0 | MIT License | Linux, Windows, macOS | yes |
-| [marko](https://marko-py.readthedocs.io) | 2.2.4 | MIT | Linux, Windows, macOS | yes |
-| [markupsafe](https://github.com/pallets/markupsafe/) | 3.0.3 | BSD-3-Clause | Linux, Windows, macOS | yes |
+| [marko](https://marko-py.readthedocs.io) | 2.2.5 | MIT | Linux, Windows, macOS | yes |
+| [markupsafe](https://github.com/pallets/markupsafe/) | 3.0.4 | BSD-3-Clause | Linux, Windows, macOS | yes |
 | [mdurl](https://github.com/executablebooks/mdurl) | 0.1.2 | MIT License | Linux, Windows, macOS | yes |
 | [mpire](https://github.com/sybrenjansen/mpire) | 2.10.2 | MIT | Linux, Windows, macOS | yes |
 | [mpmath](http://mpmath.org/) | 1.3.0 | BSD | Linux, Windows, macOS | yes |
@@ -94,44 +94,44 @@ opencv-python's notice says Qt 5 comes only with the non-headless wheels; the pa
 | [opencv_python](https://github.com/opencv/opencv-python) | 5.0.0.93 | Apache 2.0 | Linux, Windows, macOS | yes |
 | [openpyxl](https://openpyxl.readthedocs.io) | 3.1.5 | MIT | Linux, Windows, macOS | yes |
 | [packaging](https://github.com/pypa/packaging) | 26.3 | Apache-2.0 OR BSD-2-Clause | Linux, Windows, macOS | yes |
-| [pandas](https://pandas.pydata.org/docs/) | 3.0.6 | BSD License | Linux, Windows, macOS | yes |
+| [pandas](https://pandas.pydata.org/docs/) | 3.1.0 | BSD License | Linux, Windows, macOS | yes |
 | [pillow](https://python-pillow.github.io) | 12.3.0 | MIT-CMU | Linux, Windows, macOS | yes |
-| [pip](https://pip.pypa.io/) | 26.2.1 | MIT | Linux, Windows, macOS | yes |
-| pluggy | 1.6.0 | MIT | Linux, Windows, macOS | yes |
-| [polyfactory](https://blog.litestar.dev) | 3.3.0 | MIT | Linux, Windows, macOS | yes |
+| [pip](https://pip.pypa.io/) | 26.2.2 | MIT | Linux, Windows, macOS | yes |
+| pluggy | 1.7.0 | MIT | Linux, Windows, macOS | yes |
+| [polyfactory](https://blog.litestar.dev) | 3.5.0 | MIT | Linux, Windows, macOS | yes |
 | [psutil](https://github.com/giampaolo/psutil) | 7.2.2 | BSD-3-Clause | Linux, Windows, macOS | yes |
 | [pyclipper](https://github.com/fonttools/pyclipper) | 1.4.0 | MIT | Linux, Windows, macOS | yes |
-| [pydantic](https://github.com/pydantic/pydantic) | 2.13.5 | MIT | Linux, Windows, macOS | yes |
-| [pydantic_core](https://github.com/pydantic) | 2.46.5 | MIT | Linux, Windows, macOS | yes |
-| [pydantic_settings](https://github.com/pydantic/pydantic-settings) | 2.15.0 | MIT | Linux, Windows, macOS | yes |
+| [pydantic](https://github.com/pydantic/pydantic) | 2.14.2 | MIT | Linux, Windows, macOS | yes |
+| [pydantic_core](https://github.com/pydantic) | 2.50.2 | MIT | Linux, Windows, macOS | yes |
+| [pydantic_settings](https://github.com/pydantic/pydantic-settings) | 2.16.2 | MIT | Linux, Windows, macOS | yes |
 | [pygments](https://pygments.org) | 2.21.0 | BSD-2-Clause | Linux, Windows, macOS | yes |
 | [pylatexenc](https://github.com/phfaist/pylatexenc) | 2.11 | MIT | Linux, Windows, macOS | yes |
-| [pypdfium2](https://github.com/pypdfium2-team/pypdfium2) | 5.13.0 | BSD-3-Clause, Apache-2.0, dependency licenses | Linux, Windows, macOS | yes |
-| [python_dateutil](https://github.com/dateutil/dateutil) | 2.9.0.post0 | Apache-2.0 AND BSD-3-Clause (dual) | Linux, Windows, macOS | yes |
+| [pypdfium2](https://github.com/pypdfium2-team/pypdfium2) | 5.14.0 | BSD-3-Clause, Apache-2.0, dependency licenses | Linux, Windows, macOS | yes |
+| [python_dateutil](https://github.com/dateutil/dateutil) | 3.0.0 | Apache-2.0 AND BSD-3-Clause (dual) | Linux, Windows, macOS | yes |
 | [python_docx](https://github.com/python-openxml/python-docx) | 1.2.0 | MIT | Linux, Windows, macOS | yes |
-| [python_dotenv](https://github.com/theskumar/python-dotenv) | 1.2.3 | BSD-3-Clause | Linux, Windows, macOS | yes |
+| [python_dotenv](https://github.com/theskumar/python-dotenv) | 1.2.4 | BSD-3-Clause | Linux, Windows, macOS | yes |
 | [python_oxmsg](https://github.com/scanny/python-oxmsg) | 0.0.2 | MIT | Linux, Windows, macOS | yes |
 | [python_pptx](https://github.com/scanny/python-pptx) | 1.0.2 | MIT | Linux, Windows, macOS | yes |
 | [pywin32](https://github.com/mhammond/pywin32) | 312 | PSF | Windows | yes |
 | [pyyaml](https://pyyaml.org/) | 6.0.3 | MIT | Linux, Windows, macOS | yes |
 | [rapidocr](https://github.com/RapidAI/RapidOCR/releases) | 3.9.2 | Apache-2.0 | Linux, Windows, macOS | supplement |
 | [referencing](https://github.com/python-jsonschema/referencing) | 0.37.0 | MIT | Linux, Windows, macOS | yes |
-| [regex](https://github.com/mrabarnett/mrab-regex) | 2026.9.10 | Apache-2.0 AND CNRI-Python | Linux, Windows, macOS | yes |
+| [regex](https://github.com/mrabarnett/mrab-regex) | 2026.9.29 | Apache-2.0 AND CNRI-Python | Linux, Windows, macOS | yes |
 | [requests](https://github.com/psf/requests) | 2.34.2 | Apache-2.0 | Linux, Windows, macOS | yes |
 | [rich](https://github.com/Textualize/rich) | 15.0.0 | MIT | Linux, Windows, macOS | yes |
-| [rpds_py](https://github.com/crate-py/rpds) | 2026.6.3 | MIT | Linux, Windows, macOS | yes |
+| [rpds_py](https://github.com/crate-py/rpds) | 2026.9.1 | MIT | Linux, Windows, macOS | yes |
 | [rtree](https://rtree.readthedocs.io) | 1.4.1 | MIT | Linux, Windows, macOS | yes |
 | [safetensors](https://github.com/huggingface/safetensors) | 0.8.0 | Apache Software License | Linux, Windows, macOS | yes |
 | [scipy](https://docs.scipy.org/doc/scipy/) | 1.17.1 | BSD License | Linux, Windows, macOS | yes |
 | [semchunk](https://github.com/isaacus-dev/semchunk) | 3.2.5 | MIT | Linux, Windows, macOS | yes |
 | [setuptools](https://github.com/pypa/setuptools) | 84.0.0 | MIT | Linux, Windows, macOS | yes |
-| [shapely](https://shapely.readthedocs.io/) | 2.1.2 | BSD 3-Clause | Linux, Windows, macOS | yes |
+| [shapely](https://shapely.readthedocs.io/) | 2.2.0 | BSD 3-Clause | Linux, Windows, macOS | yes |
 | [shellingham](https://github.com/sarugaku/shellingham) | 1.5.4 | ISC License | Linux, Windows, macOS | yes |
 | [six](https://github.com/benjaminp/six) | 1.17.0 | MIT | Linux, Windows, macOS | yes |
-| [soupsieve](https://github.com/facelessuser/soupsieve) | 2.10 | MIT | Linux, Windows, macOS | yes |
+| [soupsieve](https://github.com/facelessuser/soupsieve) | 3.0.4 | MIT | Linux, Windows, macOS | yes |
 | [sympy](https://sympy.org) | 1.14.0 | BSD | Linux, Windows, macOS | yes |
 | [tabulate](https://github.com/astanin/python-tabulate) | 0.10.0 | MIT | Linux, Windows, macOS | yes |
-| [tokenizers](https://github.com/huggingface/tokenizers) | 0.23.2 | Apache Software License | Linux, Windows, macOS | supplement |
+| [tokenizers](https://github.com/huggingface/tokenizers) | 0.23.3 | Apache Software License | Linux, Windows, macOS | supplement |
 | [torch](https://pytorch.org) | 2.14.0 / 2.14.0+cpu | Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND MIT | Linux, Windows, macOS | yes |
 | [torchvision](https://github.com/pytorch/vision) | 0.29.0 / 0.29.0+cpu | BSD | Linux, Windows, macOS | yes |
 | [tqdm](https://tqdm.github.io/releases) | 4.70.1 | MPL-2.0 AND MIT | Linux, Windows, macOS | yes |
@@ -144,7 +144,7 @@ opencv-python's notice says Qt 5 comes only with the non-headless wheels; the pa
 | [typer](https://github.com/fastapi/typer) | 0.26.8 | MIT | Linux, Windows, macOS | yes |
 | [typing_extensions](https://github.com/python/typing_extensions/issues) | 4.16.0 | PSF-2.0 | Linux, Windows, macOS | yes |
 | [typing_inspection](https://github.com/pydantic/typing-inspection) | 0.4.4 | MIT | Linux, Windows, macOS | yes |
-| [tzdata](https://github.com/python/tzdata) | 2026.4 | Apache-2.0 | Windows | yes |
+| [tzdata](https://github.com/python/tzdata) | 2026.6 | Apache-2.0 | Linux, Windows, macOS | yes |
 | [urllib3](https://github.com/urllib3/urllib3/blob/main/CHANGES.rst) | 2.8.0 | MIT | Linux, Windows, macOS | yes |
 | [websockets](https://github.com/python-websockets/websockets) | 16.1.1 | BSD-3-Clause | Linux, Windows, macOS | yes |
-| [xlsxwriter](https://github.com/jmcnamara/XlsxWriter) | 3.2.9 | BSD-2-Clause | Linux, Windows, macOS | yes |
+| [xlsxwriter](https://github.com/jmcnamara/XlsxWriter) | 3.3.1 | BSD-2-Clause | Linux, Windows, macOS | yes |

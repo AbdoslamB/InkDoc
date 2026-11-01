@@ -84,6 +84,11 @@ inkdoc/
 └── main.py                    # Unified desktop & headless CLI entry point
 ```
 
+Each area of the code has a developer guide in [`guides/`](guides/README.md): how it works,
+the rules it must keep, the tests that cover it, and lessons from earlier work there.
+[AGENTS.md](AGENTS.md) says which guide covers which file; read that guide before you change
+the file, and update it in the same pull request when the code changes how the area works.
+
 ---
 
 ## 3. Development Guidelines
@@ -177,24 +182,8 @@ python scripts/generate_engine_manifest.py --verify-manifest
 # 3. Run the whole test suite, exactly as CI does
 python -m pytest tests/
 
-# 4. UI logic tests (need Node.js; CI runs them on Linux)
-node tests/auto_engine_ui.test.js
-node tests/docs_release_selector.test.js
-node tests/enrichment_addon_ui.test.js
-node tests/glm_ocr_ui.test.js
-node tests/preview_word_count.test.js
-node tests/desktop_download_ui.test.js
-node tests/save_folder_ui.test.js
-node tests/preview_links_ui.test.js
-node tests/theme_toggle_ui.test.js
-node tests/settings_drawer_ui.test.js
-node tests/layout_width_ui.test.js
-node tests/text_size_ui.test.js
-node tests/math_render_ui.test.js
-node tests/tables_ui.test.js
-node tests/auto_steps_ui.test.js
-node tests/layout_addon_ui.test.js
-node tests/support_link_ui.test.js
+# 4. UI logic tests (need Node.js; CI runs every tests/*.test.js on Linux)
+(for t in tests/*.test.js; do node "$t" || exit 1; done)
 
 # Optional: how engines read tables, before and after the table check
 # (synthetic test pages, plus your own PDFs with NAME.tables.json; see the script)

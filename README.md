@@ -426,6 +426,8 @@ inkdoc/
 ├── scripts/                   # Build, release & calibration tooling
 ├── examples/                  # Developer client scripts & cURL examples
 ├── docs/                      # GitHub Pages landing page website
+├── guides/                    # Developer guides, one per area of the code
+├── AGENTS.md                  # What every change needs, and which guide to read
 ├── API.md                     # Dedicated REST API reference manual
 ├── CONTRIBUTING.md            # Contribution guidelines & security policy
 ├── main.py                    # Unified entry point (Desktop GUI or --headless)
@@ -446,24 +448,8 @@ python -m compileall -q main.py app tests examples scripts
 # 2. Run the whole test suite, exactly as CI does
 python -m pytest tests/
 
-# 3. UI logic tests (need Node.js; CI runs them on Linux)
-node tests/auto_engine_ui.test.js
-node tests/docs_release_selector.test.js
-node tests/enrichment_addon_ui.test.js
-node tests/glm_ocr_ui.test.js
-node tests/preview_word_count.test.js
-node tests/desktop_download_ui.test.js
-node tests/save_folder_ui.test.js
-node tests/preview_links_ui.test.js
-node tests/theme_toggle_ui.test.js
-node tests/settings_drawer_ui.test.js
-node tests/layout_width_ui.test.js
-node tests/text_size_ui.test.js
-node tests/math_render_ui.test.js
-node tests/preferences_ui.test.js
-node tests/engine_visibility_ui.test.js
-node tests/reset_defaults_ui.test.js
-node tests/support_link_ui.test.js
+# 3. UI logic tests (need Node.js; CI runs every tests/*.test.js on Linux)
+(for t in tests/*.test.js; do node "$t" || exit 1; done)
 
 # 4. Verify code style and formatting with Ruff
 ruff check .

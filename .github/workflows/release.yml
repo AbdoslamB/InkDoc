@@ -92,14 +92,14 @@ jobs:
       # Linux: the window is the user's own WebKit2GTK, so the bundle carries only
       # PyGObject's Python side, built here against 24.04's GLib, and
       # scripts/linux_host_libs.py removes the GTK stack PyInstaller collects.
-      # xvfb and x11-apps (xwd) are for the GUI smoke test.
+      # xvfb, x11-apps (xwd) and dbus-daemon (dbus-run-session) are for the GUI smoke test.
       - name: Set up the Linux build (GTK headers, venv)
         if: runner.os == 'Linux'
         shell: bash
         run: |
           sudo apt-get update
           sudo apt-get install -y libgirepository-2.0-dev libcairo2-dev pkg-config \
-            gir1.2-gtk-3.0 gir1.2-webkit2-4.1 libegl1 libxkbcommon0 libgl1 xvfb x11-apps
+            gir1.2-gtk-3.0 gir1.2-webkit2-4.1 libegl1 libxkbcommon0 libgl1 xvfb x11-apps dbus-daemon
           python -m venv "$HOME/inkdoc-build-venv"
           echo "$HOME/inkdoc-build-venv/bin" >> "$GITHUB_PATH"
           echo "VIRTUAL_ENV=$HOME/inkdoc-build-venv" >> "$GITHUB_ENV"
@@ -386,15 +386,19 @@ jobs:
 
       # The GUI path (a window under Xvfb, checked to have drawn something) with
       # APPIMAGE_EXTRACT_AND_RUN, then once more through the FUSE mount when the runner has it.
+      # Inside its own session bus, as a desktop login provides: GTK registers the app on the
+      # session bus before it creates the window, and the runner's own bus never answers, so
+      # without one no window ever appears (a plain WebKitGTK window neither). The
+      # linux-compat containers have no session bus at all, which GTK handles.
       - name: Smoke-test Linux AppImage artifact
         if: runner.os == 'Linux'
         shell: bash
         run: |
           appimage="release/inkdoc-linux-x86_64.AppImage"
-          xvfb-run -a -s "-screen 0 1400x900x24" python scripts/smoke_test_artifact.py \
+          dbus-run-session -- xvfb-run -a -s "-screen 0 1400x900x24" python scripts/smoke_test_artifact.py \
             --artifact "$appimage" --type appimage --expected-version "${{ steps.ver.outputs.version }}"
           if [ -e /dev/fuse ] && command -v fusermount3 >/dev/null; then
-            xvfb-run -a -s "-screen 0 1400x900x24" python scripts/smoke_test_artifact.py \
+            dbus-run-session -- xvfb-run -a -s "-screen 0 1400x900x24" python scripts/smoke_test_artifact.py \
               --artifact "$appimage" --type appimage --appimage-fuse \
               --expected-version "${{ steps.ver.outputs.version }}"
           else
@@ -404,23 +408,18 @@ jobs:
       - name: Enforce artifact size limits
         shell: pwsh
         run: |
-          # Baselines are the measured v1.0.3-rc1 artifact sizes with the docling-pack-v2
-          # manifest swapped for v3: -3,810,045 +4,109,124 bytes deflate in the zips and
-          # the onefile exe, -2,001,824 +2,252,988 in the LZMA installer. Caps are
-          # baseline + 6%, so a real regression trips the guard while normal drift does
-          # not. Re-measure after each release rather than letting these go stale: the
-          # caps before this were still set against v1.0.1 and left 1.4 MB of headroom
-          # on the macOS zip, which the engine manifest alone would have exceeded.
-          # The AppImage baseline is the 1.3.0 prototype built in an ubuntu:24.04 container
-          # with this workflow's steps (2026-10-19); re-measure it from the first CI build.
-          # The macOS disk image (1.3.0) still carries the last macOS zip's numbers: replace
-          # them with the size the first CI build reports.
+          # Baselines are the measured sizes of the first 1.3.0 CI builds (2026-11-01:
+          # Python 3.14.9, docling-pack-v2's manifest). Caps are baseline + 6%, so a real
+          # regression trips the guard while normal drift does not. Re-measure after each
+          # release rather than letting these go stale: the caps before 1.0.3 were still set
+          # against v1.0.1 and left 1.4 MB of headroom on the macOS zip, which the engine
+          # manifest alone would have exceeded.
           $limits = @{
-            "inkdoc-linux-x86_64.AppImage" = @{ Baseline = 113646072; Cap = 120464836 }
-            "inkdoc-macos.dmg" = @{ Baseline = 120399830; Cap = 127623819 }
-            "inkdoc-windows.zip" = @{ Baseline = 125443527; Cap = 132970138 }
-            "inkdoc.exe" = @{ Baseline = 122880190; Cap = 130253001 }
-            "inkdoc-setup.exe" = @{ Baseline = 93829365; Cap = 99459126 }
+            "inkdoc-linux-x86_64.AppImage" = @{ Baseline = 114592248; Cap = 121467782 }
+            "inkdoc-macos.dmg" = @{ Baseline = 126395086; Cap = 133978791 }
+            "inkdoc-windows.zip" = @{ Baseline = 130769445; Cap = 138615611 }
+            "inkdoc.exe" = @{ Baseline = 128009645; Cap = 135690223 }
+            "inkdoc-setup.exe" = @{ Baseline = 98410266; Cap = 104314881 }
           }
           if ($env:RUNNER_OS -eq "Linux") {
             $names = @("inkdoc-linux-x86_64.AppImage")

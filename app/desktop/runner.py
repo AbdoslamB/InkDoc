@@ -1040,11 +1040,24 @@ window.addEventListener("pywebviewready", function () {{
 def run_bridge_selftest(timeout: float = 30.0) -> int:
     """Open a window on a page under InkDoc's own policy and make one page -> app -> page
     round trip: 0 when it completes. The page calls bridge_echo, gets its result back, and
-    reports it through bridge_done, so both directions of the bridge are checked."""
+    reports it through bridge_done, so both directions of the bridge are checked.
+
+    Ends with os._exit: pywebview runs each page call on a thread that is not a daemon,
+    and one still waiting on the closed window (macOS) would keep the process alive."""
     import http.server
     import secrets
 
+    def say(line: str) -> None:
+        print(line, file=sys.stderr, flush=True)
+
+    def hung() -> None:
+        time.sleep(timeout + 20)
+        say(f"[FAIL] Page bridge self-test: still running after {timeout + 20:.0f} s.")
+        os._exit(1)
+
+    threading.Thread(target=hung, daemon=True).start()
     print("[*] Running InkDoc page bridge self-test...")
+    patched = False
     try:
         import webview
 
@@ -1075,34 +1088,43 @@ def run_bridge_selftest(timeout: float = 30.0) -> int:
         )
 
         def bridge_echo(value):
+            say("[*] The page called the window.")
             return f"echo:{value}"
 
         def bridge_done(value):
             result["value"] = str(value)
-            window.destroy()
+            # Closed only once this call has returned: pywebview sends its result to the
+            # page afterwards.
+            threading.Timer(0.5, window.destroy).start()
 
         def give_up():
             time.sleep(timeout)
             if "value" not in result:
                 window.destroy()
 
+        window.events.loaded += lambda: say("[*] The page loaded.")
         window.expose(bridge_echo, bridge_done)
         threading.Thread(target=give_up, daemon=True).start()
         webview.start(debug=False)
         server.shutdown()
+        value = result.get("value")
+        if value == "echo:inkdoc":
+            print(f"[ALL PASS] Page bridge self-test succeeded (pywebview patched: {patched}).", flush=True)
+            code = 0
+        else:
+            say(f"[FAIL] Page bridge self-test: the page's call "
+                f"{'returned ' + repr(value) if value else 'never returned'} within {timeout:.0f} s "
+                f"(pywebview patched: {patched}).")
+            code = 1
     except Exception as e:
-        print(f"[FAIL] Page bridge self-test failed: {e}", file=sys.stderr)
+        say(f"[FAIL] Page bridge self-test failed: {e}")
         import traceback
         traceback.print_exc()
-        return 1
-
-    value = result.get("value")
-    if value == "echo:inkdoc":
-        print(f"[ALL PASS] Page bridge self-test succeeded (pywebview patched: {patched}).")
-        return 0
-    print(f"[FAIL] Page bridge self-test: the page's call {'returned ' + repr(value) if value else 'never returned'} "
-          f"within {timeout:.0f} s (pywebview patched: {patched}).", file=sys.stderr)
-    return 1
+        code = 1
+    for stream in (sys.stdout, sys.stderr):  # None in a windowed Windows build
+        if stream:
+            stream.flush()
+    os._exit(code)
 
 
 def main() -> int:

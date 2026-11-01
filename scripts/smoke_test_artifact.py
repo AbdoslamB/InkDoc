@@ -347,6 +347,8 @@ def run_smoke_test(
             stderr=subprocess.PIPE,
             text=True,
             env=env,
+            # Its own process group, so kill_process_tree never reaches this script.
+            start_new_session=sys.platform != "win32",
         )
         # An AppImage run with APPIMAGE_EXTRACT_AND_RUN unpacks itself (~280 MB) first.
         selftest_timeout = 60.0 if artifact_type == "appimage" else 15.0
@@ -374,14 +376,20 @@ def run_smoke_test(
             stderr=subprocess.PIPE,
             text=True,
             env=env,
+            # Its own process group, so kill_process_tree never reaches this script.
+            start_new_session=sys.platform != "win32",
         )
         bridge_timeout = selftest_timeout + 60.0
         try:
             out, err = bridge_proc.communicate(timeout=bridge_timeout)
         except subprocess.TimeoutExpired as e:
             kill_process_tree(bridge_proc.pid)
+            out, err = bridge_proc.communicate()
             record_summary_line(f"[BRIDGE] {artifact_path.name}: TIMEOUT")
-            raise RuntimeError(f"--selftest-bridge timed out after {bridge_timeout:.0f}s for {artifact_path.name}") from e
+            raise RuntimeError(
+                f"--selftest-bridge timed out after {bridge_timeout:.0f}s for {artifact_path.name}:\n"
+                f"STDOUT:\n{out}\nSTDERR:\n{err}"
+            ) from e
         if bridge_proc.returncode != 0:
             record_summary_line(f"[BRIDGE] {artifact_path.name}: FAIL (exit code {bridge_proc.returncode})")
             raise RuntimeError(

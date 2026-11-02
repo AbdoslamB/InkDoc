@@ -351,13 +351,14 @@ def _classify(band: dict, lines: list[str], start: int, end: int) -> tuple[str, 
     found = [b.rows for b in blocks]
     if len(found) == n and all(same_table(e, f) for e, f in zip(expected, found, strict=True)):
         return OK, ""
+    tables_of = _plural(n, "a table's", "the tables'")
     if len(found) == n and all(same_table(e, f, strip_shapes=True) for e, f in zip(expected, found, strict=True)):
-        return SHAPES, f"Page {page}: the shapes in {_plural(n, 'a table', 'the tables')}' cells were left out."
+        return SHAPES, f"Page {page}: the shapes in {tables_of} cells were left out."
     if n >= 2 and len(found) < n:
         return MERGED, f"Page {page}: {n} side-by-side tables came out as one."
     if len(found) > n:
         return SPLIT, f"Page {page}: {a_table} came out split into pieces."
-    return MISMATCH, f"Page {page}: {_plural(n, 'a table', 'tables')}' rows or columns don't match the PDF."
+    return MISMATCH, f"Page {page}: {tables_of} rows or columns don't match the PDF."
 
 
 def check(markdown: str, finder_result: dict[str, Any]) -> tuple[list[str], list[BandResult]]:

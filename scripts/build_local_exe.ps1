@@ -297,6 +297,7 @@ if ($RunOnly) {
             "--collect-all", "pdfminer",
             "--collect-all", "pdfplumber",
             "--collect-all", "pypdfium2",
+            "--collect-data", "certifi",
             "--add-data", "${uiSrc};app/ui",
             "--add-data", "${assetsSrc};assets",
             "--add-data", "${manifestSrc};app/core",

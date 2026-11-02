@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+**If updating from inside InkDoc fails** with "CERTIFICATE_VERIFY_FAILED" (1.2.0 on
+some Windows computers; 1.3.0 on a Mac, or on Linux other than Ubuntu and Debian),
+download this version from the website once and install it over the one you have.
+Your settings, engines and add-ons are kept, and from this version on, updates work
+inside InkDoc.
+
+### Fixed
+- **Secure connections work on every Mac and on Fedora, Arch and openSUSE.** In
+  1.3.0 the macOS app, and the Linux app outside Ubuntu and Debian, couldn't
+  verify any website's certificate, so checking for updates, downloading Docling,
+  GLM-OCR or add-ons, and converting web pages all failed with "certificate
+  verify failed". InkDoc now uses the system's own certificates, or the ones it
+  ships with, when they aren't where it first looks. Windows, Ubuntu and Debian
+  work as before.
+- **A failed update check says what to do.** When InkDoc can't verify the update
+  server's certificate, Settings → Updates says so in plain words, and every
+  failed check or download offers a link to download the newest version from the
+  website. A new release that isn't ready for updating from inside InkDoc yet is
+  reported as that, not as "No signed update information has been published".
+- **New releases reach installed copies as soon as they're out.** 1.3.0 was
+  published a few hours before its signed update information, so update checks
+  found nothing to install. A release is now published only after that
+  information is up, and a check runs on every release.
+- **Table notes read correctly.** A note about one table's rows, columns or
+  cell shapes said "a table' rows"; it now says "a table's rows".
+
 ## [1.3.0] - 2026-11-01
 
 **Upgrading from 1.2:** your settings, engines and add-ons are kept. On Linux,

@@ -143,7 +143,7 @@ row here, or if a path below no longer exists.
 | [engines](guides/engines.md): Docling pack, add-ons, GLM-OCR | `app/core/engine_man*`, `app/core/manifest.json`, `app/core/addon*`, `app/core/download_utils.py`, `app/core/glm_ocr_*`, `app/core/engines/docling_*`, `app/core/engines/worker.py`, `app/core/engines/code_language.py`, `app/core/engines/glm_ocr_*`, `app/core/assets/`, `scripts/build_addon.py`, `scripts/build_layout_addon.py`, `scripts/build_glm_ocr_catalogue.py`, `scripts/build_pack.py` |
 | [server](guides/server.md): REST API, settings, URL conversion | `app/server/`, `app/core/url_fetcher.py`, `app/core/web_shell.py`, `app/core/security.py`, `API.md` |
 | [ui](guides/ui.md): the shared web and desktop UI | `app/ui/` |
-| [desktop](guides/desktop.md): the window and its bridge to the page | `main.py`, `app/desktop/`, `app/core/linux_host.py` |
+| [desktop](guides/desktop.md): the window and its bridge to the page | `main.py`, `app/desktop/`, `app/core/linux_host.py`, `app/core/tls_trust.py` |
 | [release](guides/release.md): CI, release builds, updates, the website | `.github/`, `scripts/`, `app/_version.py`, `app/core/update_*`, `installer.iss`, `winget/`, `CHANGELOG.md`, `docs/` |
 
 ## Core or add-on

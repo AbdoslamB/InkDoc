@@ -147,6 +147,10 @@ jobs:
         if: runner.os == 'Linux'
         run: node tests/docling_update_ui.test.js
 
+      - name: Test the website link under an update error
+        if: runner.os == 'Linux'
+        run: node tests/update_error_download_ui.test.js
+
       # installer.iss is otherwise only compiled by release.yml, after the tag is
       # pushed, so a mistake in its Pascal [Code] cost a version number. Compile
       # it here against a stand-in bundle (only the script is being checked).

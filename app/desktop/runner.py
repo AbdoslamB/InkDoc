@@ -1134,12 +1134,18 @@ def main() -> int:
     parser.add_argument("--selftest", action="store_true", help="Run self-test importing GUI backend and exit 0")
     parser.add_argument("--selftest-bridge", action="store_true",
                         help="Open a window under the page's policy and check one page -> app call; exit 0 on success")
+    parser.add_argument("--selftest-https", action="store_true",
+                        help="Fetch and verify the update manifest over HTTPS, as the updater does; exit 0 on success")
 
     args = parser.parse_args()
     if args.selftest:
         return run_selftest()
     if args.selftest_bridge:
         return run_bridge_selftest()
+    if args.selftest_https:
+        from app.core.tls_trust import https_selftest
+
+        return https_selftest()
     return run_desktop(port=args.port, headless=args.headless)
 
 

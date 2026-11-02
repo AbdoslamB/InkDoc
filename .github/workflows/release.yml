@@ -198,6 +198,7 @@ jobs:
             --collect-all pdfminer \
             --collect-all pdfplumber \
             --collect-all pypdfium2 \
+            --collect-data certifi \
             --add-data "app/ui${SEP}app/ui" \
             --add-data "assets${SEP}assets" \
             --add-data "app/core/manifest.json${SEP}app/core" \
@@ -225,6 +226,7 @@ jobs:
             --collect-all pdfminer \
             --collect-all pdfplumber \
             --collect-all pypdfium2 \
+            --collect-data certifi \
             --add-data "app/ui;app/ui" \
             --add-data "assets;assets" \
             --add-data "app/core/manifest.json;app/core" \

@@ -39,6 +39,14 @@ _repo_root = os.path.dirname(os.path.abspath(__file__))
 if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
+# The packaged app's OpenSSL looks for certificates where the build machine kept them. Point
+# it at this system's before anything opens an HTTPS connection; the workers below inherit
+# the choice (app/core/tls_trust.py).
+if getattr(sys, "frozen", False):
+    from app.core.tls_trust import use_system_certificates
+
+    use_system_certificates()
+
 # The MarkItDown worker (app/core/engines/markitdown_worker.py) is this same
 # executable, started by InkDoc itself. Checked before the desktop app is
 # imported, so the worker never loads the GUI or the web server.

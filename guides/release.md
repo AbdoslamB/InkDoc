@@ -14,6 +14,8 @@ this guide covers are listed in AGENTS.md's routing table.
 - Release dependencies are pinned exactly, so a release ships what was tested.
 - `docs/support/index.html` is never removed or renamed, and is live on `main` before a release
   that links to it is published.
+- An app release is published only after its signed manifest is on it
+  (`sign_manifest.py --publish`).
 
 ## How it works
 
@@ -57,6 +59,9 @@ ubuntu:24.04, debian:13 and fedora:44.
   and attaches them to the draft GitHub Release. Every list of asset names (the publish job's,
   the size caps, `sign_manifest.py`'s `TARGET_ASSETS`) must agree:
   `tests/test_release_assets.py`.
+- `release-check.yml`: whenever a release is published: `scripts/check_release.py` checks that
+  the updater's address serves a manifest for the tag that passes the app's own check, and that
+  every file it lists answers at its size. Tags other than vX.Y.Z are skipped.
 - `build-packs.yml`: the Docling engine pack, on a `docling-pack-vN` tag (see
   [engines.md](engines.md)).
 - `build-addon.yml`: the Docling code/formula recognition add-on, on a `docling-addon-vN` tag.
@@ -86,7 +91,15 @@ checklist is `docs/RELEASE_RUNBOOK.md`.
 - `update_manager.py` checks for updates (on demand, and optionally daily), picks the asset for
   this platform, downloads it with resume, a disk-space check and SHA-256 verification, and
   applies it (on Windows, the installer runs silently).
-- `scripts/sign_manifest.py` signs the manifest for a release.
+- `scripts/sign_manifest.py` signs the manifest for a release and checks it as the app will
+  (embedded keys, this version, every platform) before uploading. With `--publish` it also
+  checks build provenance first, and after the upload reads the manifest back, publishes the
+  draft as Latest and waits until the updater's address serves it: a release is never Latest
+  without its manifest. It starts under any interpreter (it puts the repo root on `sys.path`
+  itself; `python -I` in the tests).
+- An update check that fails sets `offer_download` in the status, and Settings → Updates then
+  links to the website's download section (`WEBSITE_DOWNLOAD_URL` in `app.js`, a fixed address
+  like `SUPPORT_URL`). A certificate error is worded by `update_manager.connection_error`.
 
 ### The website (`docs/`)
 
@@ -115,7 +128,8 @@ belongs in [guides/](README.md), not there.
 - Linux: `tests/test_build_appimage.py`, `tests/test_linux_host_libs.py`. macOS:
   `tests/test_build_dmg.py`.
 - Updates: `tests/test_update_verifier.py`, `tests/test_update_manager.py`,
-  `tests/test_update_api.py`, `tests/test_update_e2e.py`.
+  `tests/test_update_api.py`, `tests/test_update_e2e.py`, `tests/test_release_publish.py`,
+  `tests/test_tls_trust.py`, `tests/update_error_download_ui.test.js`.
 - Website: `tests/docs_release_selector.test.js`, `tests/support_link_ui.test.js`.
 
 ## Lessons
@@ -162,3 +176,27 @@ belongs in [guides/](README.md), not there.
   watchdog. The smoke script starts the self-test in its own process group, so killing the
   self-test's process tree never kills the script.
 - **Evidence:** 971e419.
+
+### Test HTTPS from the packaged app, on every system it ships to
+- **When:** you add code that opens an HTTPS connection, change the bundled Python or its
+  build, or add a platform.
+- **Lesson:** the packaged app's OpenSSL looks for certificates where the build machine kept
+  them. 1.3.0's macOS app found none on a Mac without python.org's Python, and its AppImage
+  none on Fedora, Arch or openSUSE, so every update check, download and URL conversion failed
+  there while CI stayed green: nothing in the smoke test opened an HTTPS connection.
+  `--selftest-https` now does, for every artifact and in the Fedora container. Source runs
+  can't show this; only the frozen app can.
+- **Evidence:** `tests/test_tls_trust.py`; the released v1.3.0 AppImage's update check in a
+  fedora:44 container ("unable to get local issuer certificate") versus debian:13 (reaches
+  GitHub).
+
+### Publish an app release only after its manifest is up
+- **When:** you publish a release, or change how releases are signed or published.
+- **Lesson:** the updater reads `/releases/latest/download/inkdoc-update-manifest.json`, so a
+  release published as Latest before its manifest is uploaded tells every installed copy "No
+  signed update information has been published". v1.3.0 went out that way, because the signer
+  failed to start under an embeddable Python and publishing didn't depend on it.
+  `sign_manifest.py --publish` publishes only after reading the manifest back, and
+  `release-check.yml` fails on every release installed copies can't use.
+- **Evidence:** `tests/test_release_publish.py`; v1.3.0 published 2026-11-01T14:26Z with no
+  manifest asset (404 at the latest URL until it was uploaded by hand).

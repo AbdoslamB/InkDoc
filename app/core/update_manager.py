@@ -16,6 +16,7 @@ import hashlib
 import logging
 import os
 import platform
+import ssl
 import subprocess
 import sys
 import threading
@@ -99,6 +100,30 @@ class UpdateStatus:
     platform_key: str = "unknown"
     platform_supported: bool = True
     compatibility_message: str | None = None
+    # The error is one a download from the website gets around (the page shows its link).
+    offer_download: bool = False
+
+
+NO_MANIFEST_YET = (
+    "The newest release isn't ready for updating from inside InkDoc yet. "
+    "Try again later, or download it from the website."
+)
+
+
+def connection_error(reason: Any) -> str:
+    """The update check's error for a failed connection, in words the user can act on.
+
+    A certificate InkDoc can't verify is a problem on this computer, not the network's:
+    1.2.0 met it on Windows (GitHub's newer certificate chain), and 1.3.0 on macOS and on
+    Linux beyond Debian and Ubuntu (no certificates found, app/core/tls_trust.py).
+    """
+    if isinstance(reason, ssl.SSLCertVerificationError):
+        detail = getattr(reason, "verify_message", None) or str(reason)
+        return (
+            "Update check failed: InkDoc couldn't verify the update server's security certificate "
+            f"on this computer ({detail}). Download the newest version from the website instead."
+        )
+    return f"Update check failed: network connection error ({reason})."
 
 
 def get_current_platform_key() -> tuple[str, bool, str | None]:
@@ -264,6 +289,18 @@ class UpdateManager:
             self._update_can_apply()
             return asdict(self._status)
 
+    def _fail(self, message: str, *, offer_download: bool = False) -> dict[str, Any]:
+        """Put the status in ERROR with `message`; call with the lock held.
+
+        `offer_download`: Settings then links to the website's download section, for
+        failures an update from inside InkDoc can't get past (the server, the network,
+        the signature, the download); not for this platform's own limits.
+        """
+        self._status.state = UpdateState.ERROR.value
+        self._status.error = message
+        self._status.offer_download = offer_download
+        return asdict(self._status)
+
     def _update_can_apply(self) -> None:
         """Evaluate if the staged update can be applied in-place."""
         is_frozen = getattr(sys, "frozen", False)
@@ -295,6 +332,7 @@ class UpdateManager:
 
             self._status.state = UpdateState.CHECKING.value
             self._status.error = None
+            self._status.offer_download = False
 
             # Discard the previous check's verified result before starting a new one.
             # These were only ever assigned on success and never cleared, so after a
@@ -314,9 +352,7 @@ class UpdateManager:
                 installed_ver,
             )
             with self._lock:
-                self._status.state = UpdateState.ERROR.value
-                self._status.error = f"Update check refused: application version is unknown ({installed_ver})"
-                return asdict(self._status)
+                return self._fail(f"Update check refused: application version is unknown ({installed_ver})")
 
         try:
             raw_manifest_bytes = self._fetch_manifest_bytes()
@@ -345,26 +381,20 @@ class UpdateManager:
 
                 # Platform compatibility check (Requirement 4)
                 if not self._platform_supported:
-                    self._status.state = UpdateState.ERROR.value
-                    self._status.error = self._compat_msg
-                    return asdict(self._status)
+                    return self._fail(self._compat_msg)
 
                 # Look up target asset for this platform
                 assets = manifest.get("assets", {})
                 target_asset = assets.get(self._platform_key)
 
                 if not target_asset:
-                    self._status.state = UpdateState.ERROR.value
-                    self._status.error = (
+                    return self._fail(
                         f"Release v{manifest['version']} does not provide an asset for '{self._platform_key}'."
                     )
-                    return asdict(self._status)
 
                 incompatible = glibc_incompatibility(target_asset, host_glibc())
                 if incompatible:
-                    self._status.state = UpdateState.ERROR.value
-                    self._status.error = incompatible
-                    return asdict(self._status)
+                    return self._fail(incompatible)
 
                 self._verified_target_asset = target_asset
                 self._status.asset_name = target_asset.get("filename")
@@ -384,38 +414,26 @@ class UpdateManager:
 
         except urllib.error.HTTPError as err:
             with self._lock:
-                self._status.state = UpdateState.ERROR.value
                 # Requirement B: "A missing or 404 manifest means 'couldn't check' and must never display 'up to date'."
-                if err.code == 404:
-                    # A 404 means the latest release carries no signed manifest yet,
-                    # not that anything is wrong with this installation. The previous
-                    # wording read like a client-side failure and sent users hunting
-                    # for a problem on their own machine.
-                    self._status.error = (
-                        "No signed update information has been published for the latest release yet."
-                    )
-                else:
-                    self._status.error = f"Update check failed: server returned HTTP {err.code}."
-                return asdict(self._status)
+                # A 404 means the latest release carries no signed manifest yet, not
+                # that anything is wrong with this installation. The previous wording
+                # read like a client-side failure and sent users hunting for a problem
+                # on their own machine.
+                message = NO_MANIFEST_YET if err.code == 404 else f"Update check failed: server returned HTTP {err.code}."
+                return self._fail(message, offer_download=True)
 
         except urllib.error.URLError as err:
             with self._lock:
-                self._status.state = UpdateState.ERROR.value
-                self._status.error = f"Update check failed: network connection error ({err.reason})."
-                return asdict(self._status)
+                return self._fail(connection_error(err.reason), offer_download=True)
 
         except UpdateVerificationError as err:
             with self._lock:
-                self._status.state = UpdateState.ERROR.value
-                self._status.error = f"Update verification failed: {err}"
-                return asdict(self._status)
+                return self._fail(f"Update verification failed: {err}", offer_download=True)
 
         except Exception as err:
             logger.exception("Unexpected error during update check")
             with self._lock:
-                self._status.state = UpdateState.ERROR.value
-                self._status.error = f"Update check error: {err}"
-                return asdict(self._status)
+                return self._fail(f"Update check error: {err}", offer_download=True)
 
     def _fetch_manifest_bytes(self) -> bytes:
         """Download raw envelope bytes from manifest URL with redirect validation."""
@@ -450,8 +468,7 @@ class UpdateManager:
                 installed_ver,
             )
             with self._lock:
-                self._status.state = UpdateState.ERROR.value
-                self._status.error = f"Update download refused: application version is unknown ({installed_ver})"
+                self._fail(f"Update download refused: application version is unknown ({installed_ver})")
             raise ValueError(f"Update download refused: application version is unknown ({installed_ver})")
 
         with self._lock:
@@ -469,6 +486,7 @@ class UpdateManager:
             self._status.downloaded_bytes = 0
             self._status.progress_percent = 0.0
             self._status.error = None
+            self._status.offer_download = False
 
             asset_info = dict(self._verified_target_asset)
 
@@ -550,18 +568,15 @@ class UpdateManager:
         except DownloadError as err:
             logger.warning(f"Download failed: {err}")
             with self._lock:
-                self._status.state = UpdateState.ERROR.value
-                self._status.error = str(err)
+                self._fail(str(err), offer_download=True)
         except SecurityError as err:
             logger.error(f"Security error during update download: {err}")
             with self._lock:
-                self._status.state = UpdateState.ERROR.value
-                self._status.error = str(err)
+                self._fail(str(err), offer_download=True)
         except Exception as err:
             logger.exception("Unexpected error during update download")
             with self._lock:
-                self._status.state = UpdateState.ERROR.value
-                self._status.error = f"Download error: {err}"
+                self._fail(f"Download error: {err}", offer_download=True)
 
     def cancel_download(self) -> dict[str, Any]:
         """Cancel an ongoing download."""
@@ -651,8 +666,7 @@ class UpdateManager:
             except OSError:
                 pass
             with self._lock:
-                self._status.state = UpdateState.ERROR.value
-                self._status.error = "Pre-execution integrity verification failed: hash mismatch."
+                self._fail("Pre-execution integrity verification failed: hash mismatch.")
             raise SecurityError("Pre-execution integrity verification failed. Update aborted.")
 
         logger.info(f"Launching verified installer: {installer_path}")

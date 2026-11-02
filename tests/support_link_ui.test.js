@@ -72,7 +72,10 @@ const href = (tag) => (tag.match(/href=["']([^"']*)["']/) || [])[1];
 const start = source.indexOf("  // The support links (Settings sidebar heart");
 const end = source.indexOf("  // ─── End external links", start);
 if (start < 0 || end < 0) throw new Error("could not locate the support links block in app.js");
-const block = source.slice(start, end);
+// The shared helper the block calls (openFixedAddress), sliced out the same way.
+const helperStart = source.indexOf("  // Links that open one fixed address");
+const helper = source.slice(helperStart, source.indexOf("  // When an update can't be checked", helperStart));
+const block = helper + source.slice(start, end);
 assert.ok(block.includes(`const SUPPORT_URL = "${URL}";`), "the app's address matches the markup");
 
 function setup({ desktop }) {

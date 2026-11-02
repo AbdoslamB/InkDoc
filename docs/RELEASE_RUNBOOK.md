@@ -111,50 +111,53 @@ GitHub Actions will automatically run `.github/workflows/release.yml`, which:
 - Generates GitHub build provenance attestations (`actions/attest-build-provenance`).
 - Creates a **DRAFT** GitHub release containing all compiled binaries and checksum files.
 
-### Step 3: Locally Verify and Sign the Release Manifest
+### Step 3: Sign the Manifest and Publish the Release
 
-Once the GitHub Actions workflow finishes:
-
-1. Confirm GitHub build provenance for every asset. `sign_manifest.py` does **not** do
-   this for you, so run it yourself first:
-   ```bash
-   gh release download vX.Y.Z --dir /tmp/inkdoc-vXYZ --repo AbdoslamB/InkDoc
-   for f in /tmp/inkdoc-vXYZ/*; do gh attestation verify "$f" --repo AbdoslamB/InkDoc; done
-   ```
-2. Run the local manifest generation and signing script:
-   ```bash
-   python scripts/sign_manifest.py --tag vX.Y.Z
-   ```
-   Add `--key-file <path>` if the key is not at the default `~/.inkdoc-keys/inkdoc_signing_key.pem`.
-   Use `--dry-run --out-manifest <path>` first to inspect the envelope without uploading.
-3. The script will interactively:
-   - Fetch the draft release metadata and download all release assets into a temporary directory.
-   - Verify all downloaded binaries against `SHA256SUMS-*.txt`.
-   - Prompt for the private key passphrase.
-   - Construct the release envelope containing download URLs, expected file sizes, and SHA-256 digests.
-   - Cryptographically sign the base64 payload bytes using the Ed25519 key.
-   - Upload the signed `inkdoc-update-manifest.json` to the draft release on GitHub.
-
-### Step 4: Publish the Release
+Once the GitHub Actions workflow finishes, and the release's draft holds every asset:
 
 0. Open `https://abdoslamb.github.io/InkDoc/support/` and check that it lands on
    Buy Me a Coffee. The app's support links open that page (from 1.3.0), and
    GitHub Pages serves it from `main`, so `docs/support/index.html` must be on
    `main` before anyone can download the release.
-1. Navigate to the GitHub Releases page: `https://github.com/AbdoslamB/InkDoc/releases`.
-2. Open the draft release for `vX.Y.Z`.
-3. Confirm that `inkdoc-update-manifest.json` is present among the release assets.
-4. Ensure **Set as the latest release** is checked. The in-app updater fetches
-   `/releases/latest/download/inkdoc-update-manifest.json`, which only resolves for the
-   release GitHub marks as Latest. If this is left unchecked, every install gets an
-   HTTP 404 on "Check for updates".
-5. Click **Publish release**.
+1. Sign and publish with one command, from the repo root:
+   ```bash
+   python scripts/sign_manifest.py --tag vX.Y.Z --publish
+   ```
+   Add `--key-file <path>` if the key is not at the default `~/.inkdoc-keys/inkdoc_signing_key.pem`.
+   Use `--dry-run --out-manifest <path>` first to inspect the envelope without uploading
+   (it can't be combined with `--publish`). Any Python with `cryptography` works, an
+   embeddable one included.
+2. The script, in this order, stopping at the first thing that fails:
+   - Fetches the draft's metadata (it refuses a release that is already published) and
+     downloads every asset into a temporary directory.
+   - Verifies them against `SHA256SUMS-*.txt`, and checks each one's build provenance
+     (`gh attestation verify`).
+   - Prompts for the private key passphrase, builds the envelope (download URLs, sizes,
+     SHA-256 digests, the CHANGELOG's notes) and signs its base64 payload with Ed25519.
+   - Checks the envelope as the app will: signed by a key the app embeds, for this
+     version, with an asset for every platform.
+   - Uploads `inkdoc-update-manifest.json` to the draft and reads it back.
+   - Publishes the draft as **Latest**. The updater fetches
+     `/releases/latest/download/inkdoc-update-manifest.json`, which only resolves for the
+     release GitHub marks as Latest.
+   - Waits (up to 5 minutes) until that address serves the exact manifest it signed.
+3. When it says `[Success] Installed copies now find X.Y.Z`, the release is live. The
+   **Release check** workflow runs on its own when the release is published and checks the
+   same address and every file the manifest lists; if it fails, GitHub emails you. Run it
+   yourself at any time: `python scripts/check_release.py --tag vX.Y.Z`.
 
-The release is now live. Existing InkDoc desktop installations will discover the update
-upon their next check — provided their embedded public keys include the key that signed
-this manifest.
+Without `--publish`, the script only signs and uploads: verify provenance yourself first
+(`gh attestation verify <file> --repo AbdoslamB/InkDoc` for every asset), then publish the
+draft with **Set as the latest release** checked, never before the manifest is on it. A
+Latest release without its manifest is what 1.3.0 shipped as: every installed copy said
+"No signed update information has been published" until it was uploaded.
 
-6. **Only now** push a commit that renames a download in `README.md` or `docs/index.html`
+Existing InkDoc desktop installations discover the update upon their next check, provided
+their embedded public keys include the key that signed this manifest.
+
+### Step 4: After Publishing
+
+1. **Only now** push a commit that renames a download in `README.md` or `docs/index.html`
    (as 1.3.0's switches from `inkdoc-linux.zip` to `inkdoc-linux-x86_64.AppImage` and from
    `inkdoc-macos.zip` to `inkdoc-macos.dmg` do). Their
    links go through `/releases/latest/download/`, and the landing page pins them to the

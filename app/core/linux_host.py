@@ -10,6 +10,7 @@ the process environment must point at the host's copies, not at the bundle:
 - host_env() is the environment for programs InkDoc starts on the user's behalf
   (xdg-open and the browser or file manager it starts). PyInstaller puts the bundle
   on LD_LIBRARY_PATH; inherited, it would load InkDoc's libraries into those programs.
+  The certificate file InkDoc chose for itself (app/core/tls_trust.py) is left out too.
 
 Standard library only, imported by main.py before anything else, so it stays cheap.
 """
@@ -19,6 +20,8 @@ import os
 import subprocess
 import sys
 from collections.abc import Callable, MutableMapping, Sequence
+
+from app.core.tls_trust import CHOSEN_BY_INKDOC
 
 # Where distributions keep typelibs: Debian/Ubuntu, Fedora/openSUSE, Arch, /usr/local.
 HOST_TYPELIB_DIRS = (
@@ -73,7 +76,7 @@ def host_env(environ: MutableMapping[str, str] | None = None) -> dict[str, str]:
 
     Only meaningful under PyInstaller's launcher, which saves a user-set value in
     LD_LIBRARY_PATH_ORIG and sets none when there was none; callers check
-    is_frozen_linux() first.
+    is_frozen_linux() first. SSL_CERT_FILE is dropped only when InkDoc set it.
     """
     env = dict(os.environ if environ is None else environ)
     original = env.pop("LD_LIBRARY_PATH_ORIG", None)
@@ -81,6 +84,9 @@ def host_env(environ: MutableMapping[str, str] | None = None) -> dict[str, str]:
         env["LD_LIBRARY_PATH"] = original
     else:
         env.pop("LD_LIBRARY_PATH", None)
+    chosen = env.pop(CHOSEN_BY_INKDOC, None)
+    if chosen and env.get("SSL_CERT_FILE") == chosen:
+        env.pop("SSL_CERT_FILE")
     return env
 
 

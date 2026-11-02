@@ -16,10 +16,13 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-try:  # imported by the tests, from the repo root
-    from scripts.build_dmg import copy_app, mounted, verify_signature
-except ImportError:  # run as a script: scripts/ is sys.path[0]
-    from build_dmg import copy_app, mounted, verify_signature
+# Run as a script, Python puts scripts/ on sys.path, not the repo root, and some
+# interpreters put neither (an embeddable Python's ._pth file, `python -I`).
+_REPO_ROOT = str(Path(__file__).resolve().parent.parent)
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+from scripts.build_dmg import copy_app, mounted, verify_signature  # noqa: E402
 
 
 def get_free_port() -> int:
@@ -302,6 +305,36 @@ def record_summary_line(line: str) -> None:
             summary.write(f"{line}\n")
 
 
+def run_selftest(exe_path: Path, env: dict, flag: str, label: str, name: str, timeout: float,
+                 failure: str = "") -> str:
+    """Run `exe_path flag`; its stdout once it exits 0. A failure or a timeout is recorded in the
+    summary as [label] and raised, with the app's output."""
+    print(f"[*] Running {flag}: {exe_path} {flag}")
+    proc = subprocess.Popen(
+        [str(exe_path), flag],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+        # Its own process group, so kill_process_tree never reaches this script.
+        start_new_session=sys.platform != "win32",
+    )
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        kill_process_tree(proc.pid)
+        out, err = proc.communicate()
+        record_summary_line(f"[{label}] {name}: TIMEOUT")
+        raise RuntimeError(f"{flag} timed out after {timeout:.0f}s for {name}:\nSTDOUT:\n{out}\nSTDERR:\n{err}") from e
+    if proc.returncode != 0:
+        record_summary_line(f"[{label}] {name}: FAIL (exit code {proc.returncode})")
+        raise RuntimeError(
+            f"{flag} failed with code {proc.returncode}{': ' + failure if failure else ''}.\n"
+            f"STDOUT:\n{out}\nSTDERR:\n{err}"
+        )
+    return out
+
+
 def run_smoke_test(
     artifact_path: Path,
     artifact_type: str,
@@ -339,64 +372,27 @@ def run_smoke_test(
                 raise RuntimeError(f"macOS executable path does not contain .app/Contents/MacOS: {exe_path}")
         print(f"[*] Prepared executable: {exe_path}")
 
-        # 1. Run GUI backend self-test in frozen build
-        print(f"[*] Running GUI backend self-test: {exe_path} --selftest")
-        selftest_proc = subprocess.Popen(
-            [str(exe_path), "--selftest"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=env,
-            # Its own process group, so kill_process_tree never reaches this script.
-            start_new_session=sys.platform != "win32",
-        )
-        # An AppImage run with APPIMAGE_EXTRACT_AND_RUN unpacks itself (~280 MB) first.
+        # 1. GUI backend self-test in the frozen build. An AppImage run with
+        # APPIMAGE_EXTRACT_AND_RUN unpacks itself (~280 MB) first.
         selftest_timeout = 60.0 if artifact_type == "appimage" else 15.0
-        try:
-            out, err = selftest_proc.communicate(timeout=selftest_timeout)
-            if selftest_proc.returncode != 0:
-                record_summary_line(f"[SELFTEST] {artifact_path.name}: FAIL (exit code {selftest_proc.returncode})")
-                raise RuntimeError(
-                    f"--selftest failed with code {selftest_proc.returncode}:\n"
-                    f"STDOUT:\n{out}\n"
-                    f"STDERR:\n{err}"
-                )
-            record_summary_line(f"[SELFTEST] {artifact_path.name}: PASS (exit code {selftest_proc.returncode})")
-        except subprocess.TimeoutExpired as e:
-            kill_process_tree(selftest_proc.pid)
-            record_summary_line(f"[SELFTEST] {artifact_path.name}: TIMEOUT")
-            raise RuntimeError(f"--selftest timed out after {selftest_timeout:.0f}s for {artifact_path.name}") from e
+        run_selftest(exe_path, env, "--selftest", "SELFTEST", artifact_path.name, selftest_timeout)
+        record_summary_line(f"[SELFTEST] {artifact_path.name}: PASS (exit code 0)")
 
         # 1b. A real window under the page's own policy: one page -> app -> page round trip
         # (app/desktop/webview_bridge.py). The app gives up after 30 s by itself.
-        print(f"[*] Running page bridge self-test: {exe_path} --selftest-bridge")
-        bridge_proc = subprocess.Popen(
-            [str(exe_path), "--selftest-bridge"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=env,
-            # Its own process group, so kill_process_tree never reaches this script.
-            start_new_session=sys.platform != "win32",
-        )
-        bridge_timeout = selftest_timeout + 60.0
-        try:
-            out, err = bridge_proc.communicate(timeout=bridge_timeout)
-        except subprocess.TimeoutExpired as e:
-            kill_process_tree(bridge_proc.pid)
-            out, err = bridge_proc.communicate()
-            record_summary_line(f"[BRIDGE] {artifact_path.name}: TIMEOUT")
-            raise RuntimeError(
-                f"--selftest-bridge timed out after {bridge_timeout:.0f}s for {artifact_path.name}:\n"
-                f"STDOUT:\n{out}\nSTDERR:\n{err}"
-            ) from e
-        if bridge_proc.returncode != 0:
-            record_summary_line(f"[BRIDGE] {artifact_path.name}: FAIL (exit code {bridge_proc.returncode})")
-            raise RuntimeError(
-                f"--selftest-bridge failed with code {bridge_proc.returncode}: the page could not reach "
-                f"the window's functions.\nSTDOUT:\n{out}\nSTDERR:\n{err}"
-            )
+        run_selftest(exe_path, env, "--selftest-bridge", "BRIDGE", artifact_path.name, selftest_timeout + 60.0,
+                     "the page could not reach the window's functions")
         record_summary_line(f"[BRIDGE] {artifact_path.name}: PASS")
+
+        # 1c. HTTPS as the updater does it: the real update manifest, its signature checked
+        # (app/core/tls_trust.py). The app retries network errors by itself, never a
+        # certificate error.
+        out = run_selftest(exe_path, env, "--selftest-https", "HTTPS", artifact_path.name, selftest_timeout + 90.0,
+                           "the app could not make verified HTTPS requests")
+        print(out)
+        source = next((line.split(": ", 1)[1] for line in out.splitlines()
+                       if line.startswith("[*] HTTPS certificates: ")), "not reported")
+        record_summary_line(f"[HTTPS] {artifact_path.name}: PASS ({source})")
 
         port = get_free_port()
         print(f"[*] Selected ephemeral port: {port}")

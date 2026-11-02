@@ -2,17 +2,24 @@
 """Fetch draft release assets, verify them, build and sign the update manifest envelope.
 
 Usage:
-    python scripts/sign_manifest.py --tag v1.1.0 [--key-file ~/.inkdoc-keys/inkdoc_signing_key.pem]
+    python scripts/sign_manifest.py --tag v1.1.0 [--key-file ~/.inkdoc-keys/inkdoc_signing_key.pem] [--publish]
 
 Workflow:
 1. Prompts for passphrase to unlock encrypted Ed25519 private key.
 2. Fetches draft release assets for the given tag from GitHub.
 3. Computes SHA-256 for all assets and checks against SHA256SUMS-*.txt.
 4. Constructs manifest payload and signs base64 payload bytes using Ed25519.
-5. Encapsulates in single-file JSON envelope and uploads to the draft release.
+5. Checks the envelope as the app will: against the public keys the app embeds, with
+   an asset for every platform.
+6. Encapsulates in single-file JSON envelope and uploads to the draft release.
 
-Note: this script does NOT run `gh attestation verify`. Verify build provenance
-separately before signing (see docs/RELEASE_RUNBOOK.md).
+With --publish (the release runbook's one command) it also checks every asset's build
+provenance (`gh attestation verify`) before signing, and after the upload reads the
+manifest back from the draft, publishes the draft as Latest, and waits until the
+updater's own address serves that exact manifest. The draft is published only once its
+manifest is up, so no installed copy ever finds a Latest release without one. Without
+--publish, build provenance is not checked: verify it separately before signing (see
+docs/RELEASE_RUNBOOK.md).
 """
 from __future__ import annotations
 
@@ -26,6 +33,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -33,12 +41,15 @@ from typing import Any
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
-try:  # imported by the tests, from the repo root
-    from scripts.changelog_notes import changelog_section
-except ImportError:  # run as a script: scripts/ is sys.path[0]
-    from changelog_notes import changelog_section
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
+# Run as a script, Python puts scripts/ on sys.path, not the repo root, and some
+# interpreters put neither (an embeddable Python's ._pth file, `python -I`): signing
+# v1.3.0 failed there with "No module named 'changelog_notes'".
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from app.core.update_manager import OFFICIAL_UPDATE_MANIFEST_URL  # noqa: E402
+from scripts.changelog_notes import changelog_section  # noqa: E402
 
 DEFAULT_KEY_PATH = Path.home() / ".inkdoc-keys" / "inkdoc_signing_key.pem"
 
@@ -53,6 +64,10 @@ TARGET_ASSETS = {
 # The oldest glibc each asset runs on: the build host's (release.yml's runner). Clients
 # from 1.3.0 on refuse an update their system can't start; older ones ignore the field.
 MIN_GLIBC = {"linux-x86_64": "2.39"}
+# The asset the updater fetches, named by its address.
+MANIFEST_ASSET = OFFICIAL_UPDATE_MANIFEST_URL.rsplit("/", 1)[1]
+# How long --publish waits for the updater's address to serve the new manifest.
+LATEST_WAIT_S = 300.0
 
 
 def compute_sha256(file_path: Path) -> str:
@@ -153,6 +168,70 @@ def build_envelope(
     }
 
 
+def check_envelope(envelope_raw: bytes, version: str) -> dict[str, Any]:
+    """The manifest inside the envelope, checked as the app will check it.
+
+    Signed by a key the app embeds (a signature by any other key would reach every
+    installed copy as "verification failed"), for this version, with an asset for
+    every platform the updater looks up.
+    """
+    from app.core.update_verifier import verify_envelope_bytes
+
+    manifest = verify_envelope_bytes(envelope_raw)
+    if manifest.get("version") != version:
+        raise ValueError(f"The manifest is for {manifest.get('version')}, not {version}.")
+    missing = sorted(set(TARGET_ASSETS.values()) - set(manifest.get("assets", {})))
+    if missing:
+        raise ValueError(f"The manifest has no asset for: {', '.join(missing)}.")
+    return manifest
+
+
+def verify_attestations(paths: list[Path], repo: str, run=None) -> None:
+    """`gh attestation verify` for each file; raises on the first that fails."""
+    run = run or subprocess.run
+    for path in paths:
+        res = run(["gh", "attestation", "verify", str(path), "--repo", repo],
+                  capture_output=True, text=True)
+        if res.returncode != 0:
+            raise RuntimeError(f"Build provenance did not verify for {path.name}:\n{res.stderr or res.stdout}")
+        print(f"[OK] Build provenance verified: {path.name}")
+
+
+def fetch_latest_manifest(url: str) -> bytes | None:
+    """What the updater's address serves now; None for an HTTP error (404 before publishing)
+    or a connection that failed, so a caller waiting for it tries again."""
+    req = urllib.request.Request(url, headers={"User-Agent": "InkDoc-ReleaseSigner", "Cache-Control": "no-cache"})
+    try:
+        with urllib.request.urlopen(req, timeout=30.0) as resp:
+            return resp.read()
+    except OSError:  # urllib's HTTP and connection errors included
+        return None
+
+
+def poll(attempt, *, timeout: float, interval: float, sleep=time.sleep, clock=time.monotonic):
+    """Call `attempt` until it returns something other than None or `timeout` passes; its last result."""
+    deadline = clock() + timeout
+    while True:
+        result = attempt()
+        if result is not None or clock() >= deadline:
+            return result
+        sleep(interval)
+
+
+def wait_for_latest(
+    expected: bytes,
+    url: str,
+    timeout: float = LATEST_WAIT_S,
+    fetch=fetch_latest_manifest,
+    sleep=time.sleep,
+    clock=time.monotonic,
+) -> bool:
+    """True once `url` serves exactly `expected`, as installed copies will fetch it."""
+    served = poll(lambda: True if fetch(url) == expected else None, timeout=timeout, interval=10.0,
+                  sleep=sleep, clock=clock)
+    return served is True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Sign and upload InkDoc update manifest to draft release")
     parser.add_argument("--tag", required=True, help="Release tag (e.g. v1.1.0)")
@@ -165,9 +244,18 @@ def main() -> int:
     parser.add_argument("--repo", default="AbdoslamB/InkDoc", help="GitHub repository (owner/repo)")
     parser.add_argument("--dry-run", action="store_true", help="Build and sign envelope locally without uploading")
     parser.add_argument("--out-manifest", type=Path, default=None, help="Save generated envelope to this path")
+    parser.add_argument(
+        "--publish",
+        action="store_true",
+        help="Also check build provenance, publish the draft as Latest once its manifest is up, "
+             "and wait until the updater's address serves it",
+    )
 
     args = parser.parse_args()
     clean_version = args.tag.lstrip("vV")
+    if args.publish and args.dry_run:
+        print("[Error] --publish and --dry-run exclude each other.", file=sys.stderr)
+        return 1
 
     # 1. Load private key
     key_file = args.key_file.expanduser()
@@ -201,6 +289,14 @@ def main() -> int:
         except Exception as exc:
             print(f"[Error] Failed to fetch release metadata for tag {args.tag}: {exc}", file=sys.stderr)
             return 1
+
+    if args.publish and not release_info.get("isDraft"):
+        print(
+            f"[Error] {args.tag} is already published. --publish signs a draft and then publishes it; "
+            "run without --publish to replace the manifest of a published release.",
+            file=sys.stderr,
+        )
+        return 1
 
     assets = release_info.get("assets", [])
     if not assets:
@@ -295,6 +391,13 @@ def main() -> int:
                             return 1
             print(f"[OK] Checksums verified against {sums_file.name}")
 
+        if args.publish:
+            try:
+                verify_attestations([temp_dir / name for name in wanted], args.repo)
+            except RuntimeError as exc:
+                print(f"[Error] {exc}", file=sys.stderr)
+                return 1
+
         release_notes, notes_source = pick_release_notes(
             clean_version, changelog_at_tag(args.tag), release_info.get("body") or "",
         )
@@ -322,9 +425,17 @@ def main() -> int:
         envelope = build_envelope(manifest_payload, private_key)
 
         envelope_json = json.dumps(envelope, indent=2)
-        out_file = args.out_manifest or (temp_dir / "inkdoc-update-manifest.json")
+        out_file = args.out_manifest or (temp_dir / MANIFEST_ASSET)
         out_file.write_text(envelope_json, encoding="utf-8")
-        print(f"[OK] Signed envelope generated successfully ({out_file.stat().st_size} bytes)")
+        signed = out_file.read_bytes()
+        print(f"[OK] Signed envelope generated successfully ({len(signed)} bytes)")
+
+        try:
+            check_envelope(signed, clean_version)
+        except Exception as exc:
+            print(f"[Error] The signed manifest would not pass the app's own check: {exc}", file=sys.stderr)
+            return 1
+        print("[OK] The manifest passes the app's own check (embedded keys, every platform)")
 
         if args.dry_run:
             print("[Dry-run] Manifest generated locally. Skipping upload.")
@@ -332,14 +443,54 @@ def main() -> int:
                 print(f"Manifest saved to: {out_file}")
             return 0
 
-        # Upload to release
+        # Upload to release, under the name the updater fetches whatever --out-manifest
+        # called the file (gh names an asset after the file it uploads).
+        upload_file = temp_dir / MANIFEST_ASSET
+        if upload_file != out_file:
+            shutil.copyfile(out_file, upload_file)
         if gh_available:
-            print("[*] Uploading inkdoc-update-manifest.json to release via gh CLI...")
-            cmd = ["gh", "release", "upload", args.tag, str(out_file), "--repo", args.repo, "--clobber"]
+            print(f"[*] Uploading {MANIFEST_ASSET} to release via gh CLI...")
+            cmd = ["gh", "release", "upload", args.tag, str(upload_file), "--repo", args.repo, "--clobber"]
             subprocess.run(cmd, check=True)
-            print(f"[Success] inkdoc-update-manifest.json uploaded to {args.tag}!")
+            print(f"[Success] {MANIFEST_ASSET} uploaded to {args.tag}!")
         else:
+            if args.publish:
+                print("[Error] --publish needs the gh CLI.", file=sys.stderr)
+                return 1
             print(f"[Warning] gh CLI not found. Please attach {out_file} manually to release {args.tag}.")
+            return 0
+
+        if not args.publish:
+            print("[*] Not published. Publish the draft as Latest, or use --publish next time.")
+            return 0
+
+        # Read it back from the draft before anyone can download it.
+        back_dir = temp_dir / "uploaded"
+        back_dir.mkdir()
+        subprocess.run(
+            ["gh", "release", "download", args.tag, "--repo", args.repo, "--dir", str(back_dir),
+             "--pattern", MANIFEST_ASSET],
+            check=True,
+        )
+        uploaded = (back_dir / MANIFEST_ASSET).read_bytes()
+        if uploaded != signed:
+            print("[Error] The manifest on the draft differs from the one signed; not publishing.", file=sys.stderr)
+            return 1
+        print("[OK] The draft carries the signed manifest")
+
+        subprocess.run(
+            ["gh", "release", "edit", args.tag, "--repo", args.repo, "--draft=false", "--latest"],
+            check=True,
+        )
+        print(f"[*] Published {args.tag} as Latest; waiting for the updater's address to serve it...")
+        if not wait_for_latest(uploaded, OFFICIAL_UPDATE_MANIFEST_URL):
+            print(
+                f"[Error] {OFFICIAL_UPDATE_MANIFEST_URL} did not serve the new manifest within "
+                f"{LATEST_WAIT_S:.0f}s. Check that {args.tag} is marked Latest on GitHub.",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"[Success] Installed copies now find {clean_version}: {OFFICIAL_UPDATE_MANIFEST_URL}")
 
     finally:
         if not args.dry_run and not args.out_manifest:

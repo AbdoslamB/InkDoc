@@ -791,6 +791,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const updateActionHelp        = document.getElementById("updateActionHelp");
   const updateErrorBox          = document.getElementById("updateErrorBox");
   const updateErrorMsg          = document.getElementById("updateErrorMsg");
+  const updateErrorDownload     = document.getElementById("updateErrorDownload");
   const dailyUpdateToggle       = document.getElementById("dailyUpdateToggle");
   const settingsUpdateDot       = document.getElementById("settingsUpdateDot");
   const aboutVersion            = document.getElementById("aboutVersion");
@@ -3457,6 +3458,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (updateErrorMsg) {
           updateErrorMsg.textContent = s.error || "An error occurred during update check.";
         }
+        if (updateErrorDownload) updateErrorDownload.hidden = s.offer_download !== true;
       }
       stopUpdatePolling();
     }
@@ -3807,18 +3809,27 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // The support links (Settings sidebar heart, About) open this one address,
-  // never whatever href the link carries. It is the website's /support/ page,
-  // which forwards to the support platform, so released apps never need to
-  // change when the platform does.
-  const SUPPORT_URL = "https://abdoslamb.github.io/InkDoc/support/";
-  document.querySelectorAll("[data-support-link]").forEach((link) => {
+  // Links that open one fixed address: in the desktop app the system browser opens
+  // `url`, never whatever href the link carries; in a browser tab the link works as written.
+  function openFixedAddress(link, url) {
     link.addEventListener("click", (e) => {
       if (!window.pywebview) return;
       e.preventDefault();
-      withWindowApi((api) => Promise.resolve(api.open_external_link(SUPPORT_URL)).catch(() => {}));
+      withWindowApi((api) => Promise.resolve(api.open_external_link(url)).catch(() => {}));
     });
-  });
+  }
+
+  // When an update can't be checked or downloaded here, the website's download section
+  // still has it.
+  const WEBSITE_DOWNLOAD_URL = "https://abdoslamb.github.io/InkDoc/#download";
+  if (updateErrorDownload) openFixedAddress(updateErrorDownload, WEBSITE_DOWNLOAD_URL);
+
+  // The support links (Settings sidebar heart, About) open the website's /support/
+  // page, which forwards to the support platform, so released apps never need to
+  // change when the platform does.
+  const SUPPORT_URL = "https://abdoslamb.github.io/InkDoc/support/";
+  document.querySelectorAll("[data-support-link]").forEach((link) => openFixedAddress(link, SUPPORT_URL));
+
   // ─── End external links ──────────────────────────────────────────────────
 
   // ─── Custom title bar (frameless desktop window only) ────────────────────

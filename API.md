@@ -400,7 +400,7 @@ Optional models, downloaded only when the user installs them. Each has a `target
 
 Endpoints for checking, downloading, and applying cryptographically signed application updates. Mutating endpoints require `X-InkDoc-Token: <session_token>` header.
 
-- `GET /update/status`: Returns current update state, active version, latest available version, and platform key.
+- `GET /update/status`: Returns current update state, active version, latest available version, and platform key. After a check or download that failed in a way a download from the website gets around (no signed manifest on the latest release yet, a certificate this computer can't verify, a network or verification error), `offer_download` is `true` and the page links to the website's download section.
 - `POST /update/check`: Checks GitHub Releases for a signed manifest (`manifest.json`) and verifies Ed25519 signature before parsing.
 - `POST /update/download`: Streams verified update asset to `~/Downloads` with Range-resume and hash verification.
 - `POST /update/cancel`: Cancels in-progress update download and deletes temporary download files.

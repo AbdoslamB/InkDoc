@@ -68,6 +68,21 @@ dragging by the custom title bar.
 browser and says what to install. Why the bundle carries none of them is in
 [release.md](release.md).
 
+### Certificates for HTTPS
+
+`app/core/tls_trust.py` runs first thing in `main.py`, before the worker branch, so the
+workers inherit its choice. The packaged app's OpenSSL looks for certificates where the build
+machine kept them: on macOS the python.org framework's folder, which a Mac without that Python
+lacks, and on Linux `/usr/lib/ssl`, which only Debian and Ubuntu have. In the packaged app on
+macOS, and on Linux when that folder has no certificates, it sets `SSL_CERT_FILE` to the
+system's own file (`/etc/ssl/cert.pem`; the Fedora, Arch and openSUSE bundles), else the
+`certifi` file release.yml bundles (`--collect-data certifi`). Windows (its certificate
+store), runs from source and a `SSL_CERT_FILE`/`SSL_CERT_DIR` the user set are left alone.
+`INKDOC_SSL_CERT_FILE` marks InkDoc's choice so `linux_host.host_env()` leaves it out of
+`xdg-open`. `inkdoc --selftest-https` fetches the real update manifest through the updater's
+code and checks its signature; `scripts/smoke_test_artifact.py` runs it for every artifact
+and in the linux-compat containers (Fedora exercises the fallback).
+
 ## Tests
 
 - `tests/test_desktop_save.py`: the nine page functions and the Save dialog.
@@ -75,6 +90,8 @@ browser and says what to install. Why the bundle carries none of them is in
 - `tests/test_window_handle.py`, `tests/test_titlebar_regions.py`: the Windows title bar.
 - `tests/test_linux_host.py`, `tests/test_linux_browser_fallback.py`: Linux host libraries and
   the browser fallback.
+- `tests/test_tls_trust.py`: which certificate file each system gets, the self-test, and the
+  updater's connection errors.
 - `tests/desktop_download_ui.test.js`, `tests/save_folder_ui.test.js`,
   `tests/preview_links_ui.test.js`: the page's side.
 

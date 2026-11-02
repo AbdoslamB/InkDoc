@@ -133,6 +133,7 @@ def test_split_and_mismatch_are_reported():
     wrong = _md("Quarterly summary", "| Region | Q1 |", "|---|---|", "| North | 98 |", "| South | 120 |", "Figures are unaudited.")
     _, results = _run(wrong, _found(_band(_table(LEFT))), allowed=False)
     assert results[0].issue == MISMATCH
+    assert results[0].message == "Page 1: a table's rows or columns don't match the PDF."
 
 
 # ─── Safety ──────────────────────────────────────────────────────────────────

@@ -15,6 +15,7 @@ if str(REPO_ROOT) not in sys.path:
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from app.core.update_manager import (
+    NO_MANIFEST_YET,
     UpdateManager,
     UpdateState,
     get_current_platform_key,
@@ -201,11 +202,12 @@ class TestUpdateManager(unittest.TestCase):
             self.assertEqual(status["state"], UpdateState.ERROR.value)
             self.assertEqual(
                 status["error"],
-                "No signed update information has been published for the latest release yet.",
+                NO_MANIFEST_YET,
             )
             # Must not read as a fault on the user's machine.
             self.assertNotIn("failed", status["error"].lower())
             self.assertNotEqual(status["state"], UpdateState.UP_TO_DATE.value)
+            self.assertTrue(status["offer_download"])
 
     def test_failed_check_discards_previously_verified_asset(self) -> None:
         """A failing check must not leave the previous check's asset usable.

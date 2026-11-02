@@ -464,7 +464,8 @@ ruff check .
 Contributions, bug reports, and feature proposals are welcome.
 
 - Review **[`CONTRIBUTING.md`](CONTRIBUTING.md)** for architecture guidelines, pull request protocols, and test requirements.
-- Report security vulnerabilities confidentially via the **[Security Policy](CONTRIBUTING.md#6-security-policy)**.
+- Using AI tools to contribute? They're welcome; read the **[AI Policy](AI_POLICY.md)** first.
+- Report security vulnerabilities confidentially via the **[Security Policy](SECURITY.md)**.
 - Built with love by one independent developer. If InkDoc saves you time, you can **[buy me a coffee](https://buymeacoffee.com/abdoslamb)**.
 
 <br />

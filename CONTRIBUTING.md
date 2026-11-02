@@ -200,6 +200,7 @@ ruff check .
 1. **Open an Issue First**: For non-trivial changes, new features, or architectural adjustments, open an issue first to discuss the design.
 2. **Keep PRs Focused**: Keep pull requests focused on a single feature or bug fix.
 3. **Describe Your Verification**: Document the exact commands you ran and operating systems tested in the PR description using the template.
+4. **Using AI Tools**: They're welcome. You are the author of everything you submit: say which parts an AI tool wrote, and review and test all of it. The details are in the [AI Policy](AI_POLICY.md).
 
 ### Dependency Updates
 

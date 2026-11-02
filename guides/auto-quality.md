@@ -90,6 +90,19 @@ CONTRIBUTING.md, "Adding an Auto quality step", walks through it.
   excluded) after the block holding the line above them. Only adds lines, each after an
   `inkdoc:figure-text` / `inkdoc:dropped-text` comment.
 
+### Diagnosing one PDF
+
+`scripts/pdf_diagnose.py FILE.pdf [--level thorough]` (development only) runs InkDoc's own
+code on one PDF and reports, in one place: what the probe saw on each page, which steps the
+level runs and why the others don't, what Auto chose, what each step did and which tables
+are still wrong in what it keeps, and each installed engine on its own, with how much of the
+text it wrote and what the table stage would do with its Markdown (every table the PDF
+shows, and why it was or wasn't replaced). Each finding names the step and modules that
+decide it; problems are about what Auto keeps, the other engines give notes. It calls the
+module that makes each decision and copies no threshold: a new step or skip reason needs no
+change there, a new kind of verdict does. Its output goes to `scratch/pdf-diagnose/`
+(gitignored), never to Downloads.
+
 ## Tests
 
 - `tests/test_auto_engine.py`, `tests/test_auto_glm.py`: routing, escalation, GLM-OCR's time
@@ -99,6 +112,7 @@ CONTRIBUTING.md, "Adding an Auto quality step", walks through it.
 - `tests/test_thorough_passes.py`: the registry, `PassPlan`, `PassLog`.
 - `tests/test_step_imports.py`: what a step module may import.
 - `tests/test_pdf_probe.py`, `tests/test_quality_check.py`.
+- `tests/test_pdf_diagnose.py`: the diagnostic's findings, and one run of the real table stage.
 - `tests/auto_engine_ui.test.js`, `tests/auto_steps_ui.test.js`: the page's side.
 
 ## Lessons

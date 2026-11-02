@@ -28,6 +28,25 @@ move the bundles to the next minor version while the current one still gets bina
 after `scripts/runtime_bench.py` shows no regression. The 3.10 floor for running from source
 is tested by `ci.yml`'s `source-floor` job only.
 
+### Performance
+
+`scripts/perf_baseline.py check` (CI, every push) measures InkDoc's own process at startup,
+the server's and the MarkItDown worker's start, and a generated 100-page PDF through
+MarkItDown and the table finder (time and peak memory), and fails when memory grows by more
+than a quarter or a time by more than three quarters plus a second. Each runner has its
+entry in `scripts/perf_baseline.json`; a runner without one is only measured and the log
+prints the entry to add. Copy entries from CI's log, never edit the numbers; update one
+when a cost is meant (a new feature, a new Python), in the same change. A developer's own
+baseline stays in `scratch/`.
+
+`scripts/optimize_audit.py` (development only, suggestions only) looks for savings with
+evidence: newer packages and advisories (`--trial` installs an upgrade in a throwaway
+environment and compares the baseline's numbers and output digests), a profile of one
+conversion, the largest parts of a release `.zip`, and Python's and the pinned engines'
+newest versions. A candidate keeps every feature only if the full test suite passes and
+the output digests stay the same. Audit a release file, not a local build: a local build
+packs whatever the development environment has installed.
+
 ### Linux release
 
 Built on ubuntu-24.04, so the AppImage needs glibc 2.39 (`MIN_GLIBC` in
@@ -48,9 +67,9 @@ ubuntu:24.04, debian:13 and fedora:44.
 
 ### Workflows (all in `.github/workflows/`)
 
-- `ci.yml`: on every push/PR to `main`: `ruff check .`, `python -m compileall`, the tests and
-  the headless smoke test, matrixed across windows-latest/macos-latest/ubuntu-24.04, plus the
-  3.10 `source-floor` job.
+- `ci.yml`: on every push/PR to `main`: `ruff check .`, `python -m compileall`, the tests,
+  the performance baseline and the headless smoke test, matrixed across
+  windows-latest/macos-latest/ubuntu-24.04, plus the 3.10 `source-floor` job.
 - `release.yml`: on any `vX.Y.Z` tag push: builds a PyInstaller `--onedir --windowed` bundle
   per OS (`--collect-all markitdown --collect-all magika`, needed because both do
   dynamic/plugin-style imports PyInstaller's static analysis can't see), packages it (Windows
@@ -124,7 +143,8 @@ belongs in [guides/](README.md), not there.
 
 - `tests/test_release_assets.py`, `tests/test_sign_manifest_contract.py`,
   `tests/test_packaging_parity.py`, `tests/test_check_venv_imports.py`,
-  `tests/test_write_version.py`, `tests/test_changelog_notes.py`.
+  `tests/test_write_version.py`, `tests/test_changelog_notes.py`, `tests/test_perf_baseline.py`,
+  `tests/test_optimize_audit.py`.
 - Linux: `tests/test_build_appimage.py`, `tests/test_linux_host_libs.py`. macOS:
   `tests/test_build_dmg.py`.
 - Updates: `tests/test_update_verifier.py`, `tests/test_update_manager.py`,

@@ -70,23 +70,36 @@ def _table_cells(rows: int, cols: int, seed: int) -> list[list[str | None]]:
     return [head, *body]
 
 
+def _table_page(i: int, rows: int, top: float, lines: int) -> dict:
+    from tests._pdf_fixtures import drawn_page, prose_page
+    from tests._table_fixtures import grid_table
+
+    ops = grid_table(40, top, _table_cells(rows, 6, i), [88] * 6)
+    return drawn_page(ops, lines=prose_page(lines * 10, offset=i)["lines"])
+
+
+MIXED_PAGES = 100
+
+
+def make_mixed_pdf(path: Path) -> Path:
+    """MIXED_PAGES pages, prose and ruled tables in turn (also scripts/perf_baseline.py's workload)."""
+    from tests._pdf_fixtures import prose_page, write_pdf
+
+    return write_pdf(path, [
+        prose_page(400, offset=i) if i % 2 else _table_page(i, 10, 520, 20) for i in range(MIXED_PAGES)
+    ])
+
+
 def make_corpus(out: Path) -> Path:
-    from tests._pdf_fixtures import drawn_page, prose_page, words, write_pdf
-    from tests._table_fixtures import FIXTURES, grid_table
+    from tests._pdf_fixtures import prose_page, words, write_pdf
+    from tests._table_fixtures import FIXTURES
 
     folder = out / "corpus"
     folder.mkdir(parents=True, exist_ok=True)
 
     write_pdf(folder / "prose.pdf", [prose_page(400, offset=i * 7) for i in range(50)])
-
-    def table_page(i: int, rows: int, top: float, lines: int) -> dict:
-        ops = grid_table(40, top, _table_cells(rows, 6, i), [88] * 6)
-        return drawn_page(ops, lines=prose_page(lines * 10, offset=i)["lines"])
-
-    write_pdf(folder / "tables.pdf", [table_page(i, 16, 690, 5) for i in range(30)])
-    write_pdf(folder / "mixed.pdf", [
-        prose_page(400, offset=i) if i % 2 else table_page(i, 10, 520, 20) for i in range(100)
-    ])
+    write_pdf(folder / "tables.pdf", [_table_page(i, 16, 690, 5) for i in range(30)])
+    make_mixed_pdf(folder / "mixed.pdf")
     fixture_pages: list[dict] = []
     for build in FIXTURES.values():
         fixture_pages.extend(build()[0])
@@ -404,7 +417,7 @@ def _peak(pdf: str) -> None:
     from app.core.table_finder import find_tables
 
     run_markitdown(pdf, ConversionOptions(), {}, None)
-    find_tables(pdf, list(range(1, 101)), deep=True, time_budget_s=600)
+    find_tables(pdf, list(range(1, MIXED_PAGES + 1)), deep=True, time_budget_s=600)
     print(f"{peak_memory_mb():.1f}")
 
 

@@ -204,6 +204,12 @@ jobs:
       - name: Run test suite
         run: python -m pytest tests/ -q
 
+      # Startup, memory and conversion cost against this runner's entry in
+      # scripts/perf_baseline.json: a change that makes InkDoc heavier fails here.
+      # A runner with no entry yet is only measured, and the log shows the entry to add.
+      - name: Performance baseline
+        run: python scripts/perf_baseline.py check
+
       - name: Smoke test (CLI & headless server)
         shell: bash
         run: |

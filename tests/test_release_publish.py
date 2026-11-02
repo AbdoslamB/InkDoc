@@ -49,7 +49,9 @@ def _envelope(private, version=VERSION, assets=None) -> bytes:
 # ─── Starting the scripts ────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("script", ["scripts/sign_manifest.py", "scripts/check_release.py",
-                                    "scripts/smoke_test_artifact.py", "scripts/sign_glm_ocr_catalogue.py"])
+                                    "scripts/smoke_test_artifact.py", "scripts/sign_glm_ocr_catalogue.py",
+                                    "scripts/pdf_diagnose.py", "scripts/perf_baseline.py",
+                                    "scripts/optimize_audit.py"])
 def test_the_scripts_start_without_the_script_folder_on_the_path(script):
     # -I leaves the script's folder off sys.path, as an embeddable Python's ._pth file does.
     res = subprocess.run([sys.executable, "-I", script, "--help"], cwd=REPO, capture_output=True, text=True)

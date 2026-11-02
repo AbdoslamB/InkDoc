@@ -27,8 +27,9 @@ covers are listed in AGENTS.md's routing table.
 `/convert/batch`, `/convert/progress/{job_id}`, `/convert/cancel/{job_id}`, `/health`,
 `/extensions`), and dual-mounts `/static` and `/ui`.
 
-- **Lanes.** Docling (1), GLM-OCR (1), default (2) and a probe lane (1) for pdfium work, all
-  acquired in async code before `asyncio.to_thread`.
+- **Lanes.** Docling (1), GLM-OCR (1), default (2) and a probe lane (1) for pdfium work (PDF
+  probe, missing-text check and preview pages), all acquired in async code before
+  `asyncio.to_thread`.
 - **Engines.** `/engines/{name}/…` dispatches `glm_ocr` to `GlmOcrManager`; `/convert/estimate`
   gives GLM-OCR's page count and time estimate.
 - **Order of work.** Explicit engines convert → auto-save → check (missing text; tables too at
@@ -42,6 +43,9 @@ covers are listed in AGENTS.md's routing table.
   `X-Tables-Rebuilt`/`X-Tables-Warning` headers for text responses).
 - **Uploads.** Files of any size are accepted; over 100 MB the server refuses an upload only
   when less than 1 GB of disk would stay free (`507`).
+- **Preview.** `/preview/pdf` keeps up to 8 PDFs for the page's Original view (least recently
+  used first, 30 minutes idle, all at shutdown) and draws their pages in the probe lane;
+  copies are deleted under the pdfium lock, so none is open.
 
 ### Settings and the page
 
@@ -85,6 +89,7 @@ covers are listed in AGENTS.md's routing table.
 
 - `tests/test_server.py`: endpoints, lanes, the session-token check, CORS.
 - `tests/test_tables_api.py`, `tests/test_glm_ocr_api.py`: the tables and GLM-OCR endpoints.
+- `tests/test_source_preview.py`: the preview's PDF pages.
 - `tests/test_ui_preferences.py`, `tests/test_display_settings.py`: settings.
 - `tests/test_url_fetcher.py`, `tests/test_web_shell.py`: URL conversion.
 

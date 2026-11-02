@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -280,6 +281,55 @@ def send_file_conversion(port: int, filename: str, content: bytes, content_type:
         return markdown
 
 
+def send_preview_page(port: int, pdf: bytes) -> tuple[int, int]:
+    """Keep a PDF for the preview's Original view, draw its first page, close it; return the PNG's size.
+
+    Needs pdfium and Pillow's PNG writer in the bundle. The session token is read from
+    the page, as the UI gets it.
+    """
+    base = f"http://127.0.0.1:{port}"
+    with urllib.request.urlopen(f"{base}/InkDoc", timeout=10.0) as resp:
+        page = resp.read().decode("utf-8", errors="replace")
+    match = re.search(r'__INKDOC_SESSION_TOKEN__ = "([^"]+)"', page)
+    if not match:
+        raise RuntimeError("/InkDoc carries no session token")
+    token = {"X-InkDoc-Token": match.group(1)}
+
+    boundary = "----SmokeTestBoundary123456789"
+    body = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="file"; filename="sample.pdf"\r\n'
+        "Content-Type: application/pdf\r\n\r\n"
+    ).encode() + pdf + f"\r\n--{boundary}--\r\n".encode()
+    req = urllib.request.Request(
+        f"{base}/preview/pdf",
+        data=body,
+        headers={**token, "Content-Type": f"multipart/form-data; boundary={boundary}"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=20.0) as resp:
+        kept = json.loads(resp.read().decode("utf-8"))
+    if not kept.get("id") or not kept.get("pages"):
+        raise RuntimeError(f"/preview/pdf kept nothing: {kept}")
+
+    req = urllib.request.Request(f"{base}/preview/pdf/{kept['id']}/page/1?width=600", headers=token)
+    with urllib.request.urlopen(req, timeout=20.0) as resp:
+        png = resp.read()
+        content_type = resp.headers.get("Content-Type", "")
+    if content_type != "image/png" or png[:8] != b"\x89PNG\r\n\x1a\n":
+        raise RuntimeError(f"Page 1 is not a PNG ({content_type}, {len(png)} bytes)")
+    size = (int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big"))
+    if size[0] != 600:
+        raise RuntimeError(f"Page 1 was drawn {size[0]} pixels wide, not 600")
+
+    req = urllib.request.Request(f"{base}/preview/pdf/{kept['id']}", headers=token, method="DELETE")
+    with urllib.request.urlopen(req, timeout=10.0) as resp:
+        closed = json.loads(resp.read().decode("utf-8"))
+    if closed.get("status") != "closed":
+        raise RuntimeError(f"/preview/pdf/{{id}} didn't close it: {closed}")
+    return size
+
+
 def send_audio_conversion(port: int, content: bytes) -> str:
     """Require HTTP 200 or a clean non-5xx no-transcription response."""
     try:
@@ -517,7 +567,11 @@ def run_smoke_test(
                     raise AssertionError(f"Expected content in pdf markdown output, got: {pdf_md[:200]}")
                 record_summary_line(f"[CONVERT-PDF] {artifact_path.name}: PASS (output length: {len(pdf_md)} bytes)")
 
-                # 4e. WAV audio conversion; transcription is optional.
+                # 4e. The preview's Original view draws a PDF page.
+                width, height = send_preview_page(port, pdf_data)
+                record_summary_line(f"[PREVIEW-PDF] {artifact_path.name}: PASS ({width}x{height} PNG)")
+
+                # 4f. WAV audio conversion; transcription is optional.
                 audio_result = send_audio_conversion(port, generate_sample_wav())
                 if not audio_result.strip():
                     raise AssertionError("Audio conversion returned no result")

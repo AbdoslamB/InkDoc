@@ -64,6 +64,11 @@ How the server puts them in the page before first paint is in [server.md](server
   (`largeFileNotice`, the row's chip). The server's side is in [server.md](server.md).
 - **Links.** In the desktop app, links in a document go through `handleContentLinkClick`; see
   [desktop.md](desktop.md).
+- **Original view.** The Original switch (`btnSplitView`) shows the source beside the result:
+  images from `item.fileRef` in an `<img>`, PDFs as page images from `/preview/pdf`
+  ([server.md](server.md)), drawn only near the view, two at a time, and let go far from it.
+  Never a frame, object or PDF viewer: the policy stays as it is. Nothing loads while it is
+  off.
 
 ### Add-ons in Settings
 
@@ -83,7 +88,7 @@ browser (`tests/docs_release_selector.test.js` checks the website instead; see
 [release.md](release.md)). Each covers one feature, named in its file name: preferences, engine visibility, reset to
 defaults, theme toggle, settings drawer, layout width, text size, math rendering, preview links,
 word count, tables, Auto's steps, large files, notices, release notes, save folder, desktop
-download, support link, and the engine and add-on cards. The full list is in AGENTS.md's
+download, support link, the Original view, and the engine and add-on cards. The full list is in AGENTS.md's
 commands.
 
 On the Python side: `tests/test_vendor_manifest.py` (the pinned libraries) and

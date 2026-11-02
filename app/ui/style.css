@@ -2758,6 +2758,118 @@ html[data-hidden-engines~="glm_ocr"] #engineCardGlmOcr .engine-hidden-chip {
   display: block;
 }
 
+/* Original view: the source document beside the Rendered or Raw view */
+.split-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background-color: var(--sunken);
+  border: 1px solid transparent;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  padding: 5px 10px;
+  border-radius: 6px;
+  flex-shrink: 0;
+  transition: all var(--transition-fast);
+}
+
+.split-toggle:hover {
+  color: var(--ink);
+}
+
+.split-toggle[aria-pressed="true"] {
+  background-color: var(--mark-tint);
+  border-color: var(--mark);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.split-toggle:focus-visible,
+.source-pane:focus-visible {
+  outline: 2px solid var(--mark);
+  outline-offset: -2px;
+}
+
+.preview-panes {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.result-pane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.source-pane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  background-color: var(--sunken);
+  border-right: 1px solid var(--rule);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.source-pane[hidden] {
+  display: none;
+}
+
+/* Laid out at its own proportions before it is drawn, so scrolling never jumps */
+.source-page {
+  position: relative;
+  flex-shrink: 0;
+  width: 100%;
+  background-color: #fff;
+  box-shadow: var(--shadow-subtle);
+}
+
+.source-page::after {
+  content: "Page " attr(data-page);
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #6b766f;
+  font-size: 12px;
+}
+
+.source-page.is-failed::after {
+  content: "Page " attr(data-page) " couldn't be drawn";
+}
+
+.source-page img {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.source-image {
+  max-width: 100%;
+  height: auto;
+  flex-shrink: 0;
+}
+
+.source-note {
+  margin: auto;
+  max-width: 34ch;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 /* End of a preview that shows only the start of a very large result */
 .preview-cut-note {
   margin-top: 24px;
@@ -3560,6 +3672,16 @@ html[data-hidden-engines~="glm_ocr"] #engineCardGlmOcr .engine-hidden-chip {
 
   .engine-pill-group {
     flex-wrap: wrap;
+  }
+
+  /* Too narrow for two columns: the original above, the result below */
+  .preview-panes.is-split {
+    flex-direction: column;
+  }
+
+  .preview-panes.is-split .source-pane {
+    border-right: none;
+    border-bottom: 1px solid var(--rule);
   }
 }
 

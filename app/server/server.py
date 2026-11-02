@@ -20,6 +20,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, Literal
@@ -555,6 +556,10 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         logger.warning("Add-on settings reconciliation failed: %s", exc)
     yield
     _shutdown_engine_processes()
+    try:
+        _remove_preview_files(_take_stale_previews(time.monotonic(), keep=0))
+    except Exception as exc:
+        logger.debug("Preview cleanup: %s", exc)
 
 
 def _shutdown_engine_processes() -> None:
@@ -2110,6 +2115,150 @@ async def convert_estimate(
                 os.remove(tmp_path)
             except OSError:
                 pass
+
+
+# ─── The original pages, for the preview ──────────────────────────────────
+# The preview's "Original" view shows a PDF's pages as images drawn here with
+# pdfium, so the page needs no PDF viewer and its policy allows no frames: every
+# window (WebView2, WebKit on macOS and Linux) and browser shows the same thing.
+# The page uploads the PDF once and asks for each page as it scrolls into view.
+SOURCE_PREVIEW_MAX = 8            # PDFs kept at once; the least recently used goes first
+SOURCE_PREVIEW_IDLE_S = 30 * 60   # a PDF not looked at for this long is removed
+
+
+@dataclasses.dataclass
+class _SourcePreview:
+    path: str
+    pages: int
+    used: float
+
+
+_source_previews: dict[str, _SourcePreview] = {}
+_source_previews_lock = threading.Lock()
+
+
+def _take_stale_previews(now: float, keep: int | None = None) -> list[str]:
+    """Drop idle previews, and the least recently used beyond `keep` (SOURCE_PREVIEW_MAX);
+    return their files."""
+    keep = SOURCE_PREVIEW_MAX if keep is None else keep
+    with _source_previews_lock:
+        stale = [pid for pid, p in _source_previews.items() if now - p.used > SOURCE_PREVIEW_IDLE_S]
+        by_use = sorted((p.used, pid) for pid, p in _source_previews.items() if pid not in stale)
+        stale += [pid for _, pid in by_use[: max(0, len(by_use) - keep)]]
+        return [_source_previews.pop(pid).path for pid in stale]
+
+
+def _remove_preview_files(paths: list[str]) -> None:
+    """Delete preview copies. Blocking: run it in a thread.
+
+    Done under the pdfium lock, so none of them has a page being drawn: Windows
+    refuses to delete an open file.
+    """
+    if not paths:
+        return
+    from app.core.pdf_probe import pdfium_lock
+
+    with pdfium_lock():
+        for path in paths:
+            try:
+                os.remove(path)
+            except OSError as exc:
+                logger.debug("Could not remove preview copy %s: %s", os.path.basename(path), exc)
+
+
+@api_router.post("/preview/pdf", tags=["Preview"])
+async def preview_pdf_open(
+    request: Request,
+    file: UploadFile = File(..., description="The PDF to show next to its result"),
+):
+    """Keep a PDF for the preview's Original view. Requires session token. Converts nothing.
+
+    Returns its `id` and each page's `[width, height]` in points, so the page can
+    lay out every page before drawing any. Kept until `DELETE /preview/pdf/{id}`,
+    30 minutes without use, or eight newer PDFs.
+    """
+    require_session_token(request)
+    tmp_path = await _save_upload_to_temp(file, ".pdf")
+    try:
+        with open(tmp_path, "rb") as fh:
+            if b"%PDF-" not in fh.read(1024):
+                raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="This file is not a PDF.")
+        from app.core.pdf_pages import page_sizes
+
+        async with get_probe_semaphore():
+            sizes = await asyncio.to_thread(page_sizes, tmp_path)
+    except Exception as exc:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        if isinstance(exc, HTTPException):
+            raise
+        detail = (
+            "This PDF is password-protected, so its pages can't be shown."
+            if "password" in str(exc).lower()
+            else "This PDF's pages can't be shown: it could not be opened."
+        )
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail) from exc
+
+    preview_id = secrets.token_urlsafe(16)
+    now = time.monotonic()
+    with _source_previews_lock:
+        _source_previews[preview_id] = _SourcePreview(tmp_path, len(sizes), now)
+    await asyncio.to_thread(_remove_preview_files, _take_stale_previews(now))
+    return {"id": preview_id, "pages": [[round(w, 2), round(h, 2)] for w, h in sizes]}
+
+
+@api_router.get("/preview/pdf/{preview_id}/page/{page}", tags=["Preview"])
+async def preview_pdf_page(
+    request: Request,
+    preview_id: str,
+    page: int,
+    width: int = Query(1200, ge=1, le=10000, description="Wanted width in pixels (drawn at 200-2400)"),
+):
+    """One page of a kept PDF as a PNG. Requires session token.
+
+    `404` once the PDF is no longer kept: the page uploads it again.
+    """
+    require_session_token(request)
+    now = time.monotonic()
+    with _source_previews_lock:
+        entry = _source_previews.get(preview_id)
+        if entry is not None:
+            entry.used = now
+    if entry is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="This PDF is no longer kept for the preview.")
+    if not 1 <= page <= entry.pages:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"This PDF has no page {page}.")
+
+    from app.core.pdf_pages import render_page_png
+
+    async with get_probe_semaphore():
+        # A page scrolled past while it waited is not drawn.
+        if await request.is_disconnected():
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+        try:
+            png = await asyncio.to_thread(render_page_png, entry.path, page, width)
+        except Exception as exc:
+            with _source_previews_lock:
+                gone = preview_id not in _source_previews
+            if gone:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="This PDF is no longer kept for the preview.") from exc
+            logger.warning("Preview page %d could not be drawn: %s", page, exc)
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Page {page} could not be drawn.") from exc
+    await asyncio.to_thread(_remove_preview_files, _take_stale_previews(now))
+    return Response(content=png, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+
+@api_router.delete("/preview/pdf/{preview_id}", tags=["Preview"])
+async def preview_pdf_close(request: Request, preview_id: str):
+    """Forget a kept PDF and delete its copy. Requires session token. Harmless to repeat."""
+    require_session_token(request)
+    with _source_previews_lock:
+        entry = _source_previews.pop(preview_id, None)
+    if entry is not None:
+        await asyncio.to_thread(_remove_preview_files, [entry.path])
+    return {"status": "closed" if entry is not None else "not_open"}
 
 
 @api_router.get("/convert/progress/{job_id}", tags=["Conversion"])

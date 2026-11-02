@@ -182,6 +182,15 @@ Start the MarkItDown worker ahead of a conversion. Requires `X-InkDoc-Token`. Re
 
 MarkItDown runs in a separate worker process that InkDoc starts on demand and stops after 5 minutes without work, so InkDoc's own process never holds MarkItDown's ~95 MB of libraries. The first MarkItDown conversion after a pause waits for that start (1–3 s). The UI calls this endpoint when a conversion looks imminent (a file dragged over the window, the file picker opened, the URL box focused); API clients can call it before a batch. `unavailable` means the worker could not be started, and conversions then run in InkDoc's own process, with the same results. Conversion requests and responses are unchanged either way.
 
+### <a id="preview-pdf"></a>`POST /preview/pdf`, `GET /preview/pdf/{id}/page/{n}` & `DELETE /preview/pdf/{id}`
+The pages of a PDF as images, for the workbench's Original view (the document beside its result). They convert nothing, and each requires `X-InkDoc-Token`.
+
+- **`POST /preview/pdf`** (multipart `file`) keeps the PDF and returns its id and each page's size in points, as displayed: `{"id": "W-pkbyQpjeI7suKmAkMrcw", "pages": [[612.0, 792.0], [792.0, 612.0]]}`. `415` for a file that isn't a PDF, `422` for one that can't be opened (damaged, password-protected), and `507` as for conversions when the disk is full.
+- **`GET /preview/pdf/{id}/page/{n}?width=1200`** draws page `n` (from 1) as a PNG about `width` pixels wide (drawn at 200–2400, and at most about 12 megapixels). `404` for a page that isn't in the PDF, or once the PDF is no longer kept: upload it again.
+- **`DELETE /preview/pdf/{id}`** forgets it and deletes the copy: `{"status": "closed" | "not_open"}`.
+
+At most 8 PDFs are kept, the least recently used going first; one not looked at for 30 minutes, and all of them when InkDoc stops, are deleted. Pages are drawn one at a time, in the same queue as the PDF probe.
+
 ---
 
 ### <a id="auto-engine"></a>Auto engine (`engine=auto`)

@@ -5313,6 +5313,7 @@ document.addEventListener("DOMContentLoaded", () => {
     rawEditor.readOnly = false;
 
     refreshSwitchEngineButton(item);
+    showSourceFor(item);
 
     // Always reset the notice bar first
     hideConversionNotice();
@@ -5674,8 +5675,206 @@ document.addEventListener("DOMContentLoaded", () => {
     renderedContainer.classList.remove("active");
   });
 
+  // ─── Original view ───────────────────────────────────────────────────────
+  // The Original switch shows the document itself beside the Rendered or Raw
+  // view, to check a result against its source. An image is shown from the
+  // file the page already holds; a PDF is kept by the server once
+  // (POST /preview/pdf) and each page is drawn there as it scrolls into view,
+  // a few at a time, and let go again once well out of view. No frame and no
+  // PDF viewer: the page's policy stays as it is, and WebView2, WebKit and
+  // every browser show the same thing. Nothing is loaded while the switch is
+  // off. Other files and web addresses say why there is nothing to show.
+  const btnSplitView = document.getElementById("btnSplitView");
+  const previewPanes = document.getElementById("previewPanes");
+  const sourcePane   = document.getElementById("sourcePane");
+  const SOURCE_IMAGE = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i;
+  const SOURCE_PAGE_LOADS = 2;   // pages asked for at once; the server draws one at a time
+  let splitOn = false;
+  let sourceShown = null;        // what the pane shows: { item, urls, observer, waiting, loads }
+
+  function sourceKind(item) {
+    const file = item && item.fileRef;
+    if (!file) return null;
+    const name = file.name || item.name || "";
+    if (file.type === "application/pdf" || /\.pdf$/i.test(name)) return "pdf";
+    if (SOURCE_IMAGE.test(name)) return "image";
+    return null;
+  }
+
+  function sourceNote(text) {
+    const note = document.createElement("p");
+    note.className = "source-note";
+    note.textContent = text;
+    sourcePane.replaceChildren(note);
+  }
+
+  function closeSource() {
+    const shown = sourceShown;
+    sourceShown = null;
+    if (!shown) return;
+    if (shown.observer) shown.observer.disconnect();
+    shown.loads.forEach((ctrl) => ctrl.abort());
+    shown.urls.forEach((url) => URL.revokeObjectURL(url));
+    sourcePane.replaceChildren();
+  }
+
+  function showSourceFor(item) {
+    if (!splitOn || (sourceShown && sourceShown.item === item)) return;
+    closeSource();
+    sourcePane.scrollTop = 0;
+    if (!item) {
+      sourceNote("Select an item from the queue to see its original.");
+      return;
+    }
+    const shown = sourceShown = { item, urls: [], observer: null, waiting: [], loads: new Map() };
+    const kind = sourceKind(item);
+    if (kind === "image") {
+      const img = document.createElement("img");
+      img.className = "source-image";
+      img.alt = `Original: ${item.name}`;
+      img.addEventListener("error", () => {
+        if (sourceShown === shown) sourceNote("This image can't be shown here.");
+      }, { once: true });
+      const url = URL.createObjectURL(item.fileRef);
+      shown.urls.push(url);
+      img.src = url;
+      sourcePane.replaceChildren(img);
+    } else if (kind === "pdf") {
+      sourceNote("Opening the PDF…");
+      sourcePdfFor(item).then((doc) => {
+        if (sourceShown === shown) layOutSourcePages(shown, doc);
+      }, (err) => {
+        if (sourceShown === shown) sourceNote(err.message);
+      });
+    } else if (item.sourceUrl) {
+      sourceNote("The original of a web address isn't kept: InkDoc read the page on the server.");
+    } else {
+      sourceNote("The original can be shown for PDFs and images (PNG, JPEG, GIF, WebP, BMP, SVG).");
+    }
+  }
+
+  // The item's PDF as the server keeps it: { id, pages: [[width, height], …] }.
+  // One upload per item, shared by every page; `stale` is an id the server no
+  // longer knows (idle for 30 minutes, or eight newer PDFs), uploaded again once.
+  function sourcePdfFor(item, stale = null) {
+    if (!item.sourcePdf || (stale && item.sourcePdfId === stale)) {
+      item.sourcePdfId = null;
+      const form = new FormData();
+      form.append("file", item.fileRef, item.fileRef.name || item.name);
+      item.sourcePdf = fetchWithToken(`${apiBase}/preview/pdf`, { method: "POST", body: form })
+        .then(async (resp) => {
+          const data = await resp.json().catch(() => ({}));
+          if (!resp.ok) throw new Error(typeof data.detail === "string" ? data.detail : "The PDF's pages can't be shown.");
+          item.sourcePdfId = data.id;
+          return data;
+        })
+        .catch((err) => {
+          item.sourcePdf = null;
+          throw err instanceof TypeError ? new Error("The PDF's pages can't be shown: InkDoc's server didn't answer.") : err;
+        });
+    }
+    return item.sourcePdf;
+  }
+
+  function layOutSourcePages(shown, doc) {
+    const pages = doc.pages.map(([w, h], i) => {
+      const page = document.createElement("div");
+      page.className = "source-page";
+      page.dataset.page = String(i + 1);
+      page.style.aspectRatio = `${w} / ${h}`;
+      return page;
+    });
+    sourcePane.replaceChildren(...pages);
+    // Pages within a screen of the visible part are drawn; farther ones let go.
+    shown.observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => (entry.isIntersecting ? wantPage(shown, entry.target) : dropPage(shown, entry.target)));
+    }, { root: sourcePane, rootMargin: "100% 0px" });
+    pages.forEach((page) => shown.observer.observe(page));
+  }
+
+  function wantPage(shown, page) {
+    if (page.querySelector("img") || shown.loads.has(page) || shown.waiting.includes(page)) return;
+    shown.waiting.push(page);
+    pumpPages(shown);
+  }
+
+  function dropPage(shown, page) {
+    shown.waiting = shown.waiting.filter((p) => p !== page);
+    const ctrl = shown.loads.get(page);
+    if (ctrl) ctrl.abort();
+    const img = page.querySelector("img");
+    if (img) {
+      URL.revokeObjectURL(img.src);
+      shown.urls = shown.urls.filter((url) => url !== img.src);
+      img.remove();
+    }
+    page.classList.remove("is-failed");
+  }
+
+  function pumpPages(shown) {
+    while (sourceShown === shown && shown.loads.size < SOURCE_PAGE_LOADS && shown.waiting.length) {
+      loadPage(shown, shown.waiting.shift());
+    }
+  }
+
+  async function loadPage(shown, page) {
+    const ctrl = new AbortController();
+    shown.loads.set(page, ctrl);
+    const n = page.dataset.page;
+    // Drawn for the pane's width on this screen, in steps so a resize reuses sizes.
+    const width = Math.min(2400, Math.max(400, Math.ceil(sourcePane.clientWidth * (window.devicePixelRatio || 1) / 200) * 200));
+    try {
+      let doc = await sourcePdfFor(shown.item);
+      let resp = await fetchWithToken(`${apiBase}/preview/pdf/${encodeURIComponent(doc.id)}/page/${n}?width=${width}`, { signal: ctrl.signal });
+      if (resp.status === 404) {
+        doc = await sourcePdfFor(shown.item, doc.id);
+        resp = await fetchWithToken(`${apiBase}/preview/pdf/${encodeURIComponent(doc.id)}/page/${n}?width=${width}`, { signal: ctrl.signal });
+      }
+      if (!resp.ok) throw new Error(String(resp.status));
+      const blob = await resp.blob();
+      if (ctrl.signal.aborted || sourceShown !== shown) return;
+      const img = document.createElement("img");
+      img.alt = `Page ${n}`;
+      img.decoding = "async";
+      const url = URL.createObjectURL(blob);
+      shown.urls.push(url);
+      img.src = url;
+      page.appendChild(img);
+    } catch (_) {
+      if (!ctrl.signal.aborted && sourceShown === shown) page.classList.add("is-failed");
+    } finally {
+      if (shown.loads.get(page) === ctrl) shown.loads.delete(page);
+      pumpPages(shown);
+    }
+  }
+
+  // Let the server delete its copies (Clear, or the page closing).
+  function releaseSourcePdfs(items) {
+    items.forEach((item) => {
+      if (!item.sourcePdfId) return;
+      fetchWithToken(`${apiBase}/preview/pdf/${encodeURIComponent(item.sourcePdfId)}`, { method: "DELETE", keepalive: true }).catch(() => {});
+      item.sourcePdf = null;
+      item.sourcePdfId = null;
+    });
+  }
+
+  function setSplitView(on) {
+    splitOn = on;
+    btnSplitView.setAttribute("aria-pressed", on ? "true" : "false");
+    previewPanes.classList.toggle("is-split", on);
+    sourcePane.hidden = !on;
+    if (on) showSourceFor(queue.find((i) => i.id === activeItemId) || null);
+    else closeSource();
+  }
+
+  btnSplitView.addEventListener("click", () => setSplitView(!splitOn));
+  window.addEventListener("pagehide", () => releaseSourcePdfs(queue));
+  // ─── End Original view ───────────────────────────────────────────────────
+
   // ─── Clear Queue ─────────────────────────────────────────────────────────
   btnClearQueue.addEventListener("click", () => {
+    releaseSourcePdfs(queue);
+    closeSource();
     queue = [];
     activeItemId = null;
     previewFilename.textContent = "No file selected";

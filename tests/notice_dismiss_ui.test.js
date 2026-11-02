@@ -103,6 +103,7 @@ const stubs = {
     renderedOutput: new FakeElement("renderedOutput"),
     cancelMath: noop,
     refreshSwitchEngineButton: noop,
+    showSourceFor: noop,
     hidePreviewBadges: noop,
     updatePreviewBadges: noop,
     renderQueue: noop,

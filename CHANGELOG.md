@@ -13,6 +13,13 @@ download this version from the website once and install it over the one you have
 Your settings, engines and add-ons are kept, and from this version on, updates work
 inside InkDoc.
 
+### Added
+- **See the original beside its result.** The new Original switch next to
+  Rendered and Raw shows a PDF's pages or an image next to the converted
+  Markdown, so you can check tables and numbers against the source at a glance.
+  Pages are drawn only as you scroll to them, and nothing is loaded while the
+  switch is off, so conversions are as fast as before.
+
 ### Fixed
 - **Secure connections work on every Mac and on Fedora, Arch and openSUSE.** In
   1.3.0 the macOS app, and the Linux app outside Ubuntu and Debian, couldn't

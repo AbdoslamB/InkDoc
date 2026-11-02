@@ -73,7 +73,8 @@ CONTRIBUTING.md, "Adding an Auto quality step", walks through it.
   table stage's filter. Imports `pypdfium2` lazily, never raises (returns `None`), serialises
   pdfium with a lock.
 - `pdf_pages.py`: `write_page_subset()`: a PDF of some pages (pypdfium2, pdfium lock held,
-  both documents closed) for Auto's page split.
+  both documents closed) for Auto's page split. It also draws preview pages for the Original
+  view (`page_sizes()`, `render_page_png()`), under the same lock, one page at a time.
 - `quality_check.py`: the missing-text check: compares a PDF conversion's Markdown with the
   PDF's own text layer and builds the user-facing warning and suggestion. Read-only; never
   fails a conversion.

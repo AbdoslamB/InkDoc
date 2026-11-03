@@ -74,7 +74,7 @@ def test_boxes_come_back_in_pdf_points(tmp_path, monkeypatch):
     k = 72 / lm.RENDER_DPI
     assert result["error"] == "" and not result["truncated"]
     assert result["pages"][0] == {"page": 1, "skipped": "", "tables": [
-        {"bbox": [round(v * k, 2) for v in (150.0, 300.0, 750.0, 600.0)], "score": 0.9}]}
+        {"bbox": [round(v * k, 2) for v in (150.0, 300.0, 750.0, 600.0)], "score": 0.9}], "regions": []}
     assert result["pages"][1] == {"page": 5, "skipped": "missing", "tables": []}
     (width, height), = session.sizes
     assert abs(width - 612 / k) <= 1 and abs(height - 792 / k) <= 1, "the page at RENDER_DPI (pdfium rounds up)"

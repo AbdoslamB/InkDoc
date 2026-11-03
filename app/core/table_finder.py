@@ -125,6 +125,28 @@ def color_name(color: Any) -> str:
     return name
 
 
+def color_key(color: Any) -> str:
+    """The exact colour as "#rrggbb" (gray and CMYK converted), for telling apart two blues; "" if unknown."""
+    if isinstance(color, (int, float)):
+        color = (color,)
+    if not isinstance(color, (tuple, list)) or not color:
+        return ""
+    try:
+        values = [max(0.0, min(1.0, float(v))) for v in color]
+    except (TypeError, ValueError):
+        return ""
+    if len(values) == 1:
+        rgb = values * 3
+    elif len(values) == 3:
+        rgb = values
+    elif len(values) == 4:
+        c, m, y, k = values
+        rgb = [(1 - c) * (1 - k), (1 - m) * (1 - k), (1 - y) * (1 - k)]
+    else:
+        return ""
+    return "#" + "".join(f"{round(v * 255):02x}" for v in rgb)
+
+
 def shape_label(colors: list[str], images: int = 0) -> str:
     """"[green shape]", "[3 blue shapes]", "[2 shapes: red, green]", "[image]"; "" for nothing."""
     parts: list[str] = []
@@ -422,6 +444,8 @@ def split_merged_table(words: list[dict], rows: list[list[str]], avoid: list[tup
 # ─── Borderless tables from word positions ───────────────────────────────────
 def _chunks(line: list[dict], min_gap: float = COL_GAP_MIN_PT, ratio: float = COL_GAP_HEIGHT_RATIO) -> list[dict]:
     """A line's words grouped into cells: a wide gap starts a new one."""
+    if not line:
+        return []
     heights = sorted(w["bottom"] - w["top"] for w in line)
     gap_min = max(min_gap, ratio * heights[len(heights) // 2])
     chunks: list[dict] = []
@@ -854,6 +878,182 @@ def page_segments(words: list[dict]) -> list[dict]:
     return out
 
 
+# ─── What else is drawn and written on a page (for the steps after the tables) ─
+# Exported with the segments, on the pages the finder reads for them:
+# boxes (diagram panels, checkboxes, chart bars), the font styles of each line
+# (bold, italic, raised), the images' places, chart paths and rotated labels.
+# Bounded so a page drawn with tens of thousands of objects stays a small reply.
+LAYOUT_MAX_BOXES = 800
+LAYOUT_MAX_PATHS = 1500
+LAYOUT_MAX_POINTS = 600
+LAYOUT_MAX_STYLED_LINES = 400
+BOX_MIN_PT = 3.0               # smaller than this both ways is a dot, not a box
+SUP_SIZE_RATIO = 0.8           # a word this much smaller than its line's text...
+SUP_RAISE_RATIO = 0.12         # ...whose bottom sits this share of the line's size higher is raised
+_BOLD_FONT = re.compile(r"bold|black|heavy|semibold|demi", re.I)
+_ITALIC_FONT = re.compile(r"italic|oblique|(?:-|bold)it$", re.I)
+
+
+def font_style(fontname: str) -> str:
+    """"b", "i", "bi" or "" from a font's name ("ABCDEF+Arial-BoldItalicMT" -> "bi")."""
+    name = str(fontname or "").split("+", 1)[-1]
+    return ("b" if _BOLD_FONT.search(name) else "") + ("i" if _ITALIC_FONT.search(name) else "")
+
+
+def _r(value: Any) -> float:
+    return round(float(value), 2)
+
+
+def _box_of(obj: dict, page_w: float, page_h: float) -> dict | None:
+    x0, top, x1, bottom = (float(obj[k]) for k in ("x0", "top", "x1", "bottom"))
+    w, h = x1 - x0, bottom - top
+    if max(w, h) < BOX_MIN_PT or w >= 0.95 * page_w or h >= 0.95 * page_h:
+        return None
+    filled = bool(obj.get("fill"))
+    return {
+        "x0": _r(x0), "top": _r(top), "x1": _r(x1), "bottom": _r(bottom),
+        "fill": color_name(obj.get("non_stroking_color")) if filled else "",
+        "rgb": color_key(obj.get("non_stroking_color")) if filled else "",
+        "stroke": bool(obj.get("stroke")),
+    }
+
+
+def _closed(points: list) -> bool:
+    if len(points) < 4:
+        return False
+    (ax, ay), (bx, by) = points[0], points[-1]
+    return abs(ax - bx) <= 1.0 and abs(ay - by) <= 1.0
+
+
+def _size(word: dict) -> float:
+    return float(word.get("size") or (word["bottom"] - word["top"]) or 1.0)
+
+
+def _text_chunks(words: list[dict]) -> list[list[dict]]:
+    """The page's words as line pieces (a line split at column gaps), raised words joined to theirs.
+
+    A footnote number set small and high can sit too far up to share a line
+    with its word; it is put back into the piece it touches.
+    """
+    chunks: list[list[dict]] = []
+    for line in _word_lines(words):
+        chunks += [c["words"] for c in _chunks(line, SEGMENT_GAP_MIN_PT, SEGMENT_GAP_HEIGHT_RATIO)]
+    small_ids = {
+        id(c) for c in chunks
+        if len(c) <= 2 and all(_size(w) <= SUP_SIZE_RATIO * _median_size(chunks, c) for w in c)
+    }
+    pieces = [c for c in chunks if id(c) not in small_ids]
+    loose = [c for c in chunks if id(c) in small_ids]
+    for small in loose:
+        home = None
+        for piece in pieces:
+            top = min(w["top"] for w in piece)
+            bottom = max(w["bottom"] for w in piece)
+            x0 = min(w["x0"] for w in piece)
+            x1 = max(w["x1"] for w in piece)
+            if all(top - 2 <= w["top"] and w["bottom"] <= bottom + 0.5 and x0 - 4 <= w["x0"] <= x1 + 4 for w in small):
+                home = piece
+                break
+        if home is None:
+            pieces.append(small)
+        else:
+            home.extend(small)
+            home.sort(key=lambda w: w["x0"])
+    return pieces
+
+
+def _median_size(chunks: list[list[dict]], chunk: list[dict]) -> float:
+    """The text size of the chunks around `chunk` (on its height, give or take a line)."""
+    top = min(w["top"] for w in chunk)
+    near = [_size(w) for c in chunks if c is not chunk for w in c if abs(w["top"] - top) <= 12]
+    if not near:
+        return 0.0
+    near.sort()
+    return near[len(near) // 2]
+
+
+def _styled_lines(words: list[dict]) -> list[list[dict]]:
+    """Line pieces with a bold, italic or raised word: [{"t": text, "s": "b"|"i"|"bi"|"sup"|""}, ...]."""
+    out: list[list[dict]] = []
+    for line in _text_chunks(words):
+        sizes = sorted(_size(w) for w in line)
+        size = sizes[len(sizes) // 2] or 1.0
+        baseline = sorted(w["bottom"] for w in line)[len(line) // 2]
+        runs: list[dict] = []
+        for w in line:
+            wsize = float(w.get("size") or size)
+            raised = wsize <= SUP_SIZE_RATIO * size and w["bottom"] <= baseline - SUP_RAISE_RATIO * size
+            style = "sup" if raised else font_style(w.get("fontname", ""))
+            if runs and runs[-1]["s"] == style and style != "sup":
+                runs[-1]["t"] += " " + w["text"]
+            else:
+                runs.append({"t": w["text"], "s": style})
+        if any(r["s"] for r in runs) and len(runs) > 0:
+            out.append(runs)
+        if len(out) >= LAYOUT_MAX_STYLED_LINES:
+            break
+    return out
+
+
+def _rotated_text(page: Any) -> list[dict]:
+    """Words written sideways (a chart's year labels), in reading order: {"text", "x0", "x1", "top", "bottom"}."""
+    chars = [c for c in page.chars if not c.get("upright", True) and str(c.get("text", "")).strip()]
+    columns: list[list[dict]] = []
+    for ch in sorted(chars, key=lambda c: (round(c["x0"]), c["top"])):
+        last = columns[-1] if columns else None
+        if last and abs(last[-1]["x0"] - ch["x0"]) <= 1.0 and ch["top"] - last[-1]["bottom"] <= 0.5 * (ch["bottom"] - ch["top"]) + 1:
+            last.append(ch)
+        else:
+            columns.append([ch])
+    out = []
+    for column in columns:
+        matrix = column[0].get("matrix") or (1, 0, 0, 1, 0, 0)
+        ordered = sorted(column, key=lambda c: c["top"], reverse=float(matrix[1]) > 0)  # bottom-to-top text
+        out.append({
+            "text": "".join(c["text"] for c in ordered),
+            "x0": _r(min(c["x0"] for c in column)), "x1": _r(max(c["x1"] for c in column)),
+            "top": _r(min(c["top"] for c in column)), "bottom": _r(max(c["bottom"] for c in column)),
+        })
+    return out
+
+
+def page_layout(page: Any, words: list[dict]) -> dict:
+    """What the steps after the tables read besides the text segments: boxes, styles, images, paths."""
+    page_w, page_h = float(page.width), float(page.height)
+    boxes: list[dict] = []
+    for rect in page.rects:
+        box = _box_of(rect, page_w, page_h)
+        if box is not None:
+            boxes.append(box)
+    paths: list[dict] = []
+    for curve in list(page.curves) + list(page.lines):
+        points = [(_r(x), _r(y)) for x, y in (curve.get("pts") or [])][:LAYOUT_MAX_POINTS]
+        if len(points) < 2:
+            continue
+        if _closed(points):
+            box = _box_of(curve, page_w, page_h)  # a rounded panel or a drawn checkbox
+            if box is not None:
+                boxes.append(box)
+            continue
+        if len(paths) < LAYOUT_MAX_PATHS:
+            paths.append({
+                "pts": points, "color": color_name(curve.get("stroking_color")),
+                "rgb": color_key(curve.get("stroking_color")),
+            })
+    images = [
+        {"x0": _r(i["x0"]), "top": _r(i["top"]), "x1": _r(i["x1"]), "bottom": _r(i["bottom"])}
+        for i in page.images
+    ]
+    styled_words = [w for w in words if w.get("upright", True)]
+    return {
+        "boxes": boxes[:LAYOUT_MAX_BOXES],
+        "styles": _styled_lines(styled_words),
+        "images": images,
+        "paths": paths,
+        "vtext": _rotated_text(page),
+    }
+
+
 def _too_complex(page: Any) -> bool:
     """More drawing or text than any table page has (MAX_PAGE_EDGES, MAX_PAGE_CHARS)."""
     edges = 4 * len(page.rects) + len(page.lines) + len(page.curves)
@@ -890,6 +1090,11 @@ def _page_tables(
                 "height": round(float(page.height), 2),
                 "segments": page_segments(words),
             }
+            try:
+                # Words split where the font changes, for the styles; the tables keep `words`.
+                extra.update(page_layout(page, page.extract_words(extra_attrs=["fontname", "size"])))
+            except Exception as exc:  # an extra: the segments still count
+                logger.warning("Page layout skipped on page %d: %s", number, exc)
     if not tables:
         return {"page": number, "skipped": "", "bands": [], **extra}
     lines = _anchor_lines(page, tables)

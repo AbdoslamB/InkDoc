@@ -148,13 +148,15 @@ def inspect_tables(
     detectors: Collection[str] | None = None,
     job: Any = None,
     find: Finder | None = None,
+    skip_pages: Collection[int] = (),
 ) -> TableInspection:
     """Find the PDF's tables and compare them with `markdown`; changes nothing. Blocking.
 
     `detectors` (app/core/thorough_passes.py) are what the finder also looks
     for, on every text page: rating grids, tables without lines (those need
     confirm_tables before they can be written), positioned text. `deep` means
-    all of them.
+    all of them. `skip_pages` are pages read from their image (by GLM-OCR):
+    their text layer, an earlier OCR's at best, is not what the result came from.
     A cancelled job raises ConversionCancelledError; any other failure ends
     the inspection with `early` set and the Markdown untouched.
     """
@@ -172,6 +174,7 @@ def inspect_tables(
     pages = set(probe.table_pages) | set(hints)
     if wanted:  # these look at every text page, not only those with drawn tables
         pages |= set(_text_pages(probe))
+    pages -= set(skip_pages)
     if not pages:
         insp.early = TableSummary(checked=True)
         return insp

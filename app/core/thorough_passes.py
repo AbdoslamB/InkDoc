@@ -83,6 +83,12 @@ PASSES: tuple[PassInfo, ...] = (
         modules=("app.core.auto_engine",),
     ),
     PassInfo(
+        "ocr_layer_pages", "Scans with an old OCR layer",
+        "Reads scanned pages again with GLM-OCR instead of copying the OCR text they carry.",
+        LEVEL_THOROUGH, STAGE_ROUTE, needs_all=("glm_ocr",), cost="high",
+        modules=("app.core.auto_engine",),
+    ),
+    PassInfo(
         "page_split", "Page split for mixed PDFs",
         "Docling reads the text pages, GLM-OCR only the scanned ones.",
         LEVEL_THOROUGH, STAGE_ROUTE, needs_all=("docling", "glm_ocr"), cost="medium",
@@ -90,7 +96,7 @@ PASSES: tuple[PassInfo, ...] = (
     ),
     PassInfo(
         "polish", "Original punctuation",
-        "Restores the '&', dashes and quotes an engine simplified.",
+        "Restores the '&', '<', '>', dashes and quotes an engine simplified.",
         LEVEL_THOROUGH, STAGE_POLISH, modules=("app.core.text_polish",),
     ),
     PassInfo(
@@ -121,15 +127,59 @@ PASSES: tuple[PassInfo, ...] = (
     ),
     PassInfo(
         "figure_text", "Chart text",
-        "Adds chart labels and values an engine left out. Bar charts become tables.",
+        "Adds the text of charts and diagrams an engine left out. Bar charts become tables, "
+        "diagrams a list of their boxes.",
+        LEVEL_THOROUGH, STAGE_AFTER_TABLES, needs_segments=True,
+        modules=("app.core.figure_text", "app.core.table_finder", "app.core.quality_check"),
+    ),
+    PassInfo(
+        "chart_data", "Chart values",
+        "Measures the values of charts drawn in the PDF from their bars and lines, against the axis labels.",
         LEVEL_THOROUGH, STAGE_AFTER_TABLES, needs_segments=True,
         modules=("app.core.figure_text", "app.core.table_finder"),
+    ),
+    PassInfo(
+        "page_recheck", "Pages an engine lost",
+        "Reads a page again with another engine when much of its text is missing, and keeps the "
+        "reading closer to the PDF.",
+        LEVEL_THOROUGH, STAGE_AFTER_TABLES, cost="medium",
+        modules=("app.core.auto_engine", "app.core.quality_check", "app.core.pdf_pages"),
     ),
     PassInfo(
         "dropped_paragraphs", "Dropped paragraphs",
         "Puts back paragraphs an engine left out.",
         LEVEL_THOROUGH, STAGE_AFTER_TABLES, needs_segments=True,
         modules=("app.core.figure_text", "app.core.table_finder"),
+    ),
+    PassInfo(
+        "broken_lines", "Broken lines",
+        "Joins lines an engine wrote one per paragraph back into their sentences.",
+        LEVEL_THOROUGH, STAGE_AFTER_TABLES, needs_segments=True,
+        modules=("app.core.figure_text", "app.core.table_finder"),
+    ),
+    PassInfo(
+        "checkboxes", "Checkboxes",
+        "Marks the checkboxes drawn in forms and checklists.",
+        LEVEL_THOROUGH, STAGE_AFTER_TABLES, needs_segments=True,
+        modules=("app.core.figure_text", "app.core.table_finder"),
+    ),
+    PassInfo(
+        "picture_text", "Text in pictures",
+        "Reads the text inside pictures of a text page with GLM-OCR.",
+        LEVEL_THOROUGH, STAGE_AFTER_TABLES, needs_all=("glm_ocr",), needs_segments=True, cost="medium",
+        modules=("app.core.figure_text", "app.core.table_finder"),
+    ),
+    PassInfo(
+        "formulas", "Formulas",
+        "Reads the formulas Docling left undecoded with GLM-OCR, as LaTeX.",
+        LEVEL_THOROUGH, STAGE_AFTER_TABLES, needs_all=("glm_ocr", "layout_model"), needs_segments=True,
+        cost="medium", modules=("app.core.figure_text", "app.core.table_finder"),
+    ),
+    PassInfo(
+        "formatting", "Bold, italics and raised text",
+        "Restores the bold, italic and raised text (footnote marks, exponents) of the PDF's fonts.",
+        LEVEL_THOROUGH, STAGE_AFTER_TABLES, needs_segments=True,
+        modules=("app.core.text_polish", "app.core.table_finder"),
     ),
 )
 BY_NAME: dict[str, PassInfo] = {p.name: p for p in PASSES}

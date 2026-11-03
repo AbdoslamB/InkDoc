@@ -19,6 +19,23 @@ inside InkDoc.
   Markdown, so you can check tables and numbers against the source at a glance.
   Pages are drawn only as you scroll to them, and nothing is loaded while the
   switch is off, so conversions are as fast as before.
+- **Thorough reads charts, diagrams, forms and scans far better.** At the
+  *Thorough* Auto quality level:
+  - Charts drawn in a PDF get a table of their values, measured from their
+    bars and lines against the axis labels, never estimated; a chart that
+    states an average its values don't give is left out.
+  - Flowcharts and diagrams keep their structure, box by box, and a page of
+    several figures lists each figure's labels under its caption.
+  - Scanned pages that carry an old, poor OCR text are read again from the
+    image with GLM-OCR.
+  - A page an engine lost most of is read again by another engine.
+  - Lines broken one per paragraph are joined, and checklist boxes are marked ☐.
+  - Bold, italics, footnote marks and exponents come back from the PDF's fonts.
+  - With GLM-OCR, the text inside pictures is read, and with the layout model,
+    so are formulas Docling left undecoded.
+
+  Each step has its own switch in Settings → General → Auto quality → Steps,
+  and everything InkDoc adds says where it came from.
 
 ### Fixed
 - **Secure connections work on every Mac and on Fedora, Arch and openSUSE.** In

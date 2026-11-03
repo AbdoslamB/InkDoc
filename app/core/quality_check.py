@@ -340,6 +340,141 @@ def _plural_pages(pages: list[int], one: str, many: str) -> str:
     return f"{listed[0].upper()}{listed[1:]} {one if len(pages) == 1 else many}"
 
 
+# ─── Which lines of the Markdown hold which page ─────────────────────────────
+# An engine's Markdown has no page boundaries. A page is placed by its own
+# lines: every text-layer line of SPAN_MIN_TOKENS words or more (or two
+# words of SPAN_MIN_CHARS letters together) that appears
+# once in the whole PDF and once in the Markdown is an anchor, and the anchors
+# that keep the pages in order (the longest run with page numbers that never
+# go down) give each page the first and last Markdown line it reaches.
+SPAN_MIN_TOKENS = 3
+SPAN_MIN_CHARS = 10
+
+
+def _line_tokens_md(lines: list[str]) -> tuple[str, list[int]]:
+    """The Markdown's words as one string, and the line each word is on."""
+    words: list[str] = []
+    where: list[int] = []
+    for i, line in enumerate(lines):
+        for token in tokenize(normalize_markdown(line)):
+            words.append(token)
+            where.append(i)
+    return " " + " ".join(words) + " ", where
+
+
+def _nondecreasing(points: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """The longest run of (line, page) in line order whose pages never go down."""
+    import bisect
+
+    points = sorted(points)
+    tails: list[int] = []          # smallest last page of a run of each length
+    tail_at: list[int] = []
+    before = [-1] * len(points)
+    for i, (_line, page) in enumerate(points):
+        k = bisect.bisect_right(tails, page)
+        if k == len(tails):
+            tails.append(page)
+            tail_at.append(i)
+        else:
+            tails[k] = page
+            tail_at[k] = i
+        before[i] = tail_at[k - 1] if k else -1
+    run: list[tuple[int, int]] = []
+    i = tail_at[-1] if tail_at else -1
+    while i >= 0:
+        run.append(points[i])
+        i = before[i]
+    return run[::-1]
+
+
+def page_spans(markdown: str, page_texts: dict[int, str]) -> dict[int, tuple[int, int]]:
+    """{page: (first line, last line)} of the Markdown, for the pages it can place. Pure."""
+    lines = markdown.split("\n")
+    joined, where = _line_tokens_md(lines)
+    seen: Counter[str] = Counter()
+    candidates: list[tuple[int, str]] = []
+    for page, text in page_texts.items():
+        for line in normalize_text(text).splitlines():
+            tokens = tokenize(line)
+            # Two words do when they are long enough to be distinctive ("Bone metabolism").
+            if len(tokens) >= SPAN_MIN_TOKENS or (len(tokens) == 2 and len("".join(tokens)) >= SPAN_MIN_CHARS):
+                key = " ".join(tokens)
+                seen[key] += 1
+                candidates.append((page, key))
+    anchors: list[tuple[int, int]] = []
+    for page, key in candidates:
+        if seen[key] != 1:
+            continue
+        target = f" {key} "
+        at = joined.find(target)
+        if at < 0 or joined.find(target, at + 1) >= 0:
+            continue
+        first = joined[:at + 1].count(" ") - 1
+        last = first + key.count(" ")
+        anchors.append((where[first], page))
+        anchors.append((where[min(last, len(where) - 1)], page))
+    spans: dict[int, tuple[int, int]] = {}
+    for line, page in _nondecreasing(anchors):
+        a, b = spans.get(page, (line, line))
+        spans[page] = (min(a, line), max(b, line))
+    return spans
+
+
+def page_of_line(spans: dict[int, tuple[int, int]], line: int) -> tuple[int | None, int | None]:
+    """(the page whose span holds `line` or comes last before it, the first page after it)."""
+    before = after = None
+    for page, (a, b) in sorted(spans.items()):
+        if a <= line <= b:
+            return page, page
+        if b < line:
+            before = page
+        elif a > line and after is None:
+            after = page
+    return before, after
+
+
+def _letters(text: str) -> str:
+    return re.sub(r"[\W_]+", "", normalize_markdown(text))
+
+
+def insert_page_text(markdown: str, page: int, text: str, source: str, page_texts: dict[int, str]) -> str:
+    """`markdown` with another engine's reading of `page` after what the engine wrote for it. Pure.
+
+    It goes just before the next page the Markdown places (or at the end),
+    after "<!-- inkdoc:page-text page=N source=ENGINE -->". Paragraphs of it
+    the Markdown already has there are left out, and so are lines the PDF
+    repeats on many pages (headers, footers).
+    """
+    lines = markdown.split("\n")
+    spans = page_spans(markdown, page_texts)
+    following = [a for p, (a, _b) in spans.items() if p > page]
+    at = min(following) if following else len(lines)
+    preceding = [b for p, (_a, b) in spans.items() if p < page]
+    start = spans[page][0] if page in spans else (max(preceding) + 1 if preceding else 0)
+    while at > start and not lines[at - 1].strip():
+        at -= 1
+    here = _letters("\n".join(lines[start:at]))
+    counts: Counter[str] = Counter()
+    for other in page_texts.values():
+        counts.update({_letters(ln) for ln in other.splitlines() if _letters(ln)})
+    kept: list[str] = []
+    for paragraph in re.split(r"\n\s*\n", text.strip()):
+        key = _letters(paragraph)
+        if not key or key in here:
+            continue
+        body = [
+            ln for ln in paragraph.split("\n")
+            if counts.get(_letters(ln), 0) < HEADER_FOOTER_MIN_PAGES and not _letters(ln).isdigit()
+        ]
+        if body:
+            kept += ["\n".join(body), ""]
+    if not kept:
+        return markdown
+    block = ["", f"<!-- inkdoc:page-text page={page} source={source} -->", *kept[:-1]]
+    lines[at:at] = block + ([""] if at < len(lines) and lines[at].strip() else [])
+    return "\n".join(lines)
+
+
 # ─── Assessment ──────────────────────────────────────────────────────────────
 def assess(
     source_path: str,

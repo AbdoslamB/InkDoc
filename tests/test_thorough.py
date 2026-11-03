@@ -117,9 +117,13 @@ def test_columns_of_a_vertical_chart_pair_with_their_values():
     ]
 
 
-def test_figure_text_needs_both_anchors_and_never_repeats_a_kept_caption():
+def test_a_figure_at_the_top_of_its_page_is_placed_by_its_page():
+    # Nothing the engine wrote above it to anchor on: the line after it places it on page 7.
     md = "<!-- image -->\n\nSources: Bloomberg, Factset. Total Returns from the period\n"
-    assert recover_figure_text(md, [BAR_CHART_PAGE]) == (md, 0)  # nothing before it to anchor on
+    out, n = recover_figure_text(md, [BAR_CHART_PAGE])
+    assert n == 1 and "<!-- inkdoc:figure-text page=7 source=pdf-text -->" in out
+    assert find_table_blocks(out.split("\n"))[0].rows[1] == ["Healthcare", "1.9%"]
+    assert out.count("Sources: Bloomberg") == 1, "the caption the engine kept is not repeated"
     assert recover_figure_text("no placeholder here", [BAR_CHART_PAGE]) == ("no placeholder here", 0)
 
 

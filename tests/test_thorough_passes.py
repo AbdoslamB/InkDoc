@@ -79,7 +79,8 @@ def test_tables_on_scanned_pages_need_glm_ocr_and_the_layout_model():
 
 
 def test_a_switched_off_step_costs_nothing_and_says_so():
-    plan = tp.PassPlan("thorough", BOTH, disabled={"figure_text", "dropped_paragraphs", "rating_grids"})
+    segment_steps = {p.name for p in tp.PASSES if p.needs_segments}
+    plan = tp.PassPlan("thorough", BOTH, disabled=segment_steps | {"rating_grids"})
     assert plan.reason("figure_text") == "switched off"
     assert plan.detectors() == [tp.DETECT_BORDERLESS], "no segments without a step that uses them"
     assert tp.TABLE_KIND_RATING not in plan.table_kinds()
@@ -333,15 +334,16 @@ def test_a_switched_off_step_keeps_its_reason_through_a_page_split(auto):
 def test_a_failing_addition_costs_nothing_but_itself(auto, monkeypatch):
     import app.core.figure_text as figure_text
 
-    def broken(markdown, pages):
+    def broken(markdown, pages, **_switches):
         raise RuntimeError("bug")
 
-    monkeypatch.setattr(figure_text, "recover_figure_text", broken)
+    monkeypatch.setattr(figure_text, "recover_figures", broken)
     run, _asked = auto
     markdown, _options, passes = run("rating_grid", EMPTY_GRID)
     assert "source=pdf-shapes" in markdown, "the tables written before it are kept"
     assert passes["figure_text"]["skipped"] == "it failed"
     assert passes["dropped_paragraphs"]["skipped"] == "a step before it failed"
+    assert passes["formatting"]["skipped"] == "a step before it failed"
 
 
 def test_with_every_step_off_nothing_is_looked_at(auto):

@@ -92,8 +92,11 @@ class ScannedTables:
 
 
 def target_pages(probe: Any, read_by_glm: Collection[int]) -> list[int]:
-    """The pages GLM-OCR read that have no usable text layer, 1-based."""
-    text = {p.index + 1 for p in probe.pages if not p.image_only and p.char_count >= TEXT_PAGE_MIN_CHARS}
+    """The pages GLM-OCR read that have no usable text layer (none, or an earlier OCR's), 1-based."""
+    text = {
+        p.index + 1 for p in probe.pages
+        if not p.image_only and not getattr(p, "ocr_layer", False) and p.char_count >= TEXT_PAGE_MIN_CHARS
+    }
     return sorted(p for p in set(read_by_glm) if p not in text)
 
 

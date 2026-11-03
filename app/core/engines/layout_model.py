@@ -138,8 +138,12 @@ def _session(model_dir: Path, sha256: str) -> Any:
         return session
 
 
-def _candidates(session: Any, image: Any) -> list[dict]:
-    """The model's table candidates on one page image, boxes in its pixels."""
+# Besides tables, the regions the steps after the tables read (formulas, pictures).
+REGION_LABELS = ("formula", "picture")
+
+
+def _candidates(session: Any, image: Any, labels_wanted: tuple[str, ...] = ("table",)) -> list[dict]:
+    """The model's candidates of the given labels on one page image, boxes in its pixels."""
     import numpy as np
     from PIL import Image
 
@@ -151,11 +155,12 @@ def _candidates(session: Any, image: Any) -> list[dict]:
     })
     found = []
     for label, box, score in zip(labels[0], boxes[0], scores[0], strict=True):
-        if 0 <= int(label) < len(LABELS) and LABELS[int(label)] == "table" and float(score) >= MIN_SCORE:
+        if 0 <= int(label) < len(LABELS) and LABELS[int(label)] in labels_wanted and float(score) >= MIN_SCORE:
             x0, top, x1, bottom = (float(v) for v in box)
             found.append({
                 "box": [max(0.0, x0), max(0.0, top), min(float(width), x1), min(float(height), bottom)],
                 "score": float(score),
+                "label": LABELS[int(label)],
             })
     return found
 
@@ -203,8 +208,9 @@ def detect_tables(
 ) -> dict:
     """The tables on the given 1-based pages of the PDF at `path`. Never raises.
 
-    {"pages": [{"page", "skipped", "tables": [{"bbox", "score"}]}], "truncated",
-     "elapsed_ms", "error"}. A bbox is (x0, top, x1, bottom) in points from the
+    {"pages": [{"page", "skipped", "tables": [{"bbox", "score"}],
+     "regions": [{"label", "bbox", "score"}]}], "truncated", "elapsed_ms", "error"}:
+    `regions` are the formulas and pictures (REGION_LABELS), from the same run. A bbox is (x0, top, x1, bottom) in points from the
     page's top-left corner, as the table finder's, in reading order. Rotated
     pages are skipped. Stops after MAX_PAGES pages or `time_budget_s` seconds
     and says so with truncated=True.
@@ -225,13 +231,20 @@ def detect_tables(
             if image is None:
                 result["pages"].append({"page": number, "skipped": skipped, "tables": []})
                 continue
-            tables = clean_up(_candidates(session, image))
+            found = _candidates(session, image, ("table", *REGION_LABELS))
+            tables = clean_up([c for c in found if c["label"] == "table"])
+            # Overlapping candidates of one label are one region, as for tables.
+            regions = reading_order([r for label in REGION_LABELS for r in clean_up([c for c in found if c["label"] == label])])
             result["pages"].append({
                 "page": number,
                 "skipped": "",
                 "tables": [
                     {"bbox": [round(v * points, 2) for v in t["box"]], "score": round(t["score"], 3)}
                     for t in tables
+                ],
+                "regions": [
+                    {"label": r["label"], "bbox": [round(v * points, 2) for v in r["box"]], "score": round(r["score"], 3)}
+                    for r in regions
                 ],
             })
         except Exception as exc:

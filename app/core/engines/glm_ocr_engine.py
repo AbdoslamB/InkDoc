@@ -122,13 +122,45 @@ def find_repetition_start(text: str) -> int | None:
 
 
 def clean_page_output(text: str) -> str:
-    """Strip a Markdown code fence the model sometimes wraps its whole answer in."""
+    """Strip a Markdown code fence the model sometimes wraps its whole answer in, and mend its table rows."""
     t = text.strip()
     if t.startswith("```"):
         first_nl = t.find("\n")
         if first_nl != -1 and t.endswith("```"):
             t = t[first_nl + 1:-3].strip()
-    return t
+    return join_table_rows(t)
+
+
+ROW_MAX_LINES = 8              # a table row continued on more lines than this is not one row
+
+
+def join_table_rows(text: str) -> str:
+    """Pipe-table rows the model broke inside a cell ("| **Unit 1**  " / "*Page 1* | ... |") as one row.
+
+    A line that opens a row with "|" but doesn't close it goes on until a line
+    that does; the breaks inside the cell become "<br>". Anything else stays.
+    """
+    lines = text.split("\n")
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        if stripped.startswith("|") and not stripped.endswith("|") and stripped.count("|") >= 1:
+            parts = [stripped]
+            j = i + 1
+            while j < len(lines) and j - i <= ROW_MAX_LINES and lines[j].strip() and not lines[j].strip().startswith("|"):
+                parts.append(lines[j].strip())
+                if lines[j].strip().endswith("|"):
+                    break
+                j += 1
+            if parts[-1].endswith("|") and len(parts) > 1:
+                out.append("<br>".join(p.rstrip() for p in parts))
+                i = j + 1
+                continue
+        out.append(line)
+        i += 1
+    return "\n".join(out)
 
 
 # ─── Page sources ────────────────────────────────────────────────────────────
@@ -467,6 +499,42 @@ def read_table_region(path: str, page: int, bbox: list[float]) -> list[list[str]
     if result.finish_reason == "length" or find_repetition_start(result.text) is not None:
         return None
     return table_rows_from_output(result.text)
+
+
+FORMULA_PROMPT = "Formula Recognition:"
+
+
+def _read_region(path: str, page: int, bbox: list[float], prompt: str) -> str | None:
+    """GLM-OCR's answer for one area of a page, or None (not usable, out of room, or looping)."""
+    from app.core.engines.glm_ocr_server import DEFAULT_CTX_SIZE, GlmOcrServer, image_to_data_uri
+    from app.core.glm_ocr_manager import GlmOcrManager
+
+    mgr = GlmOcrManager.get_instance()
+    if not mgr.is_usable():
+        return None
+    side = mgr.render_long_side()
+    for _attempt in range(MAX_RERENDERS + 1):
+        img = render_region(path, page, bbox, side)
+        budget = output_budget(DEFAULT_CTX_SIZE, estimate_image_tokens(img.width, img.height))
+        if budget is not None:
+            break
+        side = int(side * RERENDER_FACTOR)
+    else:
+        return None
+    result = GlmOcrServer.get_instance().ocr(image_to_data_uri(_png_bytes(img)), prompt, budget)
+    if result.finish_reason == "length" or find_repetition_start(result.text) is not None:
+        return None
+    return clean_page_output(result.text).strip() or None
+
+
+def read_text_region(path: str, page: int, bbox: list[float]) -> str | None:
+    """The text GLM-OCR reads in one area (a picture on a text page); None if it reads none."""
+    return _read_region(path, page, bbox, PROMPT_TEXT)
+
+
+def read_formula_region(path: str, page: int, bbox: list[float]) -> str | None:
+    """One formula as GLM-OCR reads it (LaTeX); None if it reads none."""
+    return _read_region(path, page, bbox, FORMULA_PROMPT)
 
 
 def estimate_for_file(path: str) -> dict[str, Any]:

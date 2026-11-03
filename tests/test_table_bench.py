@@ -76,3 +76,14 @@ def test_summary_totals():
     s = tb.summarize(rows)
     assert s["documents"] == 2 and s["tables"] == 4 and s["exact"] == 3
     assert s["count_right_pct"] == 50.0
+
+
+def test_numbers_are_scored_against_the_text_layer():
+    from scripts.numeric_recall import PdfNumber
+
+    numbers = [PdfNumber(v, 1, None, "table_ruled") for v in ("120", "98", "12", "7")]
+    rows = [tb.score(TRUTH, _md(LEFT, RIGHT), numbers=numbers), tb.score(TRUTH, _md(LEFT), numbers=numbers)]
+    assert rows[1]["numbers"] == {"total": 4, "found": 2, "output": 2, "extra": 0, "changed": 0}
+    s = tb.summarize(rows)
+    assert s["numbers_recall_pct"] == 75.0 and s["numbers_precision_pct"] == 100.0
+    assert "numbers_recall_pct" not in tb.summarize([tb.score(TRUTH, _md(LEFT))])

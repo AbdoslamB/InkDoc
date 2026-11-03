@@ -15,6 +15,10 @@ Markdown into one report:
              wrote (per page), and every table the PDF's lines and words
              show, with what the table stage would do with that engine's
              Markdown and why
+  numbers    for Auto and each engine, which of the text layer's numbers it
+             kept, dropped or changed, and in which zone of the page they
+             were (a ruled or borderless table, a figure, prose;
+             scripts/numeric_recall.py)
   findings   each problem or doubt, with the step and modules that decide it;
              the same one on several pages is listed once. Problems are
              about what Auto keeps (or, without Auto, every engine); what
@@ -49,6 +53,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+import scripts.numeric_recall as nr  # noqa: E402
 from app.core.table_check import (  # noqa: E402
     LOOSE,
     MERGED,
@@ -234,6 +239,40 @@ def _table_findings(where: str, tables: dict[str, Any], steps_on: set[str], seve
     return out
 
 
+# Each zone of numeric_recall in a few words, and the step whose tables it holds.
+ZONE_WORDS = {
+    "table_ruled": "ruled tables", "table_borderless": "tables without lines", "table_grid": "rating grids",
+    "figure": "figures", "prose": "the text", "unknown": "pages whose positions could not be read",
+}
+ZONE_KINDS = {"table_ruled": "lines", "table_borderless": "borderless_tables", "table_grid": "rating_grids"}
+
+
+def _number_findings(where: str, numbers: dict[str, Any] | None, severity: str) -> list[dict]:
+    """The PDF's numbers missing from one Markdown, by zone; numbers it has that the PDF doesn't."""
+    if not numbers or not (numbers.get("numbers") or numbers.get("extra")):
+        return []
+    out = []
+    for zone, n in numbers["missing_by_zone"].items():
+        changed = next((e for e in numbers["examples"] if e["zone"] == zone and e.get("became")), None)
+        what = f"{n} of the numbers in {ZONE_WORDS.get(zone, zone)} missing from the output"
+        if changed:
+            what += f" (e.g. {changed['value']} became {', '.join(changed['became'])})"
+        pages = numbers.get("missing_pages_by_zone", {}).get(zone, [])
+        if zone in ZONE_KINDS:
+            out.append(_finding(severity, where, what, step=_owner(ZONE_KINDS[zone]), modules=FINDER + LOCATE,
+                                pages=pages))
+        elif zone == "figure":
+            out.append(_finding("note", where, what, step="figure_text", pages=pages))
+        else:
+            out.append(_finding(severity if zone == "prose" else "note", where, what, modules=QUALITY + ROUTING,
+                                pages=pages))
+    if numbers.get("precision") is not None and numbers["extra"]:
+        sample = ", ".join(e["value"] for e in numbers["extra_examples"][:5])
+        out.append(_finding(severity, where, f"{numbers['extra']} numbers in the output are not in the PDF's text "
+                            f"layer (misread or added; e.g. {sample})", modules=QUALITY))
+    return out
+
+
 def _engine_error(name: str, data: dict[str, Any]) -> dict:
     if name == "docling" and data.get("timed_out"):
         # Auto reads a long PDF in parts (auto_engine.docling_chunks); Docling on its own doesn't.
@@ -298,6 +337,13 @@ def findings(report: dict[str, Any]) -> list[dict[str, Any]]:
             out.append(_finding("problem", "auto", f"{entry['name']} did not run: {why}", step=entry["name"]))
     # Auto's output is what the user gets: the tables still wrong in it are problems.
     out += _table_findings("auto", auto.get("tables_left") or {}, steps_on, "problem")
+    out += _number_findings("auto", auto.get("numbers"), "problem")
+    if report.get("numbers_error"):
+        out.append(_finding("note", "numbers", f"numbers not compared: {report['numbers_error']}"))
+    ocr_layer = [p["page"] for p in report.get("pages", []) if p["kind"] == "ocr-layer"]
+    if ocr_layer and (auto.get("numbers") or any(e.get("numbers") for e in report.get("engines", {}).values())):
+        out.append(_finding("note", "numbers", "these pages' text layer is an earlier OCR, so the numbers are "
+                            "judged against that OCR", modules=PROBE, pages=ocr_layer))
 
     # Without Auto, every engine's troubles are problems; with it, they are notes,
     # except an engine that fails (someone may choose it on its own).
@@ -322,6 +368,7 @@ def findings(report: dict[str, Any]) -> list[dict[str, Any]]:
             out.append(_finding("problem", "auto", f"Auto kept {chosen} ({chosen_missing}% of the text missing); "
                                 f"{name} misses {q['missing_pct']}%", modules=ROUTING))
         out += _table_findings(name, data.get("tables") or {}, steps_on, severity)
+        out += _number_findings(name, data.get("numbers"), severity)
     out = _merge(out)
     out.sort(key=lambda f: f["severity"] != "problem")
     return out
@@ -461,6 +508,7 @@ def inspect_engine(
 
 def run_engine(
     engine: str, pdf: Path, probe: Any, plan: PassPlan, out: Path, convert: Converter, *, find: Any, read_table: Any,
+    numbers: Any = None,
 ) -> dict[str, Any]:
     from app.core.auto_engine import ocr_status
     from app.core.quality_check import assess
@@ -478,7 +526,19 @@ def run_engine(
     ocr_engine, installable = ocr_status()
     report = assess(str(pdf), markdown, engine, probe=probe, ocr_engine=ocr_engine, ocr_installable=installable)
     tables = inspect_engine(pdf, markdown, probe, plan, find=find, read_table=read_table)
-    return {"seconds": seconds, "chars": len(markdown), "quality": quality_facts(report), "tables": tables}
+    return {"seconds": seconds, "chars": len(markdown), "quality": quality_facts(report), "tables": tables,
+            "numbers": number_facts(numbers, markdown)}
+
+
+def reference_numbers(pdf: Path, probe: Any, find: Any) -> Any:
+    """The text layer's numbers, each with its zone; the finder runs on every page, every detector on."""
+    detectors = sorted({p.detector for p in PASSES if p.detector})
+    found = find(str(pdf), list(range(1, probe.page_count + 1)), None, detectors=detectors)
+    return nr.pdf_numbers(pdf, found)
+
+
+def number_facts(numbers: Any, markdown: str) -> dict[str, Any] | None:
+    return nr.compare(numbers, nr.markdown_numbers(markdown)) if numbers is not None else None
 
 
 def diagnose(
@@ -507,6 +567,11 @@ def diagnose(
     if engines is None:
         engines, notes = default_engines(available, probe.page_count)
         report["notes"] += notes
+    numbers = None
+    try:
+        numbers = reference_numbers(pdf, probe, find)
+    except Exception as exc:
+        report["numbers_error"] = _error(exc)
     if auto:
         print(f"  auto ({level}) ...", flush=True)
         report["auto"], markdown = run_auto(pdf, level, passes_off, out, convert)
@@ -515,11 +580,12 @@ def diagnose(
             # page), so the tables still wrong are judged on what Auto keeps.
             report["auto"]["tables_left"] = inspect_engine(pdf, markdown, probe, plan, find=find,
                                                            read_table=read_table)
+            report["auto"]["numbers"] = number_facts(numbers, markdown)
     report["engines"] = {}
     for engine in engines:
         print(f"  {engine} ...", flush=True)
         report["engines"][engine] = run_engine(engine, pdf, probe, plan, out, convert,
-                                               find=find, read_table=read_table)
+                                               find=find, read_table=read_table, numbers=numbers)
     report["findings"] = findings(report)
     (out / "report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
     return report
@@ -586,6 +652,8 @@ def render(report: dict[str, Any]) -> str:
                 lines.append("  inkdoc marks: " + ", ".join(f"{k} {v}" for k, v in sorted(auto["marks"].items())))
             if auto.get("tables_left"):
                 lines.append(f"  tables in its output: {_tables_text(auto['tables_left'])}")
+            if auto.get("numbers"):
+                lines.append(f"  numbers: {nr.summary_line(auto['numbers'])}")
     if report.get("engines"):
         lines += ["", "Engines (each on its own; tables: what the table stage would do with its Markdown)"]
         for name, data in report["engines"].items():
@@ -596,6 +664,8 @@ def render(report: dict[str, Any]) -> str:
             low = f", low pages {q['low_pages']}" if q.get("low_pages") else ""
             lines.append(f"  {name:10} {data['seconds']:>6} s  missing {q.get('missing_pct')}%{low}  "
                          f"tables: {_tables_text(data.get('tables') or {})}")
+            if data.get("numbers"):
+                lines.append(f"  {'':10} numbers: {nr.summary_line(data['numbers'])}")
     found = report.get("findings", [])
     lines += ["", "Where to look" if found else "Nothing to look at."]
     for f in found:

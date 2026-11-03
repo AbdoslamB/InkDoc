@@ -32,6 +32,9 @@ Per engine, before and after the stage:
   cells     share of expected cells found at their row and column
   count     documents whose number of tables is right (merged and split tables)
   invented  cells in the output whose words are not in the PDF's text layer
+  numbers   share of the text layer's numbers the output kept, and of the
+            output's numbers the text layer has (scripts/numeric_recall.py;
+            the original's text layer when --scanned)
 plus the time of the conversion and of the stage. Only the measured numbers
 belong in the repository, next to the thresholds they set.
 """
@@ -90,8 +93,11 @@ def cell_accuracy(expected: list[list[str]], found: list[list[str]]) -> tuple[in
     return hits, total
 
 
-def score(truth: list[dict], markdown: str, source_words: set[str] | None = None) -> dict[str, Any]:
-    """How well `markdown` reproduces the `truth` tables (same order, any page)."""
+def score(
+    truth: list[dict], markdown: str, source_words: set[str] | None = None, numbers: Any = None,
+) -> dict[str, Any]:
+    """How well `markdown` reproduces the `truth` tables (same order, any page), and with
+    `numbers` (numeric_recall.pdf_numbers) the PDF's numbers."""
     found = [b.rows for b in find_table_blocks(markdown.split("\n"))]
     exact = 0
     hits = total = 0
@@ -124,7 +130,7 @@ def score(truth: list[dict], markdown: str, source_words: set[str] | None = None
                     words = line_tokens(SHAPE_LABEL_RE.sub(" ", cell))
                     if words and any(w not in source_words for w in words):
                         invented += 1
-    return {
+    result = {
         "expected": len(truth),
         "found": len(found),
         "exact": exact,
@@ -133,6 +139,14 @@ def score(truth: list[dict], markdown: str, source_words: set[str] | None = None
         "count_right": len(found) == len(truth),
         "invented_cells": invented,
     }
+    if numbers is not None:
+        from scripts.numeric_recall import compare, markdown_numbers
+
+        md_numbers = markdown_numbers(markdown)
+        r = compare(numbers, md_numbers)
+        result["numbers"] = {"total": r["numbers"], "found": r["found"], "output": len(md_numbers),
+                             "extra": r["extra"], "changed": r["missing_by_kind"].get("changed", 0)}
+    return result
 
 
 def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -141,6 +155,14 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         return {}
     expected = sum(r["expected"] for r in rows)
     cells_total = sum(r["cells_total"] for r in rows)
+    nums = [r["numbers"] for r in rows if "numbers" in r]
+    n_total = sum(n["total"] for n in nums)
+    n_output = sum(n["output"] for n in nums)
+    numbers = {
+        "numbers_recall_pct": round(100 * sum(n["found"] for n in nums) / n_total, 1) if n_total else None,
+        "numbers_precision_pct": round(100 * (1 - sum(n["extra"] for n in nums) / n_output), 1) if n_output else None,
+        "numbers_changed": sum(n["changed"] for n in nums),
+    } if nums else {}
     return {
         "documents": len(rows),
         "tables": expected,
@@ -149,6 +171,7 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "cells_pct": round(100 * sum(r["cells_hit"] for r in rows) / cells_total, 1) if cells_total else None,
         "count_right_pct": round(100 * sum(1 for r in rows if r["count_right"]) / len(rows), 1),
         "invented_cells": sum(r["invented_cells"] for r in rows),
+        **numbers,
     }
 
 
@@ -234,6 +257,7 @@ def run(
     from app.core.queue_model import EngineKind, QueueItem, SourceKind
     from app.core.table_finder import find_tables
     from app.core.table_stage import confirm_tables, finish_tables, inspect_tables
+    from scripts.numeric_recall import pdf_numbers
 
     out.mkdir(parents=True, exist_ok=True)
     docs = _documents(corpus, synthetic, out)
@@ -268,6 +292,7 @@ def run(
             if source is not None:
                 for page in source.pages:
                     source_words.update(tokenize(normalize_text(page.text)))
+            numbers = pdf_numbers(original)
             started = time.perf_counter()
             if scanned:
                 fixed, repaired = _scanned_stage(pdf, md, probe)
@@ -284,8 +309,8 @@ def run(
                 fixed, summary = finish_tables(inspection, repair_allowed=True)
                 repaired, issues = summary.repaired, summary.issues
             stage_s = time.perf_counter() - started
-            before = score(truth, md, source_words)
-            after = score(truth, fixed, source_words)
+            before = score(truth, md, source_words, numbers)
+            after = score(truth, fixed, source_words, numbers)
             per_doc.append({
                 "document": name, "before": before, "after": after,
                 "convert_s": round(convert_s, 2), "stage_s": round(stage_s, 3),
@@ -319,14 +344,15 @@ def main(argv: list[str] | None = None) -> int:
     results = run(args.corpus, engines, not args.no_synthetic, args.out, thorough=args.thorough,
                   scanned=args.scanned)
     print()
-    print(f"{'engine':10} {'stage':7} {'exact':>12} {'cells':>7} {'count ok':>9} {'invented':>9}")
+    print(f"{'engine':10} {'stage':7} {'exact':>12} {'cells':>7} {'count ok':>9} {'invented':>9} {'numbers':>8}")
     for engine, data in results["engines"].items():
         for stage in ("before", "after"):
             s = data[stage]
             if not s:
                 continue
             print(f"{engine:10} {stage:7} {s['exact']:>4}/{s['tables']:<4} ({s['exact_pct']}%) "
-                  f"{s['cells_pct']:>6}% {s['count_right_pct']:>8}% {s['invented_cells']:>9}")
+                  f"{s['cells_pct']:>6}% {s['count_right_pct']:>8}% {s['invented_cells']:>9} "
+                  f"{s.get('numbers_recall_pct')!s:>7}%")
     try:
         from app.core.engines.markitdown_worker_client import MarkItDownWorker
 

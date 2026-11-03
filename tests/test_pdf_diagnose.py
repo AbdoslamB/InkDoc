@@ -156,6 +156,45 @@ def test_an_image_page_without_scan_evidence_points_at_the_probe():
     assert f[0]["pages"] == [1] and f[0]["modules"] == ["app.core.pdf_probe"]
 
 
+def _numbers(zones, *, extra=0, precision=1.0, became=None):
+    examples = [{"value": "150", "page": 3, "zone": z, "kind": "changed" if became else "dropped",
+                 **({"became": became} if became else {})} for z in zones]
+    return {"numbers": 100, "missing_by_zone": dict(zones), "missing_pages_by_zone": {z: [3] for z in zones},
+            "examples": examples, "extra": extra, "precision": precision,
+            "extra_examples": [{"value": "158"}] * extra}
+
+
+def test_numbers_missing_from_a_table_point_at_its_step():
+    report = _report()
+    report["auto"]["numbers"] = _numbers({"table_borderless": 4}, became=["158"])
+    f = [x for x in pd.findings(report) if "numbers" in x["what"]]
+    assert f[0]["severity"] == "problem" and f[0]["step"] == "borderless_tables" and f[0]["pages"] == [3]
+    assert "4 of the numbers in tables without lines" in f[0]["what"] and "150 became 158" in f[0]["what"]
+    assert "app.core.table_finder" in f[0]["modules"]
+
+
+def test_numbers_missing_from_figures_are_a_note_and_extra_numbers_a_problem():
+    report = _report()
+    report["auto"]["numbers"] = _numbers({"figure": 7}, extra=2, precision=0.98)
+    f = {x["what"].split(" ")[1]: x for x in pd.findings(report) if "numbers" in x["what"]}
+    assert f["of"]["severity"] == "note" and f["of"]["step"] == "figure_text"
+    assert f["numbers"]["severity"] == "problem" and "not in the PDF's text layer" in f["numbers"]["what"]
+
+
+def test_numbers_an_engine_adds_to_a_pdf_without_any_are_reported():
+    report = _report()
+    report["auto"]["numbers"] = {**_numbers({}, extra=3, precision=0.0), "numbers": 0}
+    assert any("3 numbers in the output are not in the PDF" in x["what"] for x in pd.findings(report))
+
+
+def test_an_ocr_layer_is_named_when_numbers_are_judged_against_it():
+    page = {"page": 2, "kind": "ocr-layer", "chars": 900, "image_coverage": 1.0, "scan_evidence": [],
+            "rule_lines": 0, "vector_boxes": 0, "table_candidate": False}
+    report = _report(pages=[page])
+    report["auto"]["numbers"] = _numbers({})
+    assert any(x["where"] == "numbers" and x["pages"] == [2] for x in pd.findings(report))
+
+
 # ─── One run: the real probe, finder, check and repair ───────────────────────
 def test_a_merged_pair_is_found_and_explained(tmp_path):
     from app.core.table_finder import find_tables
@@ -204,6 +243,10 @@ def test_the_tables_left_in_autos_output_are_checked(tmp_path):
     assert [(b["issue"], b["page"]) for b in bands] == [("merged", 1)]
     assert (tmp_path / "out" / "auto-balanced.md").read_text(encoding="utf-8") == text
     assert "tables in its output: 1 places" in pd.render(report)
+    # Every number of the pair is in the merged table, in the ruled tables' zone.
+    numbers = report["auto"]["numbers"]
+    assert numbers["numbers"] > 0 and numbers["recall"] == 1.0 and numbers["extra"] == 0
+    assert "numbers: " in pd.render(report)
 
 
 def test_a_file_pdfium_cannot_read_is_reported(tmp_path):

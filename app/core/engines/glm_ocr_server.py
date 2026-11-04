@@ -57,6 +57,9 @@ READY_TIMEOUT_CPU_S = 90.0
 READY_TIMEOUT_GPU_S = 120.0
 PAGE_TIMEOUT_CPU_S = 300.0
 PAGE_TIMEOUT_GPU_S = 60.0
+# One area read on its own (a table's HTML is longer than a page's text): this many times the
+# page's limit, never more than the CPU's.
+AREA_TIMEOUT_FACTOR = 2.5
 PORT_RETRIES = 3
 DEFAULT_CTX_SIZE = 8192
 TEMPERATURE = 0.02
@@ -808,8 +811,10 @@ class GlmOcrServer:
         max_tokens: int,
         *,
         repeat_penalty: float | None = None,
+        area: bool = False,
     ) -> OcrResult:
-        """Recognise one page. Restarts once and retries if the server dies mid-request."""
+        """Recognise one page (or, `area`, one area of one: a longer time limit). Restarts once
+        and retries if the server dies mid-request."""
         with self._lock:
             self._busy = True
             try:
@@ -817,6 +822,8 @@ class GlmOcrServer:
                 while True:
                     proc = self.ensure_running()
                     timeout = PAGE_TIMEOUT_GPU_S if proc.spec.uses_gpu else PAGE_TIMEOUT_CPU_S
+                    if area:
+                        timeout = min(PAGE_TIMEOUT_CPU_S, timeout * AREA_TIMEOUT_FACTOR)
                     started = time.time()
                     try:
                         resp = proc.chat(

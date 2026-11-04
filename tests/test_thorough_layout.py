@@ -320,3 +320,63 @@ def test_a_table_row_glm_ocr_broke_inside_a_cell_is_one_row_again():
     assert "| **UNIT 1**<br>*Page 1* | **Chapter 1**<br>*Birthdays* |" in out
     assert find_table_blocks(out.split("\n"))[0].rows[1] == ["**UNIT 1**<br>*Page 1*", "**Chapter 1**<br>*Birthdays*"]
     assert out.endswith("A paragraph | with a pipe\nstays as it is.")
+
+
+# ─── Tables in an image file (Thorough, read by GLM-OCR) ─────────────────────
+def test_an_image_has_its_table_read_again_and_nothing_else_runs(tmp_path, monkeypatch):
+    import asyncio
+    from pathlib import Path
+
+    from PIL import Image
+
+    import app.core.auto_engine as auto_engine
+    import app.core.engines.glm_ocr_engine as glm
+    import app.core.engines.markitdown_worker_client as worker
+    from app.core.converter import ConversionOptions
+    from app.core.queue_model import QueueItem, SourceKind
+
+    image = tmp_path / "scan.jpg"
+    Image.new("RGB", (600, 400), "white").save(image)
+    page_reading = ("No Name Price\n\n75\nДюбели\n0,66\n\n76\nГрунтовака\n14292,53\n\n77\nКсилол\n11374,17")
+    table = [["No", "Name", "Price"], ["75", "Дюбелі", "0.66"], ["76", "Грунтовка", "14292,53"],
+             ["77", "Ксилол", "11374,17"]]
+
+    def fake_convert(item, options, engine, fetched):
+        options.engine_used = engine
+        return page_reading
+
+    monkeypatch.setattr(auto_engine, "_convert_once", fake_convert)
+    monkeypatch.setattr(auto_engine, "ocr_engines_usable", lambda: [G])
+    monkeypatch.setattr(auto_engine, "layout_model_usable", lambda: True)
+    monkeypatch.setattr(auto_engine, "layout_model_location", lambda: (Path(tmp_path), {"model.onnx": "ab" * 32}))
+    monkeypatch.setattr(auto_engine, "glm_estimate_seconds", lambda *a: 10.0)
+    monkeypatch.setattr(worker, "find_layout_in_worker", lambda source, pages, folder, digest, job=None: {
+        "pages": [{"page": 1, "skipped": "", "tables": [{"bbox": [10, 10, 590, 390], "score": 0.9}]}]})
+    monkeypatch.setattr(glm, "read_table_region", lambda path, page, bbox: table)
+    item = QueueItem(source=str(image), kind=SourceKind.FILE, display_name="scan.jpg", engine=EngineKind.AUTO)
+    options = ConversionOptions(engine=EngineKind.AUTO, auto_quality="thorough")
+    markdown = asyncio.run(auto_engine.run_auto(item, options))
+    assert options.engine_used == G
+    assert find_table_blocks(markdown.split("\n"))[0].rows[1] == ["75", "Дюбелі", "0,66"]
+    passes = {p["name"]: p for p in options.table_report.passes}
+    assert passes["scanned_tables"]["ran"] and passes["scanned_tables"]["changed"] == 1
+    assert passes["figure_text"]["skipped"] == "not a PDF"
+    fast = ConversionOptions(engine=EngineKind.AUTO, auto_quality="fast")
+    assert asyncio.run(auto_engine.run_auto(item, fast)) == page_reading and fast.table_report is None
+
+
+def test_an_image_is_read_by_its_pixels(tmp_path):
+    from PIL import Image
+
+    from app.core.engines.glm_ocr_engine import render_region
+    from app.core.engines.layout_model import _render, image_frame
+
+    path = tmp_path / "a.png"
+    Image.new("RGBA", (300, 200), (0, 0, 0, 0)).save(path)
+    frame = image_frame(str(path), 1)
+    assert frame.mode == "RGB" and frame.getpixel((5, 5)) == (255, 255, 255), "transparency on white"
+    assert image_frame(str(path), 2) is None
+    img, points, why = _render(str(path), 1)
+    assert img.size == (300, 200) and points == 1.0 and why == ""
+    crop = render_region(str(path), 1, [0, 0, 100, 50], 400)
+    assert crop.size[0] > 100, "a small area is read larger"

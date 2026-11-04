@@ -241,3 +241,48 @@ def test_a_cancelled_job_stops_the_step():
         find_scanned_tables("doc.pdf", [2], lambda *a: pytest.fail("not run"), job=job)
     with pytest.raises(ConversionCancelledError):
         read_scanned_tables(_found((2, None)), lambda *a: pytest.fail("not read"), job=job)
+
+
+# ─── A scan read cell by cell (an image file): one row per paragraph ─────────
+CELLS = [["No", "Name", "Unit", "Price"], ["75", "Дюбелі варіант", "шт", "0,66 778,80"],
+         ["76", "Грунтовка", "т", "14292,53 1364,42"], ["77", "Ксилол нафтовий", "т", "11374,17 0,48"]]
+BY_CELL = ("Програмний комплекс\n\nNo Name Unit Price\n\n75\nДюбели вариант\nшт\n0,66\n778,80\n\n"
+           "76\nГрунтовака\nТ\n14292,53\n1364,42\n\n77\nКсилол нафтовий\nT\n11374,17\n0,48\n\nКінець кошторису")
+
+
+def test_a_table_written_one_row_per_paragraph_is_rebuilt():
+    # The crop's reading spells some words better, has "0.66" for "0,66" and one digit wrong.
+    crop = [row[:] for row in CELLS]
+    crop[1][3] = "0.66 778.80"
+    crop[2][3] = "14292,53 1384,42"
+    out, written, _ = write_scanned_tables(BY_CELL, _found((1, crop)))
+    assert written == [{"page": 1, "tables": 1, "issue": "scanned", "source": "glm_ocr"}]
+    rows = find_table_blocks(out.split("\n"))[0].rows
+    assert rows == CELLS, "comma decimals as on the page, and the page's digit where they disagree"
+    assert out.startswith("Програмний комплекс\n\n") and out.endswith("\n\nКінець кошторису"), \
+        "the lines around the table stay"
+
+
+def test_a_single_paragraph_still_wins_over_a_run():
+    # A table GLM-OCR wrote in one paragraph is matched there, as before; the run is never needed.
+    one = "Intro words here\n\nNo Name Unit Price\n75 Alpha шт 12\n76 Beta т 40\n\nKept note"
+    reading = [["No", "Name", "Unit", "Price"], ["75", "Alpha", "шт", "12"], ["76", "Beta", "т", "40"]]
+    out, written, _ = write_scanned_tables(one, _found((1, reading)))
+    assert written and out.startswith("Intro words here\n\n<!-- inkdoc:table") and out.endswith("\n\nKept note")
+
+
+def test_in_a_run_a_line_of_other_words_between_rows_stops_it():
+    note = BY_CELL.replace("\n\n76\n", "\n\nThis note is about something else entirely here\n\n76\n")
+    out, written, details = write_scanned_tables(note, _found((1, CELLS)))
+    assert out == note and written == []
+    assert any("leave out part" in line for line in details)
+
+
+def test_point_decimals_follow_the_page_only_when_it_writes_commas():
+    from app.core.scanned_tables import decimal_marks, page_numbers
+
+    assert decimal_marks([["0.66", "v2.10.6"]], "1,5 2,25 3,75 4,00") == [["0,66", "v2.10.6"]]
+    assert decimal_marks([["0.66"]], "1.5 2.25 3,75") == [["0.66"]]
+    assert page_numbers([["1384,42", "9999"]], "1364,42 and 1386,42") == [["1384,42", "9999"]], \
+        "two close numbers on the page: which one is not known"
+    assert page_numbers([["1384,42"]], "1364,42") == [["1364,42"]]

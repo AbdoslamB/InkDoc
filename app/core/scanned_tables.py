@@ -14,13 +14,25 @@ words, only when all of these hold:
   table read again, and it uses no script that place doesn't;
 - in a paragraph, only the lines made entirely of the readings' words are
   replaced, and only when no other line sits between them: a note or a
-  source line next to the table stays as it is;
+  source line next to the table stays as it is. A table GLM-OCR wrote one
+  row per paragraph (a scan read cell by cell, blank lines between rows)
+  is such a paragraph too: paragraphs with only blank lines between them
+  count as one place, after the single paragraphs. Two readings of the same
+  scan spell words differently ("вариант" and "варіант"), so in such a run a
+  word counts when one there is alike (SIMILAR_WORD), a line is the table's
+  when most of its words are, and a number the two readings disagree on by
+  one digit keeps the page's reading: nothing InkDoc had is traded for a guess;
 - a table GLM-OCR wrote is replaced only when the readings hold at least
   AGREE_SHARE of its words (the rest are the same cells read slightly
   differently), and only when they differ from it.
 
 Words, not whole cells, because the structure is what may differ: a stacked
 header GLM-OCR shifted on the page comes back as "Revenue 2023" from the crop.
+A reading that writes decimals with a point where the page's reading writes
+them with a comma ("0.66" for "0,66") takes the page's comma first.
+
+The pages can be an image file's frames (Auto, an image GLM-OCR read): the
+layout model and GLM-OCR then read its pixels.
 A paragraph is a run of non-blank lines that are not headings, comments,
 code or table rows. A paragraph with dot leaders is a contents list, never a
 table, as for the table finder on text pages.
@@ -206,6 +218,7 @@ class _Place:
     end: int
     texts: list[str]                        # its cells, or its lines
     rows: list[list[str]] | None = None     # None for a paragraph
+    run: bool = False                       # paragraphs with only blank lines between them
 
     def __post_init__(self) -> None:
         self.words = Counter(word for text in self.texts for word in line_tokens(text))
@@ -236,39 +249,131 @@ def _places(lines: list[str]) -> list[_Place]:
     def text(i: int) -> bool:
         return i not in taken and bool(lines[i].strip()) and not lines[i].lstrip().startswith(_NOT_TEXT)
 
+    paragraphs: list[_Place] = []
     i = 0
     while i < len(lines):
         end = i
         while end < len(lines) and text(end):
             end += 1
         if end > i and not any(_LEADER.search(line) for line in lines[i:end]):
-            places.append(_Place(i, end, lines[i:end]))
+            paragraphs.append(_Place(i, end, lines[i:end]))
         i = max(end, i + 1)
-    return places
+    # Runs of paragraphs with only blank lines between them: a table written one row per
+    # paragraph. After the single paragraphs, so a table in one paragraph still matches there.
+    runs: list[_Place] = []
+    run: list[_Place] = []
+    for paragraph in [*paragraphs, None]:
+        if paragraph is not None and run and not any(lines[k].strip() for k in range(run[-1].end, paragraph.start)):
+            run.append(paragraph)
+            continue
+        if len(run) > 1:
+            runs.append(_Place(run[0].start, run[-1].end, [t for p in run for t in p.texts], run=True))
+        run = [paragraph] if paragraph is not None else []
+    return places + paragraphs + runs
 
 
 def _own_lines(lines: list[str], place: _Place, words: Counter[str]) -> tuple[int, int] | None:
     """The lines of a paragraph made only of `words`, from the first to the last such line;
-    None when there are none, or when a line with other words sits between them."""
-    own = [all(w in words for w in line_tokens(lines[i])) for i in range(place.start, place.end)]
+    None when there are none, or when a line with other words sits between them (blank lines
+    between paragraphs are neither)."""
+    def is_own(line: str) -> bool:
+        tokens = line_tokens(line)
+        if not place.run:
+            return all(w in words for w in tokens)
+        # A line with words is the table's by its words: a heading's numbers ("ABK-5 (2.10.6)")
+        # can all be in a table's column numbers.
+        lettered = [w for w in tokens if any(ch.isalpha() for ch in w)] or tokens
+        if not lettered:
+            return True  # a unit of one letter ("т"), as a paragraph's line with no words is
+        held = sum(1 for w in lettered if w in words or any(_alike(w, k) for k in words))
+        return held >= OWN_LINE_SHARE * len(lettered)
+
+    own = [is_own(lines[i]) if lines[i].strip() else None for i in range(place.start, place.end)]
     if True not in own:
         return None
     first, last = own.index(True), len(own) - 1 - own[::-1].index(True)
-    if not all(own[first:last + 1]):
+    if False in own[first:last + 1]:
         return None
     return place.start + first, place.start + last + 1
 
 
+SIMILAR_WORD = 0.6            # two readings of a word of WORD_MIN_LETTERS or more this alike are one word
+WORD_MIN_LETTERS = 4
+OWN_LINE_SHARE = 0.5           # in a run, a line with this share of the reading's words is the table's
+# Latin letters a scan's reading writes for the Cyrillic ones they look like ("M3" for "м3").
+_LOOKALIKE = str.maketrans("abcehikmoptxy", "авсенікмортху")
+
+
+def _alike(a: str, b: str) -> bool:
+    import difflib
+
+    if a.translate(_LOOKALIKE) == b.translate(_LOOKALIKE):
+        return True
+    return (
+        a.isalpha() and b.isalpha() and min(len(a), len(b)) >= WORD_MIN_LETTERS
+        and difflib.SequenceMatcher(None, a, b).ratio() >= SIMILAR_WORD
+    )
+
+
+def _loose_share(part: Counter[str], whole: Counter[str]) -> float:
+    """_share, where a word left over counts when `whole` has one alike left over (numbers: exactly)."""
+    total = sum(part.values())
+    if not total:
+        return 0.0
+    left = Counter({k: n - min(n, part.get(k, 0)) for k, n in whole.items()})
+    held = sum(min(n, whole[k]) for k, n in part.items())
+    for word, n in part.items():
+        for _ in range(n - min(n, whole[word])):
+            other = next((k for k, m in left.items() if m > 0 and _alike(word, k)), None)
+            if other is None:
+                break
+            left[other] -= 1
+            held += 1
+    return held / total
+
+
+def _share_in(place: _Place, words: Counter[str]) -> float:
+    return _loose_share(words, place.words) if place.run else _share(words, place.words)
+
+
+_NUMBER = re.compile(r"\d[\d,.x×]*\d|\d")
+
+
+def page_numbers(rows: list[list[str]], page_text: str) -> list[list[str]]:
+    """A reading's numbers the page's reading has one digit apart, as the page has them.
+
+    Only when exactly one number of the page's is that close: two readings of a
+    scan that disagree keep the one InkDoc already wrote.
+    """
+    known = Counter(_NUMBER.findall(page_text))
+
+    def mend(match: re.Match[str]) -> str:
+        number = match.group(0)
+        if known[number]:
+            return number
+        close = {
+            k for k in known
+            if len(k) == len(number)
+            and sum(1 for a, b in zip(k, number, strict=True) if a != b) == 1
+            and all(a == b or (a.isdigit() and b.isdigit()) for a, b in zip(k, number, strict=True))
+        }
+        return close.pop() if len(close) == 1 else number
+
+    return [[_NUMBER.sub(mend, cell) for cell in row] for row in rows]
+
+
 def _match(area: Area, places: list[_Place], groups: dict[int, list[Area]]) -> int | None:
     """The place holding the area's words: the best share, the earliest on a tie, never one
-    another page's reading has taken. None when no place holds AGREE_SHARE of them."""
+    another page's reading has taken. None when no place holds AGREE_SHARE of them.
+    A run of paragraphs only when no single table or paragraph does."""
     words = _words(area.rows or [])
-    ranked = sorted((-_share(words, p.words), i) for i, p in enumerate(places))
-    for negative_share, index in ranked:
-        if -negative_share < AGREE_SHARE:
-            return None
-        if all(a.page == area.page for a in groups.get(index, [])):
-            return index
+    for runs in (False, True):
+        ranked = sorted((-_share_in(p, words), i) for i, p in enumerate(places) if p.run == runs)
+        for negative_share, index in ranked:
+            if -negative_share < AGREE_SHARE:
+                break
+            if all(a.page == area.page for a in groups.get(index, [])):
+                return index
     return None
 
 
@@ -280,7 +385,8 @@ def _replacement(lines: list[str], place: _Place, areas: list[Area]) -> tuple[in
         if span is None:
             return "writing it would leave out part of what GLM-OCR wrote there"
         start, end = span
-        if _share(words, Counter(w for line in lines[start:end] for w in line_tokens(line))) < AGREE_SHARE:
+        there = Counter(w for line in lines[start:end] for w in line_tokens(line))
+        if (_loose_share if place.run else _share)(words, there) < AGREE_SHARE:
             return "it doesn't match what GLM-OCR wrote for the page"
         return start, end
     if _share(place.words, words) < AGREE_SHARE:
@@ -290,9 +396,26 @@ def _replacement(lines: list[str], place: _Place, areas: list[Area]) -> tuple[in
     return place.start, place.end
 
 
+_COMMA_DECIMAL = re.compile(r"(?<![\d.,])\d+,\d+(?![\d.,])")
+_POINT_DECIMAL = re.compile(r"(?<![\d.,])(\d+)\.(\d+)(?![\d.,])")
+DECIMAL_STYLE_RATIO = 5        # the page writes comma decimals this many times more often than point ones
+
+
+def decimal_marks(rows: list[list[str]], page_text: str) -> list[list[str]]:
+    """A reading's "0.66" as "0,66" when the page's reading writes its decimals with a comma."""
+    commas = len(_COMMA_DECIMAL.findall(page_text))
+    points = len(_POINT_DECIMAL.findall(page_text))
+    if commas < 3 or commas < DECIMAL_STYLE_RATIO * points:
+        return rows
+    return [[_POINT_DECIMAL.sub(r"\1,\2", cell) for cell in row] for row in rows]
+
+
 def write_scanned_tables(markdown: str, found: ScannedTables) -> tuple[str, list[dict], list[str]]:
     """(Markdown, tables written per page, detail lines). Pure."""
     lines = markdown.split("\n")
+    for area in found.areas:
+        if area.rows is not None:
+            area.rows = decimal_marks(area.rows, markdown)
     readings = [a for a in found.areas if a.rows is not None]
     places = _places(lines) if readings else []
     groups: dict[int, list[Area]] = {}
@@ -310,6 +433,10 @@ def write_scanned_tables(markdown: str, found: ScannedTables) -> tuple[str, list
 
     replacements: list[tuple[int, int, list[str]]] = []
     for index, areas in groups.items():
+        if places[index].run:
+            text = "\n".join(places[index].texts)
+            for area in areas:
+                area.rows = page_numbers(area.rows or [], text)
         target = _replacement(lines, places[index], areas)
         if isinstance(target, str):
             for area in areas:

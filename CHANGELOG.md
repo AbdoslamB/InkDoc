@@ -28,6 +28,8 @@ inside InkDoc.
     several figures lists each figure's labels under its caption.
   - Scanned pages that carry an old, poor OCR text are read again from the
     image with GLM-OCR.
+  - A table in a photo or scanned image comes out as a table, with its numbers
+    checked against the first reading, instead of one cell per line.
   - A page an engine lost most of is read again by another engine.
   - Lines broken one per paragraph are joined, and checklist boxes are marked ☐.
   - Bold, italics, footnote marks and exponents come back from the PDF's fonts.

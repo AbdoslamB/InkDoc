@@ -165,15 +165,58 @@ def _candidates(session: Any, image: Any, labels_wanted: tuple[str, ...] = ("tab
     return found
 
 
+def image_frame(path: str, number: int) -> Any:
+    """Frame `number` (1-based) of an image file, upright and RGB; None when there is no such frame.
+
+    An image's coordinates are this frame's pixels: the layout model's boxes
+    and GLM-OCR's crops (glm_ocr_engine.render_region) both use them. A
+    multi-frame TIFF's frames are pages; other formats have one.
+    """
+    from PIL import Image, ImageOps
+
+    with Image.open(path) as img:
+        frames = int(getattr(img, "n_frames", 1) or 1) if (img.format or "").upper() == "TIFF" else 1
+        if number < 1 or number > frames:
+            return None
+        if frames > 1:
+            img.seek(number - 1)
+        frame = img.copy()
+    # Phone photos keep their rotation in EXIF; transparency is laid on white.
+    frame = ImageOps.exif_transpose(frame) or frame
+    if frame.mode in ("RGBA", "LA") or (frame.mode == "P" and "transparency" in frame.info):
+        rgba = frame.convert("RGBA")
+        canvas = Image.new("RGB", rgba.size, (255, 255, 255))
+        canvas.paste(rgba, mask=rgba.split()[-1])
+        return canvas
+    return frame.convert("RGB")
+
+
+def _render_image(path: str, number: int) -> tuple[Any, float, str]:
+    """An image file's frame for the model; boxes come back in the frame's pixels."""
+    from PIL import Image
+
+    frame = image_frame(path, number)
+    if frame is None:
+        return None, 1.0, "missing"
+    scale = min(1.0, MAX_RENDER_SIDE / max(1, frame.width, frame.height))
+    if scale < 1.0:
+        frame = frame.resize((max(1, round(frame.width * scale)), max(1, round(frame.height * scale))), Image.BILINEAR)
+    return frame, 1 / scale, ""
+
+
 def _render(path: str, number: int) -> tuple[Any, float, str]:
     """(RGB image or None, points per pixel, why skipped). pdfium lock held.
 
     RENDER_DPI, but never more than MAX_RENDER_SIDE pixels on the long side:
     a document can declare any page size, and the model sees 640 x 640 anyway.
+    An image file is read as it is ("points" are then its pixels).
     """
     import pypdfium2 as pdfium
 
-    from app.core.pdf_probe import pdfium_lock
+    from app.core.pdf_probe import is_pdf, pdfium_lock
+
+    if not is_pdf(path):
+        return _render_image(path, number)
 
     scale = RENDER_DPI / 72
     with pdfium_lock():
@@ -206,7 +249,7 @@ def detect_tables(
     *,
     time_budget_s: float = DEFAULT_TIME_BUDGET_S,
 ) -> dict:
-    """The tables on the given 1-based pages of the PDF at `path`. Never raises.
+    """The tables on the given 1-based pages of the PDF (or frames of the image) at `path`. Never raises.
 
     {"pages": [{"page", "skipped", "tables": [{"bbox", "score"}],
      "regions": [{"label", "bbox", "score"}]}], "truncated", "elapsed_ms", "error"}:

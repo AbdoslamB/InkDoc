@@ -425,17 +425,20 @@ MAX_CROP_SCALE = 4.0          # small tables are enlarged, but not without limit
 
 
 def render_region(path: str, page: int, bbox: list[float], long_side: int) -> Any:
-    """An RGB image of one area of a PDF page.
+    """An RGB image of one area of a PDF page, or of an image file's frame.
 
     `bbox` is (x0, top, x1, bottom) in points from the top-left corner (the
-    table finder's coordinates). The page is cut down to the area before
+    table finder's coordinates); for an image file, in its pixels (the layout
+    model's, layout_model.image_frame). The page is cut down to the area before
     rendering, so a small table costs a small image. pdfium lock held.
     """
     import pypdfium2 as pdfium
 
-    from app.core.pdf_probe import pdfium_lock
+    from app.core.pdf_probe import is_pdf, pdfium_lock
 
     x0, top, x1, bottom = (float(v) for v in bbox)
+    if not is_pdf(path):
+        return _image_region(path, page, (x0, top, x1, bottom), long_side)
     with pdfium_lock():
         doc = pdfium.PdfDocument(path)
         try:
@@ -458,6 +461,26 @@ def render_region(path: str, page: int, bbox: list[float], long_side: int) -> An
                 pg.close()
         finally:
             doc.close()
+
+
+def _image_region(path: str, page: int, box: tuple[float, float, float, float], long_side: int) -> Any:
+    """One area of an image file's frame, enlarged up to MAX_CROP_SCALE (a small scan reads better larger)."""
+    from PIL import Image
+
+    from app.core.engines.layout_model import image_frame
+
+    frame = image_frame(path, page)
+    if frame is None:
+        raise ValueError(f"the image has no frame {page}")
+    x0, top, x1, bottom = box
+    area = frame.crop((
+        max(0, int(x0 - CROP_PAD_PT)), max(0, int(top - CROP_PAD_PT)),
+        min(frame.width, int(math.ceil(x1 + CROP_PAD_PT))), min(frame.height, int(math.ceil(bottom + CROP_PAD_PT))),
+    ))
+    scale = min(MAX_CROP_SCALE, long_side / max(1, area.width, area.height))
+    if abs(scale - 1.0) > 0.01:
+        area = area.resize((max(1, round(area.width * scale)), max(1, round(area.height * scale))), Image.LANCZOS)
+    return area
 
 
 def table_rows_from_output(text: str) -> list[list[str]] | None:
@@ -495,7 +518,7 @@ def read_table_region(path: str, page: int, bbox: list[float]) -> list[list[str]
         side = int(side * RERENDER_FACTOR)
     else:
         return None
-    result = GlmOcrServer.get_instance().ocr(image_to_data_uri(_png_bytes(img)), TABLE_PROMPT, budget)
+    result = GlmOcrServer.get_instance().ocr(image_to_data_uri(_png_bytes(img)), TABLE_PROMPT, budget, area=True)
     if result.finish_reason == "length" or find_repetition_start(result.text) is not None:
         return None
     return table_rows_from_output(result.text)
@@ -521,7 +544,7 @@ def _read_region(path: str, page: int, bbox: list[float], prompt: str) -> str | 
         side = int(side * RERENDER_FACTOR)
     else:
         return None
-    result = GlmOcrServer.get_instance().ocr(image_to_data_uri(_png_bytes(img)), prompt, budget)
+    result = GlmOcrServer.get_instance().ocr(image_to_data_uri(_png_bytes(img)), prompt, budget, area=True)
     if result.finish_reason == "length" or find_repetition_start(result.text) is not None:
         return None
     return clean_page_output(result.text).strip() or None

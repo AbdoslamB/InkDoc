@@ -39,13 +39,13 @@ class FakeServer:
     def is_running(self):
         return self.running
 
-    def ocr(self, data_uri, prompt, max_tokens, *, repeat_penalty=None):
+    def ocr(self, data_uri, prompt, max_tokens, *, repeat_penalty=None, area=False):
         if self.before_call:
             self.before_call(len(self.calls))
         png = base64.b64decode(data_uri.split(",", 1)[1])
         img = Image.open(io.BytesIO(png))
         img.load()
-        self.calls.append({"prompt": prompt, "max_tokens": max_tokens, "repeat_penalty": repeat_penalty,
+        self.calls.append({"prompt": prompt, "max_tokens": max_tokens, "repeat_penalty": repeat_penalty, "area": area,
                            "size": img.size, "image": img, "uri_prefix": data_uri[:22]})
         text = self.replies.pop(0) if self.replies else f"Page text {len(self.calls)}"
         return OcrResult(text=text, finish_reason=self.finish, prompt_tokens=0, completion_tokens=10, seconds=0.01)
@@ -230,6 +230,7 @@ def test_a_table_area_is_read_with_the_table_prompt(fake, tmp_path):
     pdf = write_pdf(tmp_path / "doc.pdf", [prose_page()])
     rows = ge.read_table_region(str(pdf), 1, [100, 100, 300, 160])
     assert server.calls[0]["prompt"] == "Table Recognition:"
+    assert server.calls[0]["area"], "an area's reading has the longer time limit"
     # InkDoc's rules: the stacked header is flattened, merged cells repeated.
     assert rows == [["Region", "Sales Q1", "Sales Q2"], ["North", "10", "12"]]
     # Only the area (plus a small margin) is rendered, at about the render size.

@@ -896,7 +896,8 @@ async def run_auto(
     # would read whole pages; reading a table area takes seconds.
     available = {e.value for e in ocr_engines}
     at_thorough = level_rank(options.auto_quality) >= level_rank(LEVEL_THOROUGH)
-    if pdf and at_thorough and await asyncio.to_thread(layout_model_usable):
+    image = not pdf and Path(path).suffix.lower() in ENGINE_IMAGE_EXTENSIONS[EngineKind.GLM_OCR]
+    if (pdf or image) and at_thorough and await asyncio.to_thread(layout_model_usable):
         available.add(LAYOUT_MODEL)
     plan = PassPlan(options.auto_quality, available=available, disabled=options.passes_off)
     log = PassLog(plan)
@@ -1065,6 +1066,8 @@ async def run_auto(
             path, markdown, probe, options, lane=lane, job=job, plan=plan, log=log, glm_pages=glm_pages,
             used=used, glm_usable=EngineKind.GLM_OCR in ocr_engines,
         )
+    elif image and used == EngineKind.GLM_OCR and plan.on("scanned_tables"):
+        markdown = await _image_tables(path, markdown, options, lane=lane, job=job, plan=plan, log=log)
     if markdown != converted and report is not None and report.checked and probe is not None:
         # The words are the same, but the check describes the saved text.
         ocr_engine = ocr_engines[0] if ocr_engines else None
@@ -1163,9 +1166,11 @@ async def _scanned_tables(
     job: JobHandle,
     log: PassLog,
     glm_pages: Collection[int],
+    frames: int = 0,
 ) -> str:
     """The scanned_tables step (app/core/scanned_tables.py): the layout model finds the
     tables in MarkItDown's lane (it runs in that worker), GLM-OCR reads each in its lane.
+    `frames` > 0: an image file of that many frames, every one of them looked at.
     An addition: a failure leaves the Markdown as it was (a cancel still stops the job)."""
     from app.core.engines.layout_model import MODEL_FILE
     from app.core.engines.markitdown_worker_client import find_layout_in_worker
@@ -1176,11 +1181,11 @@ async def _scanned_tables(
         write_scanned_tables,
     )
 
-    if probe is None:
+    if probe is None and not frames:
         log.skipped("scanned_tables", "the PDF could not be read")
         return markdown
     try:
-        pages = target_pages(probe, glm_pages)
+        pages = list(range(1, frames + 1)) if frames else target_pages(probe, glm_pages)
         if not pages:
             log.ran("scanned_tables")  # GLM-OCR read no scanned page
             return markdown
@@ -1481,6 +1486,34 @@ async def _recheck_pages(
             f"Read {format_pages(rechecked)} again: the engine had left out much of {'its' if len(rechecked) == 1 else 'their'} text."
         )
     return markdown
+
+
+async def _image_tables(
+    path: str, markdown: str, options: ConversionOptions,
+    *, lane: LaneProvider, job: JobHandle, plan: PassPlan, log: PassLog,
+) -> str:
+    """Thorough, an image file GLM-OCR read: its tables read again one by one, as on a scanned page.
+
+    The only step for an image (the others read a PDF's own text and drawing); the
+    report says so for each of them.
+    """
+    from app.core.engines.glm_ocr_engine import count_pages
+    from app.core.table_check import TableSummary
+    from app.core.table_stage import SKIP_SWITCHED_OFF
+
+    for info in plan.relevant():
+        if info.name != "scanned_tables" and plan.on(info.name):
+            log.skipped(info.name, "not a PDF")
+    summary = TableSummary(checked=False, skipped_reason=SKIP_SWITCHED_OFF)
+    frames = await asyncio.to_thread(count_pages, path) or 1
+    result = await _scanned_tables(
+        path, markdown, None, summary, lane=lane, job=job, log=log, glm_pages=(), frames=frames,
+    )
+    if summary.repaired:
+        summary.checked, summary.skipped_reason = True, ""
+    summary.passes = log.to_list()
+    options.table_report = summary
+    return result
 
 
 def _unread_reason(inspection: Any) -> str:

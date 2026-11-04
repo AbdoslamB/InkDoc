@@ -58,6 +58,10 @@ inside InkDoc.
   information is up, and a check runs on every release.
 - **Table notes read correctly.** A note about one table's rows, columns or
   cell shapes said "a table' rows"; it now says "a table's rows".
+- **No more pages written twice by GLM-OCR.** On a long, dense page GLM-OCR
+  sometimes started the page over and wrote most of it a second time. The
+  second pass is now left out, keeping any entries it added at the end, and
+  the conversion notes say so.
 
 ## [1.3.0] - 2026-11-01
 

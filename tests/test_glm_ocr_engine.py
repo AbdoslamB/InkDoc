@@ -323,3 +323,34 @@ def test_cold_first_page_is_not_counted_as_page_speed(fake, tmp_path):
     pdf = write_pdf(tmp_path / "doc.pdf", [prose_page(), prose_page(), prose_page()])
     convert(pdf)
     assert manager.measured and manager.measured[0][1] == 2, "only the two warm pages count"
+
+
+# ─── The model starting a page over ──────────────────────────────────────────
+_ENTRIES = [f"Town number {i}, Daily Gazette of the district" for i in range(1, 13)]
+
+
+def test_a_second_pass_over_the_page_is_dropped_but_its_new_end_kept():
+    first = _ENTRIES[:10]                     # the first pass stops before the last two entries
+    second = _ENTRIES[:3] + ["Town numbr 4, Daily Gazete of the district"] + _ENTRIES[4:]
+    text = "\n".join(["Baden", *first, *second])
+    assert ge.find_repetition_start(text) is not None, "the retry is asked for"
+    assert ge.drop_replay(text) == "\n".join(["Baden", *_ENTRIES[:10], *_ENTRIES[10:]])
+
+
+def test_lines_a_page_repeats_on_purpose_are_not_a_replay():
+    rows = [f"Paper {i} Siehe Anzeige S. 135" for i in range(20)]
+    table = "\n".join(line for row in rows for line in (row, "Siehe Anzeige S. 135"))
+    assert ge.drop_replay(table) == table and ge.find_repetition_start(table) is None
+    short = "\n".join(["Total"] * 30 + _ENTRIES)
+    assert ge.drop_replay(short) == short, "short lines repeat in any document"
+
+
+def test_a_page_read_twice_is_mended_without_asking_again(fake, tmp_path):
+    server, _ = fake
+    server.replies = ["\n".join(["Baden", *_ENTRIES[:10], *_ENTRIES])]
+    png = tmp_path / "p.png"
+    Image.new("RGB", (500, 700), "white").save(png)
+    md, opts = convert(png)
+    assert len(server.calls) == 1, "no retry: the first reading is mended"
+    assert md.strip() == "\n".join(["Baden", *_ENTRIES])
+    assert any("read part of the page twice" in w for w in opts.engine_warnings)

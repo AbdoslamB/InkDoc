@@ -86,11 +86,76 @@ def scaled_size(width: int, height: int, long_side: int) -> tuple[int, int]:
     return max(1, round(width * factor)), max(1, round(height * factor))
 
 
+REPLAY_MIN_LINES = 8          # a page's last lines replaying this many of its earlier ones...
+REPLAY_MIN_CHARS = 12         # ...counting lines this long (short ones repeat in any document)
+REPLAY_SHARE = 0.8            # ...this share of them, mostly in the same order
+
+
+def _line_keys(lines: list[str]) -> list[str]:
+    return [" ".join(ln.split()).lower() for ln in lines]
+
+
+def _replay(lines: list[str]) -> tuple[int, int] | None:
+    """(the line where the text starts over, the first line after the replay that adds something).
+
+    The model writes the page's list a second time: from a line that repeats an
+    earlier one, the rest mostly repeats earlier lines in their order. What it
+    writes after its copy of the earlier text ends (the page's last entries the
+    first pass never reached) is new.
+    """
+    keys = _line_keys(lines)
+    long_lines = [i for i, k in enumerate(keys) if len(k) >= REPLAY_MIN_CHARS]
+    if len(long_lines) < 2 * REPLAY_MIN_LINES:
+        return None
+    best: tuple[int, set[str]] | None = None
+    for n in range(len(long_lines) - REPLAY_MIN_LINES, REPLAY_MIN_LINES - 1, -1):
+        start = long_lines[n]
+        earlier = {keys[i] for i in long_lines[:n]}
+        if keys[start] not in earlier:
+            continue     # the replay starts with a repeated line (it may misread some inside)
+        first: dict[str, int] = {}
+        for i in long_lines[:n]:
+            first.setdefault(keys[i], i)
+        tail = long_lines[n:]
+        # The replay ends with its last repeated line; what comes after is new and doesn't count.
+        last = max(k for k, i in enumerate(tail) if keys[i] in first)
+        tail = tail[:last + 1]
+        where = [first[keys[i]] for i in tail if keys[i] in first]
+        if len(tail) < REPLAY_MIN_LINES or len(where) < REPLAY_SHARE * len(tail):
+            if best is not None:
+                break
+            continue
+        in_order = sum(1 for a, b in zip(where, where[1:], strict=False) if b > a)
+        if in_order >= REPLAY_SHARE * max(1, len(where) - 1):
+            best = (start, earlier)   # keep going back: the replay may start earlier
+    if best is None:
+        return None
+    start, earlier = best
+    repeated = [i for i in long_lines if i >= start and keys[i] in earlier]
+    return start, repeated[-1] + 1
+
+
+def _replayed_block_start(lines: list[str]) -> int | None:
+    found = _replay(lines)
+    return found[0] if found else None
+
+
+def drop_replay(text: str) -> str:
+    """`text` without the model's second pass over it, keeping what that pass adds at its end."""
+    lines = text.split("\n")
+    found = _replay(lines)
+    if found is None:
+        return text
+    start, resume = found
+    return "\n".join(lines[:start] + lines[resume:])
+
+
 def find_repetition_start(text: str) -> int | None:
     """Index where a trailing loop starts, or None when the text does not end in one.
 
-    Two shapes: the same non-empty line many times in a row, and a short unit of
-    characters repeated back to back (the model stuck on "| | | |" or a word).
+    Three shapes: the same non-empty line many times in a row, the page's last
+    lines replaying its earlier ones in order (the model starting the page over),
+    and a short unit of characters repeated back to back (stuck on "| | | |").
     """
     lines = text.rstrip().split("\n")
     if len(lines) >= REPEAT_MIN_RUN:
@@ -105,6 +170,9 @@ def find_repetition_start(text: str) -> int | None:
             if run >= REPEAT_MIN_RUN:
                 keep = len(lines) - run + 1           # keep one copy of the line
                 return len("\n".join(lines[:keep]))
+    block = _replayed_block_start(lines)
+    if block is not None:
+        return len("\n".join(lines[:block]))
     stripped = text.rstrip()
     for period in range(1, REPEAT_PERIOD_MAX + 1):
         span = period * REPEAT_PERIOD_MIN_COPIES
@@ -403,6 +471,13 @@ def _read_page(
         token_factor = max(0.2, min(3.0, result.prompt_tokens / max(1.0, est / token_factor)))
 
     text = result.text
+    # A second pass over the page is cut out exactly (its new end kept); a retry would
+    # read the page differently, not better.
+    if result.finish_reason != "length":
+        mended = drop_replay(text)
+        if mended != text:
+            warnings.append(f"{label}: the model read part of the page twice; the second reading was left out.")
+            text = mended
     looped = result.finish_reason == "length" or find_repetition_start(text) is not None
     if looped:
         logger.info("GLM-OCR %s hit its limit or repeated itself; retrying with a repeat penalty.", label.lower())
@@ -411,7 +486,8 @@ def _read_page(
         cut = find_repetition_start(text)
         if cut is not None or retry.finish_reason == "length":
             if cut is not None:
-                text = text[:cut]
+                # A second pass over the page keeps the entries it adds at its end.
+                text = drop_replay(text) if _replay(text.rstrip().split("\n")) else text[:cut]
             warnings.append(
                 f"{label}: the model started repeating itself, so the text after that point was dropped."
             )

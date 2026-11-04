@@ -166,3 +166,42 @@ def test_a_hand_edited_list_never_breaks_a_conversion():
 def test_restore_defaults_puts_fast_back():
     client.post("/settings", json={"auto_quality": "thorough"}, headers=TOKEN)
     assert client.post("/settings/reset", headers=TOKEN).json()["auto_quality"] == "fast"
+
+
+def test_table_detail_reaches_the_conversion_and_only_its_two_values(monkeypatch, tmp_path):
+    from unittest.mock import patch
+
+    import app.core.auto_engine as auto_engine
+    from app.core.queue_model import EngineKind
+    from app.core.url_fetcher import FetchedUrlResult
+
+    seen: list[str] = []
+
+    async def fake_run_auto(item, options, **_kwargs):
+        seen.append(options.table_detail)
+        options.engine_used = EngineKind.MARKITDOWN
+        return "# converted\n"
+
+    monkeypatch.setattr(auto_engine, "run_auto", fake_run_auto)
+    pdf, _ = _pair()
+    files = {"file": ("pair.pdf", pdf, "application/pdf")}
+    assert client.post("/convert/file?engine=auto&response_format=json", files=files).status_code == 200
+    assert client.post("/convert/file?engine=auto&table_detail=high&response_format=json", files=files).status_code == 200
+    bad = client.post("/convert/file?engine=auto&table_detail=max&response_format=json", files=files)
+    assert bad.status_code == 422
+
+    def fake_fetch(url, **_kwargs):
+        path = tmp_path / "fetched.bin"
+        path.write_bytes(pdf)
+        return FetchedUrlResult(final_url=url, temp_file_path=path, content_bytes=None,
+                                content_type="application/pdf", charset=None, filename="pair")
+
+    with patch.object(server_module, "validate_url_for_ssrf", side_effect=lambda u: u), \
+         patch("app.core.url_fetcher.fetch_url_safely", side_effect=fake_fetch):
+        url = client.post("/convert/url?response_format=json", json={
+            "url": "https://example.com/pair", "engine": "auto", "table_detail": "high"})
+        assert url.status_code == 200, url.text
+        refused = client.post("/convert/url?response_format=json", json={
+            "url": "https://example.com/pair", "engine": "auto", "table_detail": "highest"})
+        assert refused.status_code == 422
+    assert seen == ["normal", "high", "high"], "the default is normal; only an offer taken asks for high"

@@ -333,3 +333,13 @@ def test_high_detail_never_drops_what_the_page_reading_had():
     found = ScannedTables(path="scan.png", detail="high", areas=[Area(page=1, bbox=[0, 0, 1, 1], rows=DENSE)])
     out, report, _details = write_scanned_tables(page, found)
     assert out == page and report == []
+
+
+def test_too_large_even_in_high_detail_says_so():
+    from app.core.engines.glm_ocr_engine import TableReading
+    from app.core.scanned_tables import high_detail_pages
+
+    found = ScannedTables(path="scan.png", detail="high", areas=[Area(page=1, bbox=[0, 0, 1, 1])])
+    read_scanned_tables(found, lambda path, page, bbox: TableReading(None, too_large=True, seconds=900.0))
+    assert found.areas[0].note == "it is too large for GLM-OCR to read in one go even in high detail"
+    assert high_detail_pages(found) == [1], "the page is known; Auto offers nothing more after high detail"

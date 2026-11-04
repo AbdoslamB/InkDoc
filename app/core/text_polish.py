@@ -180,9 +180,10 @@ def _editable(lines: list[str]) -> list[bool]:
     return ok
 
 
-def _layer_counts(page_texts: list[str], phrase: str) -> int:
-    pattern = re.compile(_loose_pattern(phrase))
-    return sum(len(pattern.findall(t)) for t in page_texts)
+def _layer_counts(layer: str, phrase: str) -> int:
+    """How often the PDF's text has `phrase`, spacing aside. `layer`: the pages' text, squashed."""
+    key = _squash(phrase)
+    return layer.count(key) if key else 0
 
 
 def _superscripts(styles: list[list[dict]]) -> Counter[tuple[str, str]]:
@@ -238,22 +239,26 @@ def restore_formatting(markdown: str, pages: list[dict]) -> tuple[str, int]:
     styles = [runs for p in pages for runs in p.get("styles") or []]
     if not styles:
         return markdown, 0
-    page_texts = [
-        " ".join(s["text"] for s in p.get("segments") or []) for p in pages
-    ]
+    # The pages' text and each line with all spacing removed: a phrase can only be in a line
+    # whose squashed text holds its squashed characters, a plain substring test (fast), so
+    # the patterns run on those lines only.
+    layer = "\x00".join(_squash(" ".join(seg["text"] for seg in p.get("segments") or [])) for p in pages)
     lines = markdown.split("\n")
     editable = _editable(lines)
+    squashed = [_squash(line) for line in lines]
     count = 0
 
-    def each_line(pattern: re.Pattern[str], make: Any) -> int:
+    def candidates(key: str) -> list[int]:
+        return [i for i, line in enumerate(squashed) if editable[i] and key in line]
+
+    def each_line(pattern: re.Pattern[str], make: Any, key: str) -> int:
         nonlocal count
         done = 0
-        for i, line in enumerate(lines):
-            if not editable[i]:
-                continue
-            new, n = pattern.subn(make, line)
+        for i in candidates(key):
+            new, n = pattern.subn(make, lines[i])
             if n:
                 lines[i] = new
+                squashed[i] = _squash(new)
                 done += n
                 count += n
         return done
@@ -263,24 +268,28 @@ def restore_formatting(markdown: str, pages: list[dict]) -> tuple[str, int]:
     # that lost its spaces glues words together ("WeanalyzeHarness"), so a raised
     # run counts for every word it ends with; the engine's own text is kept.
     raised_after = _superscripts(styles)
+    by_mark: dict[str, list[tuple[str, int]]] = defaultdict(list)
+    for (w, s), n in raised_after.items():
+        by_mark[s].append((_squash(w), n))
     for word, mark in sorted(raised_after, key=lambda k: len(k[0])):
-        raised = sum(n for (w, s), n in raised_after.items() if s == mark and _squash(w).endswith(_squash(word)))
-        if _layer_counts(page_texts, word + mark) != raised:
+        key = _squash(word)
+        raised = sum(n for w, n in by_mark[mark] if w.endswith(key))
+        if _layer_counts(layer, word + mark) != raised:
             continue
         pattern = re.compile(rf"(?<![\w<]){_loose_pattern(word)}\s?{re.escape(mark)}(?![\w<])")
-        each_line(pattern, lambda m, s=mark: f"{m.group(0)[:-len(s)].rstrip()}<sup>{s}</sup>")
+        each_line(pattern, lambda m, s=mark: f"{m.group(0)[:-len(s)].rstrip()}<sup>{s}</sup>", key + _squash(mark))
     # A footnote that starts with its raised number: "9 Bloomberg." -> "<sup>9</sup> Bloomberg."
     for (mark, after), raised in _leading_superscripts(styles).items():
         if raised != 1:
             continue
         pattern = re.compile(rf"^(\s*){re.escape(mark)}\s?(?={_loose_pattern(after)})")
-        each_line(pattern, lambda m, s=mark: f"{m.group(1)}<sup>{s}</sup> ")
+        each_line(pattern, lambda m, s=mark: f"{m.group(1)}<sup>{s}</sup> ", _squash(mark + after))
     # Bold and italic phrases, each found once in the result and set that way every time in the PDF.
     for (phrase, style), styled in _styled_phrases(styles).items():
-        if _layer_counts(page_texts, phrase) != styled:
+        if _layer_counts(layer, phrase) != styled:
             continue
         pattern = re.compile(_loose_pattern(phrase))
-        hits = [(i, m) for i, line in enumerate(lines) if editable[i] for m in pattern.finditer(line)]
+        hits = [(i, m) for i in candidates(_squash(phrase)) for m in pattern.finditer(lines[i])]
         if len(hits) != 1:
             continue
         i, m = hits[0]
@@ -289,5 +298,6 @@ def restore_formatting(markdown: str, pages: list[dict]) -> tuple[str, int]:
             continue
         mark = _MARKS[style]
         lines[i] = f"{line[:m.start()]}{mark}{m.group(0)}{mark}{line[m.end():]}"
+        squashed[i] = _squash(lines[i])
         count += 1
     return "\n".join(lines), count

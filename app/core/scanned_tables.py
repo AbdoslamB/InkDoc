@@ -189,7 +189,10 @@ def read_scanned_tables(
         else:
             area.rows = reading
         if area.too_large:
-            area.note = "it is too large for GLM-OCR to read in one go at normal detail"
+            area.note = (
+                "it is too large for GLM-OCR to read in one go even in high detail" if found.detail == "high"
+                else "it is too large for GLM-OCR to read in one go at normal detail"
+            )
         elif area.rows is None:
             area.note = "GLM-OCR read no table there"
 

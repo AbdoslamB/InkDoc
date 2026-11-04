@@ -110,6 +110,25 @@ def test_refusals_leave_no_copy(monkeypatch, tmp_path):
     assert list(tmp_path.iterdir()) == []
 
 
+def test_a_cancelled_open_leaves_no_copy(monkeypatch, tmp_path):
+    # The page gives up while the pages are counted (CancelledError is no Exception).
+    import asyncio
+    import time
+
+    monkeypatch.setattr(server_module.tempfile, "tempdir", str(tmp_path))
+
+    def cancelled(path):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(pdf_pages, "page_sizes", cancelled)
+    with pytest.raises((asyncio.CancelledError, RuntimeError)):  # the test client: "No response returned"
+        _open(_pdf((612, 792)))
+    deadline = time.monotonic() + 5
+    while list(tmp_path.iterdir()) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert list(tmp_path.iterdir()) == [], "the copy outlived its cancelled request"
+
+
 def test_close_deletes_the_copy():
     pid = _open(_pdf((612, 792))).json()["id"]
     path = server_module._source_previews[pid].path

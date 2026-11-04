@@ -697,6 +697,7 @@ class GlmOcrServer:
         self.notices: list[str] = []     # user-facing notes for the next result
         self.on_metal_fallback: Callable[[], None] | None = None
         self._min_ctx = 0                # a high-detail reading's context, while it runs
+        self._aborted = False            # abort_request() stopped the request in flight
 
     @classmethod
     def get_instance(cls) -> GlmOcrServer:
@@ -741,6 +742,22 @@ class GlmOcrServer:
             proc = self._proc
             if self._min_ctx and proc is not None and proc.is_alive() and proc.spec.ctx_size < self._min_ctx:
                 self._stop_locked()
+
+    def abort_request(self) -> None:
+        """Stop the request in flight now (a cancelled job): its process is stopped, without the lock.
+
+        The request then raises ConversionCancelledError instead of restarting and
+        retrying. For a high-detail reading, which may run for many minutes; a normal
+        page ends within a minute and a cancel waits for it.
+        """
+        proc = self._proc
+        if proc is None or not self._busy:
+            return
+        self._aborted = True
+        try:
+            proc.stop()
+        except Exception as exc:
+            logger.debug("Stopping GLM-OCR for a cancel: %s", exc)
 
     def take_notices(self) -> list[str]:
         notes, self.notices = self.notices, []
@@ -882,6 +899,7 @@ class GlmOcrServer:
         and retries if the server dies mid-request."""
         with self._lock:
             self._busy = True
+            self._aborted = False
             try:
                 attempt = 0
                 while True:
@@ -899,6 +917,12 @@ class GlmOcrServer:
                         )
                         return parse_ocr_response(resp, time.time() - started)
                     except (urllib.error.URLError, ConnectionError, TimeoutError, OSError, GlmOcrServerError) as exc:
+                        if self._aborted:
+                            from app.core.jobs import ConversionCancelledError
+
+                            self._aborted = False
+                            self._stop_locked()
+                            raise ConversionCancelledError("conversion_cancelled") from exc
                         timed_out = isinstance(exc, TimeoutError) or "timed out" in str(exc).lower()
                         if not timed_out and not isinstance(exc, GlmOcrServerError) and proc.proc is not None:
                             # A crash resets the connection a moment before the

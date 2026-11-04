@@ -1226,6 +1226,8 @@ async def _scanned_tables(
                     summary.details.append(f"High detail wasn't used ({why}); the tables were read at normal detail.")
             found.detail = DETAIL_HIGH if high else DETAIL_NORMAL
             read = functools.partial(read_table_area, detail=found.detail)
+            if high:
+                read = _cancellable(read, job)
             limit = {"time_limit_s": HIGH_DETAIL_TIMEOUT_S * len(found.areas)} if high else {}
             async with lane(EngineKind.GLM_OCR):
                 job.raise_if_cancelled()
@@ -1245,6 +1247,36 @@ async def _scanned_tables(
     summary.details.extend(details)
     log.ran("scanned_tables", sum(w["tables"] for w in written))
     return result
+
+
+CANCEL_POLL_S = 0.5
+
+
+def _cancellable(read: Callable[..., Any], job: JobHandle) -> Callable[..., Any]:
+    """`read`, stopped as soon as the job is cancelled: a high-detail reading can run for
+    minutes, and a cancel between tables would wait for it."""
+    import threading
+
+    def run(*args: Any, **kwargs: Any) -> Any:
+        from app.core.engines.glm_ocr_server import GlmOcrServer
+
+        done = threading.Event()
+
+        def watch() -> None:
+            while not done.wait(CANCEL_POLL_S):
+                if job.cancelled():
+                    GlmOcrServer.get_instance().abort_request()
+                    return
+
+        watcher = threading.Thread(target=watch, name="inkdoc-high-detail-cancel", daemon=True)
+        watcher.start()
+        try:
+            return read(*args, **kwargs)
+        finally:
+            done.set()
+            watcher.join(timeout=2)
+
+    return run
 
 
 def high_detail_available() -> tuple[bool, str]:

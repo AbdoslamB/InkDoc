@@ -32,7 +32,8 @@ jobs:
           python-version: "3.14"
 
       - name: Install the verifier's one dependency
-        run: python -m pip install "cryptography>=42.0.0"
+        # Pinned like ci.yml's tools: the check never takes whatever PyPI serves that day.
+        run: python -m pip install "cryptography==49.0.0"
 
       - name: Check the release
         env:

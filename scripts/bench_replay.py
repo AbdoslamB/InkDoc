@@ -184,11 +184,19 @@ def _error_record(exc: BaseException) -> dict[str, str]:
     return {"type": f"{type(exc).__module__}:{type(exc).__qualname__}", "message": sanitize(str(exc))}
 
 
+# A recording is data: the modules its errors may name are the ones engine calls raise from.
+# Anything else is rebuilt as RuntimeError, without importing it.
+ERROR_MODULES = ("builtins", "urllib.error", "subprocess", "app.")
+
+
 def _rebuild(error: dict[str, str]) -> Exception:
     """The recorded exception, of its own class when that class can be built from a message."""
     module, _, qualname = error["type"].partition(":")
     cls: Any = RuntimeError
+    allowed = any(module == m.rstrip(".") or (m.endswith(".") and module.startswith(m)) for m in ERROR_MODULES)
     try:
+        if not allowed:
+            raise LookupError(module)
         found: Any = importlib.import_module(module)
         for part in qualname.split("."):
             found = getattr(found, part)

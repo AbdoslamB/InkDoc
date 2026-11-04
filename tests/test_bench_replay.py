@@ -212,3 +212,14 @@ def test_replay_locks_then_flags_a_change(tmp_path, engines, capsys):
     assert "CHANGED  01_tables_single/doc.pdf@fast: +1 -1 lines" in printed
     assert "numbers 100.0% -> 93.3% found" in printed
     assert calls == [("markitdown", str(pdf))]
+
+
+def test_a_recorded_error_never_imports_a_module_it_names():
+    import sys
+
+    err = br._rebuild({"type": "antigravity:Thing", "message": "boom"})
+    assert type(err) is RuntimeError and str(err) == "boom" and "antigravity" not in sys.modules
+    assert type(br._rebuild({"type": "builtins:ValueError", "message": "x"})) is ValueError
+    from app.core.jobs import ConversionCancelledError
+
+    assert type(br._rebuild({"type": "app.core.jobs:ConversionCancelledError", "message": "c"})) is ConversionCancelledError

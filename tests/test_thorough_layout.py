@@ -438,3 +438,39 @@ def test_a_table_too_dense_for_normal_detail_is_offered_and_read_in_high_detail(
     _markdown, report = run("high", can=(False, "it needs 1.5 GB of free memory"))
     assert asked == ["normal"], "asked for, but no longer possible: normal detail"
     assert any("High detail wasn't used (it needs 1.5 GB of free memory)" in d for d in report.details)
+
+
+def test_a_cancel_stops_a_high_detail_reading_at_once(monkeypatch):
+    import threading
+    import time
+
+    import app.core.auto_engine as auto_engine
+    import app.core.engines.glm_ocr_server as gs
+
+    aborted = threading.Event()
+
+    class Server:
+        def abort_request(self):
+            aborted.set()
+
+    class Job:
+        def __init__(self, after):
+            self.after = after
+
+        def cancelled(self):
+            return time.monotonic() > self.after
+
+    monkeypatch.setattr(gs.GlmOcrServer, "get_instance", classmethod(lambda cls: Server()))
+    monkeypatch.setattr(auto_engine, "CANCEL_POLL_S", 0.05)
+
+    def slow_read(path, page, bbox):
+        assert aborted.wait(5), "the reading was never stopped"
+        return "stopped"
+
+    read = auto_engine._cancellable(slow_read, Job(time.monotonic() + 0.2))
+    started = time.monotonic()
+    assert read("scan.png", 1, [0, 0, 1, 1]) == "stopped" and time.monotonic() - started < 3
+
+    aborted.clear()
+    quick = auto_engine._cancellable(lambda *a: "read", Job(time.monotonic() + 60))
+    assert quick("scan.png", 1, [0, 0, 1, 1]) == "read" and not aborted.is_set(), "no cancel: nothing stopped"

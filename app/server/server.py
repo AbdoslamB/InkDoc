@@ -559,7 +559,8 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     yield
     _shutdown_engine_processes()
     try:
-        _remove_preview_files(_take_stale_previews(time.monotonic(), keep=0))
+        # It waits for the pdfium lock: off the event loop.
+        await asyncio.to_thread(_remove_preview_files, _take_stale_previews(time.monotonic(), keep=0))
     except Exception as exc:
         logger.debug("Preview cleanup: %s", exc)
 
@@ -2209,6 +2210,11 @@ async def preview_pdf_open(
             else "This PDF's pages can't be shown: it could not be opened."
         )
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail) from exc
+    except BaseException:
+        # The page gave up on it (the request was cancelled, maybe while its pages were
+        # being counted): delete it once pdfium is done with it, without waiting here.
+        threading.Thread(target=_remove_preview_files, args=([tmp_path],), daemon=True).start()
+        raise
 
     preview_id = secrets.token_urlsafe(16)
     now = time.monotonic()

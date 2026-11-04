@@ -21,6 +21,7 @@ import io
 import logging
 import math
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -70,12 +71,12 @@ def estimate_image_tokens(width: int, height: int) -> int:
     return math.ceil(width / PIXELS_PER_TOKEN_SIDE) * math.ceil(height / PIXELS_PER_TOKEN_SIDE) + 2
 
 
-def output_budget(ctx_size: int, image_tokens: int) -> int | None:
-    """max_tokens for a page, clamped to [1024, 4096]; None when the page cannot fit."""
+def output_budget(ctx_size: int, image_tokens: int, max_tokens: int = MAX_OUTPUT_TOKENS) -> int | None:
+    """max_tokens for a page, clamped to [1024, max_tokens]; None when the page cannot fit."""
     room = ctx_size - image_tokens - PROMPT_OVERHEAD_TOKENS
     if room < MIN_OUTPUT_TOKENS:
         return None
-    return min(MAX_OUTPUT_TOKENS, room)
+    return min(max_tokens, room)
 
 
 def scaled_size(width: int, height: int, long_side: int) -> tuple[int, int]:
@@ -572,6 +573,74 @@ def table_rows_from_output(text: str) -> list[list[str]] | None:
     return blocks[0].rows if blocks else None
 
 
+# High detail: a dense table read whole at about its own size, with the larger context the
+# server takes for it (glm_ocr_server.HIGH_DETAIL_*). Only where it is offered and chosen.
+HIGH_DETAIL_LONG_SIDE = 2800
+DETAIL_NORMAL = "normal"
+DETAIL_HIGH = "high"
+
+
+@dataclass
+class TableReading:
+    """One table area as GLM-OCR read it."""
+
+    rows: list[list[str]] | None        # None: no table (none there, a loop, or no room)
+    too_large: bool = False             # the answer ran out of room: high detail may read it
+    seconds: float = 0.0
+
+
+def read_table_area(path: str, page: int, bbox: list[float], *, detail: str = DETAIL_NORMAL) -> TableReading:
+    """GLM-OCR's reading of one table area, and whether it was too large to finish.
+
+    `detail` "high" reads it at up to HIGH_DETAIL_LONG_SIDE pixels with the server's
+    high-detail context, answer length and time limit; the caller has checked that
+    the computer can (glm_ocr_manager.high_detail_available).
+    """
+    from app.core.engines.glm_ocr_server import (
+        DEFAULT_CTX_SIZE,
+        HIGH_DETAIL_CTX_SIZE,
+        HIGH_DETAIL_MAX_OUTPUT,
+        HIGH_DETAIL_TIMEOUT_S,
+        GlmOcrServer,
+        image_to_data_uri,
+    )
+    from app.core.glm_ocr_manager import GlmOcrManager
+
+    mgr = GlmOcrManager.get_instance()
+    if not mgr.is_usable():
+        return TableReading(None)
+    high = detail == DETAIL_HIGH
+    ctx = HIGH_DETAIL_CTX_SIZE if high else DEFAULT_CTX_SIZE
+    longest = HIGH_DETAIL_MAX_OUTPUT if high else MAX_OUTPUT_TOKENS
+    side = HIGH_DETAIL_LONG_SIDE if high else mgr.render_long_side()
+    for _attempt in range(MAX_RERENDERS + 1):
+        img = render_region(path, page, bbox, side)
+        budget = output_budget(ctx, estimate_image_tokens(img.width, img.height), longest)
+        if budget is not None:
+            break
+        side = int(side * RERENDER_FACTOR)
+    else:
+        return TableReading(None, too_large=not high)
+    server = GlmOcrServer.get_instance()
+    started = time.monotonic()
+    if high:
+        server.use_context(ctx)
+    try:
+        result = server.ocr(
+            image_to_data_uri(_png_bytes(img)), TABLE_PROMPT, budget, area=True,
+            timeout_s=HIGH_DETAIL_TIMEOUT_S if high else None,
+        )
+    finally:
+        if high:
+            server.use_context(0)    # the next start is the default context again
+    took = time.monotonic() - started
+    if result.finish_reason == "length":
+        return TableReading(None, too_large=True, seconds=took)
+    if find_repetition_start(result.text) is not None:
+        return TableReading(None, seconds=took)
+    return TableReading(table_rows_from_output(result.text), seconds=took)
+
+
 def read_table_region(path: str, page: int, bbox: list[float]) -> list[list[str]] | None:
     """GLM-OCR's reading of one table area, as rows (header first); None if it read no table.
 
@@ -579,25 +648,7 @@ def read_table_region(path: str, page: int, bbox: list[float]) -> list[list[str]
     table found from word positions (app/core/table_stage.confirm_tables).
     An answer that loops or runs out of room counts as no reading.
     """
-    from app.core.engines.glm_ocr_server import DEFAULT_CTX_SIZE, GlmOcrServer, image_to_data_uri
-    from app.core.glm_ocr_manager import GlmOcrManager
-
-    mgr = GlmOcrManager.get_instance()
-    if not mgr.is_usable():
-        return None
-    side = mgr.render_long_side()
-    for _attempt in range(MAX_RERENDERS + 1):
-        img = render_region(path, page, bbox, side)
-        budget = output_budget(DEFAULT_CTX_SIZE, estimate_image_tokens(img.width, img.height))
-        if budget is not None:
-            break
-        side = int(side * RERENDER_FACTOR)
-    else:
-        return None
-    result = GlmOcrServer.get_instance().ocr(image_to_data_uri(_png_bytes(img)), TABLE_PROMPT, budget, area=True)
-    if result.finish_reason == "length" or find_repetition_start(result.text) is not None:
-        return None
-    return table_rows_from_output(result.text)
+    return read_table_area(path, page, bbox).rows
 
 
 FORMULA_PROMPT = "Formula Recognition:"

@@ -81,7 +81,8 @@ ENGINE_INPUTS = (
 )
 ENGINE_RESULTS = ("engine_used", "fallback_occurred", "fallback_reason", "engine_warnings")
 NOT_ENGINE = (
-    "engine", "quality_check", "auto_quality", "passes_off", "auto_decision", "quality_report", "table_report",
+    "engine", "quality_check", "auto_quality", "passes_off", "table_detail", "auto_decision", "quality_report",
+    "table_report",
     "polish_counts", "save_fallback", "job",
 )
 
@@ -96,6 +97,7 @@ CALLS = (
     ("app.core.engines.glm_ocr_engine", "convert_with_glm_ocr"),
     ("app.core.engines.markit_engine", "convert_with_markit"),
     ("app.core.engines.glm_ocr_engine", "read_table_region"),
+    ("app.core.engines.glm_ocr_engine", "read_table_area"),
     ("app.core.engines.glm_ocr_engine", "read_text_region"),
     ("app.core.engines.glm_ocr_engine", "read_formula_region"),
     ("app.core.engines.markitdown_worker_client", "find_layout_in_worker"),
@@ -345,6 +347,17 @@ def stand_ins(rec: Recorder, real: dict[str, Callable]) -> dict[str, Callable]:
         key = rec.key("glm_ocr.table", path=path, crop=crop)
         return rec.call(key, lambda: real["read_table_region"](path, page, bbox))
 
+    def table_area(path: str, page: int, bbox: list[float], *, detail: str = "normal") -> Any:
+        from app.core.engines.glm_ocr_engine import TableReading
+
+        crop = {"page": page, "bbox": [round(float(v), 1) for v in bbox]}
+        key = rec.key("glm_ocr.table_area", path=path, crop=crop, args={"detail": detail})
+        return rec.call(
+            key, lambda: real["read_table_area"](path, page, bbox, detail=detail),
+            encode=lambda r: {"rows": r.rows, "too_large": r.too_large, "seconds": r.seconds},
+            decode=lambda v: TableReading(v["rows"], v["too_large"], v["seconds"]),
+        )
+
     def region(kind: str, name: str) -> Callable:
         def run(path: str, page: int, bbox: list[float]) -> Any:
             crop = {"page": page, "bbox": [round(float(v), 1) for v in bbox]}
@@ -386,6 +399,7 @@ def stand_ins(rec: Recorder, real: dict[str, Callable]) -> dict[str, Callable]:
         "convert_with_glm_ocr": conversion("glm_ocr", "convert_with_glm_ocr"),
         "convert_with_markit": conversion("markit", "convert_with_markit"),
         "read_table_region": table_region,
+        "read_table_area": table_area,
         "read_text_region": region("text", "read_text_region"),
         "read_formula_region": region("formula", "read_formula_region"),
         "find_layout_in_worker": layout,

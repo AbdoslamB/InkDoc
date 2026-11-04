@@ -286,3 +286,50 @@ def test_point_decimals_follow_the_page_only_when_it_writes_commas():
     assert page_numbers([["1384,42", "9999"]], "1364,42 and 1386,42") == [["1384,42", "9999"]], \
         "two close numbers on the page: which one is not known"
     assert page_numbers([["1384,42"]], "1364,42") == [["1364,42"]]
+
+
+# ─── High detail: a dense table read whole ───────────────────────────────────
+DENSE_HEADER = ["Town", "Name", "Copies", "Days", "Width", "Font", "Mat"]
+DENSE = [DENSE_HEADER] + [[f"{n} 000", f"Paper {n}", f"{n} 300", "6", "46", "P", "+"] for n in range(1, 7)]
+
+
+def test_a_row_shifted_by_a_column_is_moved_back():
+    from app.core.scanned_tables import align_columns
+
+    shifted = [row[:] for row in DENSE]
+    shifted[3] = ["3 000", "3 300", "6", "46", "P", "+", ""]        # the name was dropped: values one left
+    shifted[5] = ["", "Paper 5", "5 300", "6", "46", "P", "+"]       # an empty town is not a shift
+    fixed, moved = align_columns(shifted)
+    assert fixed[3] == ["3 000", "", "3 300", "6", "46", "P", "+"]
+    assert fixed[5] == shifted[5] and moved == 1
+    assert align_columns(DENSE[:3]) == (DENSE[:3], 0), "too few rows to know the columns"
+
+
+def test_high_detail_writes_a_table_that_holds_the_page_reading():
+    # The page's reading of a dense table: names and few numbers, run together.
+    page = "Directory\n\n" + "\n".join(f"Paper {n} {n} 000" for n in range(1, 7)) + "\n\nEnd"
+    for detail, written in (("normal", False), ("high", True)):
+        found = ScannedTables(path="scan.png", detail=detail, areas=[Area(page=1, bbox=[0, 0, 1, 1], rows=DENSE)])
+        out, report, _details = write_scanned_tables(page, found)
+        assert bool(report) is written, detail
+    assert find_table_blocks(out.split("\n"))[0].rows[1][:3] == ["1 000", "Paper 1", "1 300"]
+    assert "<!-- inkdoc:table page=1 source=glm-ocr checked=layout,high-detail -->" in out
+    assert out.startswith("Directory\n\n") and out.endswith("\n\nEnd")
+
+
+def test_a_too_large_reading_is_offered_for_high_detail():
+    from app.core.engines.glm_ocr_engine import TableReading
+    from app.core.scanned_tables import high_detail_pages, high_detail_seconds
+
+    found = ScannedTables(path="scan.png", areas=[Area(page=2, bbox=[0, 0, 1, 1]), Area(page=3, bbox=[0, 0, 1, 1])])
+    replies = iter([TableReading(None, too_large=True, seconds=40.0), TableReading(DENSE, seconds=10.0)])
+    read_scanned_tables(found, lambda path, page, bbox: next(replies))
+    assert high_detail_pages(found) == [2] and high_detail_seconds(found) == 100.0
+    assert found.areas[0].note.startswith("it is too large") and found.areas[1].rows == DENSE
+
+
+def test_high_detail_never_drops_what_the_page_reading_had():
+    page = "Directory\n\n" + "\n".join(f"Paper {n} {n} 000" for n in range(1, 7)) + "\nA note the table does not have\n\nEnd"
+    found = ScannedTables(path="scan.png", detail="high", areas=[Area(page=1, bbox=[0, 0, 1, 1], rows=DENSE)])
+    out, report, _details = write_scanned_tables(page, found)
+    assert out == page and report == []

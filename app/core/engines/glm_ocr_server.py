@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import base64
 import collections
+import dataclasses
 import hashlib
 import json
 import logging
@@ -68,6 +69,14 @@ TEMPERATURE = 0.02
 SEED = 3407
 GPU_ALL_LAYERS = 999
 LOW_MEMORY_BYTES = 16 * 1024**3
+# High detail (a dense table read whole, at its full size): a context this large, an answer up
+# to HIGH_DETAIL_MAX_OUTPUT tokens, and this long to finish. Measured on Vulkan: about 1 GB more
+# than the default context (1,040 MiB more committed at 24,576 than at 8,192, the working set
+# 3 MiB more), so it is offered only with that much to allocate and half a gigabyte to spare.
+HIGH_DETAIL_CTX_SIZE = 24576
+HIGH_DETAIL_MAX_OUTPUT = 16384
+HIGH_DETAIL_TIMEOUT_S = 900.0
+HIGH_DETAIL_FREE_BYTES = 1536 * 1024**2
 STDERR_TAIL_LINES = 40
 GPU_CRASH_LIMIT = 2
 
@@ -298,6 +307,42 @@ def total_memory_bytes() -> int | None:
                 return int(stat.ullTotalPhys)
             return None
         return int(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES"))
+    except Exception:
+        return None
+
+
+def available_memory_bytes() -> int | None:
+    """Memory a new allocation can still get, with no new dependency. None when unknown.
+
+    On Windows the commit charge left (what llama-server's larger context draws on: on
+    a graphics card its buffers are committed but barely touch physical memory), on
+    Linux MemAvailable.
+    """
+    try:
+        if sys.platform == "win32":
+            import ctypes
+
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            stat = MEMORYSTATUSEX()
+            stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+                return int(stat.ullAvailPageFile)
+            return None
+        if sys.platform.startswith("linux"):
+            with open("/proc/meminfo", encoding="ascii") as fh:
+                for line in fh:
+                    if line.startswith("MemAvailable:"):
+                        return int(line.split()[1]) * 1024
+            return None
+        return None   # macOS has no cheap, honest figure; the caller decides without one
     except Exception:
         return None
 
@@ -651,6 +696,7 @@ class GlmOcrServer:
         self.force_cpu = False           # set after repeated GPU crashes, for this session
         self.notices: list[str] = []     # user-facing notes for the next result
         self.on_metal_fallback: Callable[[], None] | None = None
+        self._min_ctx = 0                # a high-detail reading's context, while it runs
 
     @classmethod
     def get_instance(cls) -> GlmOcrServer:
@@ -679,6 +725,22 @@ class GlmOcrServer:
     def accel(self) -> str:
         proc = self._proc
         return proc.spec.accel if proc else "cpu"
+
+    def running_context(self) -> int:
+        proc = self._proc
+        return proc.spec.ctx_size if proc is not None and proc.is_alive() else 0
+
+    def use_context(self, ctx_size: int) -> None:
+        """Run with at least `ctx_size` tokens of context from the next request on (0: the default).
+
+        A running server with less is restarted for it; a larger one is kept until it stops
+        (idle, or for memory), and the next start is the default again.
+        """
+        with self._lock:
+            self._min_ctx = int(ctx_size)
+            proc = self._proc
+            if self._min_ctx and proc is not None and proc.is_alive() and proc.spec.ctx_size < self._min_ctx:
+                self._stop_locked()
 
     def take_notices(self) -> list[str]:
         notes, self.notices = self.notices, []
@@ -711,6 +773,8 @@ class GlmOcrServer:
                 self._proc = None
             self._coordinate_memory()
             spec = self._factory()(self._want_gpu())
+            if spec.ctx_size < self._min_ctx:
+                spec = dataclasses.replace(spec, ctx_size=self._min_ctx)
             if spec.run_dir is not None:
                 reap_stale_process(spec.run_dir, spec.runtime_dir.parent)
             self._proc = self._start_with_fallbacks(spec)
@@ -812,6 +876,7 @@ class GlmOcrServer:
         *,
         repeat_penalty: float | None = None,
         area: bool = False,
+        timeout_s: float | None = None,
     ) -> OcrResult:
         """Recognise one page (or, `area`, one area of one: a longer time limit). Restarts once
         and retries if the server dies mid-request."""
@@ -824,6 +889,8 @@ class GlmOcrServer:
                     timeout = PAGE_TIMEOUT_GPU_S if proc.spec.uses_gpu else PAGE_TIMEOUT_CPU_S
                     if area:
                         timeout = min(PAGE_TIMEOUT_CPU_S, timeout * AREA_TIMEOUT_FACTOR)
+                    if timeout_s is not None:
+                        timeout = float(timeout_s)
                     started = time.time()
                     try:
                         resp = proc.chat(

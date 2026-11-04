@@ -352,7 +352,7 @@ def test_an_image_has_its_table_read_again_and_nothing_else_runs(tmp_path, monke
     monkeypatch.setattr(auto_engine, "glm_estimate_seconds", lambda *a: 10.0)
     monkeypatch.setattr(worker, "find_layout_in_worker", lambda source, pages, folder, digest, job=None: {
         "pages": [{"page": 1, "skipped": "", "tables": [{"bbox": [10, 10, 590, 390], "score": 0.9}]}]})
-    monkeypatch.setattr(glm, "read_table_region", lambda path, page, bbox: table)
+    monkeypatch.setattr(glm, "read_table_area", lambda path, page, bbox, detail="normal": glm.TableReading(table))
     item = QueueItem(source=str(image), kind=SourceKind.FILE, display_name="scan.jpg", engine=EngineKind.AUTO)
     options = ConversionOptions(engine=EngineKind.AUTO, auto_quality="thorough")
     markdown = asyncio.run(auto_engine.run_auto(item, options))
@@ -380,3 +380,61 @@ def test_an_image_is_read_by_its_pixels(tmp_path):
     assert img.size == (300, 200) and points == 1.0 and why == ""
     crop = render_region(str(path), 1, [0, 0, 100, 50], 400)
     assert crop.size[0] > 100, "a small area is read larger"
+
+
+def test_a_table_too_dense_for_normal_detail_is_offered_and_read_in_high_detail(tmp_path, monkeypatch):
+    import asyncio
+    from pathlib import Path
+
+    from PIL import Image
+
+    import app.core.auto_engine as auto_engine
+    import app.core.engines.glm_ocr_engine as glm
+    import app.core.engines.markitdown_worker_client as worker
+    from app.core.converter import ConversionOptions
+    from app.core.queue_model import QueueItem, SourceKind
+
+    image = tmp_path / "dense.png"
+    Image.new("RGB", (600, 800), "white").save(image)
+    page_reading = "Directory\n\n" + "\n".join(f"Paper {n} {n} 000" for n in range(1, 7)) + "\n\nEnd"
+    table = [["Town", "Name", "Copies"]] + [[f"{n} 000", f"Paper {n}", f"{n} 300"] for n in range(1, 7)]
+    asked: list[str] = []
+
+    def read(path, page, bbox, detail="normal"):
+        asked.append(detail)
+        return glm.TableReading(table, seconds=50.0) if detail == "high" else glm.TableReading(None, True, 40.0)
+
+    monkeypatch.setattr(auto_engine, "_convert_once", lambda item, options, engine, fetched: (
+        setattr(options, "engine_used", engine) or page_reading))
+    monkeypatch.setattr(auto_engine, "ocr_engines_usable", lambda: [G])
+    monkeypatch.setattr(auto_engine, "layout_model_usable", lambda: True)
+    monkeypatch.setattr(auto_engine, "layout_model_location", lambda: (Path(tmp_path), {"model.onnx": "ab" * 32}))
+    monkeypatch.setattr(auto_engine, "glm_estimate_seconds", lambda *a: 10.0)
+    monkeypatch.setattr(worker, "find_layout_in_worker", lambda source, pages, folder, digest, job=None: {
+        "pages": [{"page": 1, "skipped": "", "tables": [{"bbox": [10, 10, 590, 790], "score": 0.9}]}]})
+    monkeypatch.setattr(glm, "read_table_area", read)
+    item = QueueItem(source=str(image), kind=SourceKind.FILE, display_name="dense.png", engine=EngineKind.AUTO)
+
+    def run(detail, can=(True, "")):
+        monkeypatch.setattr(auto_engine, "high_detail_available", lambda: can)
+        options = ConversionOptions(engine=EngineKind.AUTO, auto_quality="thorough", table_detail=detail)
+        return asyncio.run(auto_engine.run_auto(item, options)), options.table_report
+
+    markdown, report = run("normal")
+    assert markdown == page_reading and asked == ["normal"]
+    assert report.high_detail == {"pages": [1], "seconds": 100}, "offered, with the time it may take"
+    assert report.to_dict()["high_detail"] == {"pages": [1], "seconds": 100}
+
+    _markdown, report = run("normal", can=(False, "it needs GLM-OCR running on a graphics card"))
+    assert report.high_detail is None
+    assert any("high detail isn't available: it needs GLM-OCR running on a graphics card" in d for d in report.details)
+
+    asked.clear()
+    markdown, report = run("high")
+    assert asked == ["high"] and report.high_detail is None
+    assert "checked=layout,high-detail" in markdown and find_table_blocks(markdown.split("\n"))[0].rows == table
+
+    asked.clear()
+    _markdown, report = run("high", can=(False, "it needs 1.5 GB of free memory"))
+    assert asked == ["normal"], "asked for, but no longer possible: normal detail"
+    assert any("High detail wasn't used (it needs 1.5 GB of free memory)" in d for d in report.details)

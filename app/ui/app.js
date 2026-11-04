@@ -176,6 +176,27 @@ document.addEventListener("DOMContentLoaded", () => {
     return null;
   }
 
+  // A table too dense for normal detail that this computer can read in high
+  // detail (tables.high_detail: { pages, seconds }): the notice's words and
+  // buttons, or null. The normal result is already there; high detail is a
+  // choice, because it takes longer and uses more memory.
+  function highDetailOffer(tables) {
+    const offer = tables && tables.high_detail;
+    if (!offer || !Array.isArray(offer.pages) || !offer.pages.length) return null;
+    const pages = offer.pages;
+    const where = pages.length === 1 ? `page ${pages[0]}` : `pages ${pages.join(", ")}`;
+    const minutes = Math.max(1, Math.round((Number(offer.seconds) || 60) / 60));
+    const about = `about ${minutes} min`;
+    return {
+      title: pages.length === 1 ? "This table needs high detail" : "These tables need high detail",
+      long: `The table on ${where} is too dense to read in one go at normal speed, so it was left as plain text. `
+        + `High detail reads it whole, at its full size: it takes longer (${about}) and uses more memory. `
+        + "The normal result stays until you choose.",
+      highLabel: `Read in high detail (${about})`,
+      keepLabel: "Keep normal speed",
+    };
+  }
+
   // Auto's tip, or "" when it asks to install an engine the user hid.
   function visibleHint(hint, hidden = []) {
     if (!hint) return "";
@@ -4569,7 +4590,7 @@ document.addEventListener("DOMContentLoaded", () => {
     );
   }
 
-  async function convertFileItem(item, file, engine = item.engine || selectedEngine) {
+  async function convertFileItem(item, file, engine = item.engine || selectedEngine, extra = {}) {
     const jobId = beginConversion(item, engine);
 
     const formData = new FormData();
@@ -4580,6 +4601,7 @@ document.addEventListener("DOMContentLoaded", () => {
       engine:            engine,
       job_id:            jobId,
     });
+    if (extra.tableDetail === "high") params.set("table_detail", "high");
 
     try {
       const resp = await fetch(`${apiBase}/convert/file?${params.toString()}`, {
@@ -4619,7 +4641,7 @@ document.addEventListener("DOMContentLoaded", () => {
     return runUrlConversion(item, item.engine);
   }
 
-  async function runUrlConversion(item, engine) {
+  async function runUrlConversion(item, engine, extra = {}) {
     const jobId = beginConversion(item, engine);
     const payload = {
       url:               item.sourceUrl,
@@ -4627,6 +4649,7 @@ document.addEventListener("DOMContentLoaded", () => {
       engine:            engine,
       job_id:            jobId,
     };
+    if (extra.tableDetail === "high") payload.table_detail = "high";
 
     try {
       const resp = await fetch(`${apiBase}/convert/url?response_format=json`, {
@@ -4654,14 +4677,31 @@ document.addEventListener("DOMContentLoaded", () => {
   // A user-initiated re-run with a specific engine. It never changes the
   // engine pill: re-converting one file with Docling must not quietly move
   // someone off Auto for everything they drop next.
-  async function reconvertItem(item, engine) {
+  async function reconvertItem(item, engine, extra = {}) {
     if (!item || item.status === "converting") return;
     if (engine === "glm_ocr" && item.fileRef && !(await confirmGlmJob([item.fileRef]))) return;
     if (item.fileRef) {
-      convertFileItem(item, item.fileRef, engine);
+      convertFileItem(item, item.fileRef, engine, extra);
     } else if (item.sourceUrl) {
-      runUrlConversion(item, engine);
+      runUrlConversion(item, engine, extra);
     }
+  }
+
+  // The high-detail offer's buttons: read again in high detail (Auto, as the
+  // result was made), or keep the normal result and close the notice.
+  function highDetailActions(item, offer) {
+    if (!(item.fileRef || item.sourceUrl)) return [];
+    return [
+      { label: offer.highLabel, onClick: () => reconvertItem(item, item.engineRequested || "auto", { tableDetail: "high" }) },
+      {
+        label: offer.keepLabel,
+        primary: false,
+        onClick: () => {
+          noticeDismissedFor = item.id;
+          hideConversionNotice();
+        },
+      },
+    ];
   }
 
   // ─── Render Queue ────────────────────────────────────────────────────────
@@ -5426,6 +5466,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // × (noticeDismissedFor), since there is a result to read below it.
     const warning = formatQualityWarning(item.quality);
     const tableNote = formatTableNote(item.tables);
+    const highDetail = highDetailOffer(item.tables);
     const details = conversionDetailLines(item);
     const notice = noticeDismissedFor === item.id
       ? () => {}
@@ -5433,6 +5474,11 @@ document.addEventListener("DOMContentLoaded", () => {
     if (warning) {
       notice("warning", warning.title, warning.long, {
         actions: qualityNoticeActions(item),
+        details,
+      });
+    } else if (highDetail) {
+      notice("warning", highDetail.title, highDetail.long, {
+        actions: highDetailActions(item, highDetail),
         details,
       });
     } else if (tableNote && tableNote.warning) {

@@ -33,6 +33,17 @@ them with a comma ("0.66" for "0,66") takes the page's comma first.
 
 The pages can be an image file's frames (Auto, an image GLM-OCR read): the
 layout model and GLM-OCR then read its pixels.
+
+High detail. A table too dense for GLM-OCR to finish (its answer ran out of
+room) is noted (`Area.too_large`), and Auto offers to read it again in high
+detail when the computer can (glm_ocr_manager.high_detail_available): the
+area whole, at about its own size, with a larger context. Such a reading is
+mended before it is written: a row GLM-OCR shifted by a column, where it
+dropped an empty cell, is moved back to where its values' kinds fit the
+table's columns (`align_columns`). And as the page's own reading of a dense
+table has few of its numbers, the reading is written when it holds what
+GLM-OCR wrote there (AGREE_SHARE of the place's words, loosely): nothing is
+lost, and every cell is still GLM-OCR's reading of the scan.
 A paragraph is a run of non-blank lines that are not headings, comments,
 code or table rows. A paragraph with dot leaders is a contents list, never a
 table, as for the table finder on text pages.
@@ -70,6 +81,7 @@ MAX_TABLES = 12             # read per conversion; TIME_LIMIT_S is what bounds a
 TIME_LIMIT_S = 300.0
 SOURCE = "glm_ocr"
 CHECKED = "layout,page-reading"
+CHECKED_HIGH = "layout,high-detail"   # written because it holds the page's reading (high detail)
 ISSUE = "scanned"
 TEXT_PAGE_MIN_CHARS = 25    # a page with fewer characters has no usable text layer (table_stage)
 # Why the layout model skipped a page, as the detail line says it.
@@ -77,8 +89,9 @@ UNREAD = {"rotated": "the page is rotated", "error": "the layout model failed on
 
 # detect(path, pages, job) -> the layout model's JSON (app/core/engines/layout_model.py)
 Detector = Callable[[str, list[int], Any], dict]
-# read(path, page, bbox) -> GLM-OCR's rows for that area, or None
-Reader = Callable[[str, int, list[float]], "list[list[str]] | None"]
+# read(path, page, bbox) -> GLM-OCR's rows for that area, or None; or a reading with them
+# (glm_ocr_engine.TableReading: rows, too_large, seconds)
+Reader = Callable[[str, int, list[float]], Any]
 
 
 @dataclass
@@ -90,6 +103,8 @@ class Area:
     rows: list[list[str]] | None = None
     written: bool = False
     note: str = ""              # why it was not written
+    too_large: bool = False     # GLM-OCR's answer ran out of room: high detail may read it
+    seconds: float = 0.0        # how long the reading took
 
 
 @dataclass
@@ -101,6 +116,7 @@ class ScannedTables:
     skipped: str = ""           # why nothing was looked for or read
     truncated: bool = False
     unread_pages: list[tuple[int, str]] = field(default_factory=list)  # (page, why) the model skipped
+    detail: str = "normal"      # "high": read whole at full size (an offer the user took)
 
 
 def target_pages(probe: Any, read_by_glm: Collection[int]) -> list[int]:
@@ -159,14 +175,22 @@ def read_scanned_tables(
             continue
         job.set_phase("checking", f"Reading table {index + 1} of {total} with GLM-OCR…", engine="glm_ocr")
         try:
-            area.rows = read(found.path, area.page, area.bbox)
+            reading = read(found.path, area.page, area.bbox)
         except ConversionCancelledError:
             raise
         except Exception as exc:
             logger.warning("Reading a table on page %d failed: %s", area.page, exc)
             area.note = "the reading failed"
             continue
-        if area.rows is None:
+        if hasattr(reading, "rows"):
+            area.rows = reading.rows
+            area.too_large = bool(getattr(reading, "too_large", False))
+            area.seconds = float(getattr(reading, "seconds", 0.0) or 0.0)
+        else:
+            area.rows = reading
+        if area.too_large:
+            area.note = "it is too large for GLM-OCR to read in one go at normal detail"
+        elif area.rows is None:
             area.note = "GLM-OCR read no table there"
 
 
@@ -377,6 +401,34 @@ def _match(area: Area, places: list[_Place], groups: dict[int, list[Area]]) -> i
     return None
 
 
+def _held_lines(lines: list[str], place: _Place, areas: list[Area]) -> tuple[int, int] | str:
+    """High detail: the lines of the place the readings hold, as one stretch."""
+    words = sum((_words(a.rows or []) for a in areas), Counter())
+
+    def held(line: str) -> bool:
+        tokens = [w for w in line_tokens(line) if any(ch.isalpha() for ch in w)] or line_tokens(line)
+        hit = sum(1 for w in tokens if w in words or any(_alike(w, k) for k in words))
+        return not tokens or hit >= OWN_LINE_SHARE * len(tokens)
+
+    own = [held(lines[i]) if lines[i].strip() else None for i in range(place.start, place.end)]
+    if True not in own:
+        return "writing it would leave out part of what GLM-OCR wrote there"
+    first, last = own.index(True), len(own) - 1 - own[::-1].index(True)
+    if False in own[first:last + 1]:
+        return "writing it would leave out part of what GLM-OCR wrote there"
+    return place.start + first, place.start + last + 1
+
+
+def high_detail_pages(found: ScannedTables) -> list[int]:
+    """The pages with a table too large to read at normal detail (what Auto may offer)."""
+    return sorted({a.page for a in found.areas if a.too_large})
+
+
+def high_detail_seconds(found: ScannedTables) -> float:
+    """About how long reading those tables in high detail takes: 2.5 times the normal attempt each."""
+    return sum(max(60.0, 2.5 * a.seconds) for a in found.areas if a.too_large)
+
+
 def _replacement(lines: list[str], place: _Place, areas: list[Area]) -> tuple[int, int] | str:
     """The lines the areas' readings take the place of, or why they don't."""
     words = sum((_words(a.rows or []) for a in areas), Counter())
@@ -410,26 +462,130 @@ def decimal_marks(rows: list[list[str]], page_text: str) -> list[list[str]]:
     return [[_POINT_DECIMAL.sub(r"\1,\2", cell) for cell in row] for row in rows]
 
 
+# ─── High detail: rows shifted by a column ───────────────────────────────────
+_KIND_NUMBER = re.compile(r"^[-−+]?\d[\d\s.,/x×]*%?$")
+_KIND_CODE = re.compile(r"^[A-ZÄÖÜ]{1,2}$")
+_KIND_MARK = re.compile(r"^[+○●◯·∙•*×✓✗-]$|^\$\\cdot\$$")
+COLUMN_KIND_SHARE = 0.6        # a column is of a kind when this share of its filled cells are
+SHIFT_MAX = 2
+
+
+def _kind(cell: str) -> str:
+    text = cell.strip()
+    if not text:
+        return ""
+    if _KIND_MARK.match(text):
+        return "mark"
+    if _KIND_NUMBER.match(text):
+        return "number"
+    if _KIND_CODE.match(text):
+        return "code"
+    return "text"
+
+
+def align_columns(rows: list[list[str]]) -> tuple[list[list[str]], int]:
+    """(rows, rows moved): a body row whose values sit a column or two off is moved back.
+
+    Each column's kind (numbers, one-letter codes, marks such as "+") is what most of
+    its cells are. A row moves only when the move puts strictly more of its values in
+    a column of their kind, and it only moves across empty cells, so no value is lost.
+    """
+    if len(rows) < 4 or len({len(r) for r in rows}) != 1:
+        return rows, 0
+    width = len(rows[0])
+    body = rows[1:]
+    kinds: list[str] = []
+    for c in range(width):
+        seen = Counter(_kind(r[c]) for r in body if _kind(r[c]))
+        kind, n = seen.most_common(1)[0] if seen else ("", 0)
+        kinds.append(kind if n >= COLUMN_KIND_SHARE * max(1, sum(seen.values())) else "")
+
+    def fit(row: list[str]) -> int:
+        return sum(1 for c, cell in enumerate(row) if cell.strip() and kinds[c] and _kind(cell) == kinds[c])
+
+    def shifted(row: list[str], at: int, by: int) -> list[str] | None:
+        """The row with its cells from column `at` moved `by` columns (right > 0), across empty cells only."""
+        if by > 0:
+            if any(cell.strip() for cell in row[width - by:]):
+                return None
+            return row[:at] + [""] * by + row[at:width - by]
+        if any(cell.strip() for cell in row[at:at - by]):
+            return None
+        return row[:at] + row[at - by:] + [""] * (-by)
+
+    def merged(row: list[str], at: int) -> list[str] | None:
+        """Text GLM-OCR split into the next column (a long name's second line) joined back to its cell."""
+        if at < 1 or kinds[at - 1] != "text" or _kind(row[at]) != "text" or kinds[at] == "text":
+            return None
+        return row[:at - 1] + [f"{row[at - 1]} {row[at]}".strip()] + row[at + 1:] + [""]
+
+    out = [rows[0]]
+    moved = 0
+    for row in body:
+        best, best_fit = row, fit(row)
+        for at in range(width):
+            candidates = [shifted(row, at, by) for by in [b for k in range(1, SHIFT_MAX + 1) for b in (k, -k)]]
+            candidates.append(merged(row, at))
+            for candidate in candidates:
+                if candidate is not None and fit(candidate) > best_fit:
+                    best, best_fit = candidate, fit(candidate)
+        moved += best is not row
+        out.append(best)
+    # Columns left empty from top to bottom (where shifted values were) are not columns.
+    keep = [c for c in range(width) if any(r[c].strip() for r in out)]
+    if len(keep) < width:
+        out = [[r[c] for c in keep] for r in out]
+    return out, moved
+
+
+def _holding(area: Area, places: list[_Place], groups: dict[int, list[Area]]) -> int | None:
+    """High detail: the place whose words the reading holds (nothing GLM-OCR wrote there is lost)."""
+    words = _words(area.rows or [])
+    ranked = sorted(
+        (-_loose_share(p.words, words), i) for i, p in enumerate(places)
+        if p.rows is None and sum(p.words.values()) >= MIN_HELD_WORDS
+    )
+    for negative_share, index in ranked:
+        if -negative_share < AGREE_SHARE:
+            return None
+        if all(a.page == area.page for a in groups.get(index, [])):
+            return index
+    return None
+
+
+MIN_HELD_WORDS = 20            # a place this small is a caption, not where a dense table was written
+
+
 def write_scanned_tables(markdown: str, found: ScannedTables) -> tuple[str, list[dict], list[str]]:
     """(Markdown, tables written per page, detail lines). Pure."""
     lines = markdown.split("\n")
+    high = found.detail == "high"
     for area in found.areas:
         if area.rows is not None:
             area.rows = decimal_marks(area.rows, markdown)
+            if high:
+                area.rows, _moved = align_columns(area.rows)
     readings = [a for a in found.areas if a.rows is not None]
     places = _places(lines) if readings else []
     groups: dict[int, list[Area]] = {}
+    holding: set[int] = set()      # places taken by holding (high detail), not by matching
     for area in readings:
         if not is_grid(area.rows):
             area.note = "GLM-OCR's reading of it is not a full grid"
             continue
         index = _match(area, places, groups)
+        held = False
+        if index is None and high:
+            index = _holding(area, places, groups)
+            held = index is not None
         if index is None:
             area.note = "it doesn't match what GLM-OCR wrote for the page"
         elif not scripts(_cells(area.rows)) <= places[index].scripts:
             area.note = "GLM-OCR read it in another script on its own"
         else:
             groups.setdefault(index, []).append(area)
+            if held:
+                holding.add(index)
 
     replacements: list[tuple[int, int, list[str]]] = []
     for index, areas in groups.items():
@@ -437,14 +593,16 @@ def write_scanned_tables(markdown: str, found: ScannedTables) -> tuple[str, list
             text = "\n".join(places[index].texts)
             for area in areas:
                 area.rows = page_numbers(area.rows or [], text)
-        target = _replacement(lines, places[index], areas)
+        target = (
+            _held_lines(lines, places[index], areas) if index in holding else _replacement(lines, places[index], areas)
+        )
         if isinstance(target, str):
             for area in areas:
                 area.note = target
             continue
         new: list[str] = []
         for area in areas:
-            table = {"rows": area.rows, "source": SOURCE, "checked": CHECKED}
+            table = {"rows": area.rows, "source": SOURCE, "checked": CHECKED_HIGH if index in holding else CHECKED}
             new += [*table_lines(table, area.page), ""]
             area.written = True
         replacements.append((*target, new[:-1]))

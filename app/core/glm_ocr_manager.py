@@ -1209,6 +1209,29 @@ def glm_ocr_usable() -> bool:
         return False
 
 
+def high_detail_available() -> tuple[bool, str]:
+    """Whether a dense table can be read in high detail now: (yes, why not). Never raises.
+
+    High detail reads a table whole at its full size, with a larger context: it needs
+    GLM-OCR on a graphics card (on the CPU one table would take many minutes) and
+    HIGH_DETAIL_FREE_BYTES of memory free.
+    """
+    try:
+        from app.core.engines.glm_ocr_server import HIGH_DETAIL_FREE_BYTES, available_memory_bytes
+
+        manager = GlmOcrManager.get_instance()
+        if not manager.is_usable():
+            return False, "GLM-OCR isn't ready"
+        if manager.active_accel() not in ("vulkan", "metal"):
+            return False, "it needs GLM-OCR running on a graphics card"
+        free = available_memory_bytes()
+        if free is not None and free < HIGH_DETAIL_FREE_BYTES:
+            return False, f"it needs {HIGH_DETAIL_FREE_BYTES / 1024**3:.1f} GB of free memory"
+        return True, ""
+    except Exception:
+        return False, "GLM-OCR isn't ready"
+
+
 def glm_ocr_installable() -> bool:
     """Not installed, but could be downloaded from Settings on this platform."""
     try:

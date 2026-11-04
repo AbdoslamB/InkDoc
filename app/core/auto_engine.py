@@ -1135,7 +1135,10 @@ async def _check_tables(
         result, summary = markdown, TableSummary(checked=False, skipped_reason=SKIP_SWITCHED_OFF)
 
     if plan.on("scanned_tables"):
-        result = await _scanned_tables(path, result, probe, summary, lane=lane, job=job, log=log, glm_pages=glm_pages)
+        result = await _scanned_tables(
+            path, result, probe, summary, lane=lane, job=job, log=log, glm_pages=glm_pages,
+            detail=options.table_detail,
+        )
         if summary.repaired and summary.skipped_reason == SKIP_SWITCHED_OFF:
             # Only this step ran, and it wrote tables: the report is about them.
             summary.checked, summary.skipped_reason = True, ""
@@ -1167,10 +1170,15 @@ async def _scanned_tables(
     log: PassLog,
     glm_pages: Collection[int],
     frames: int = 0,
+    detail: str = "normal",
 ) -> str:
     """The scanned_tables step (app/core/scanned_tables.py): the layout model finds the
     tables in MarkItDown's lane (it runs in that worker), GLM-OCR reads each in its lane.
     `frames` > 0: an image file of that many frames, every one of them looked at.
+
+    A table too dense to read at normal detail is offered for high detail
+    (summary.high_detail) when this computer can; `detail` "high" (the user took the
+    offer) reads every table that way, or at normal detail when it no longer can.
     An addition: a failure leaves the Markdown as it was (a cancel still stops the job)."""
     from app.core.engines.layout_model import MODEL_FILE
     from app.core.engines.markitdown_worker_client import find_layout_in_worker
@@ -1205,13 +1213,28 @@ async def _scanned_tables(
             log.skipped("scanned_tables", found.skipped)
             return markdown
         if found.areas:
-            from app.core.engines.glm_ocr_engine import read_table_region
+            import functools
 
+            from app.core.engines.glm_ocr_engine import DETAIL_HIGH, DETAIL_NORMAL, read_table_area
+            from app.core.engines.glm_ocr_server import HIGH_DETAIL_TIMEOUT_S
+
+            high = detail == DETAIL_HIGH
+            if high:
+                can, why = await asyncio.to_thread(high_detail_available)
+                if not can:
+                    high = False
+                    summary.details.append(f"High detail wasn't used ({why}); the tables were read at normal detail.")
+            found.detail = DETAIL_HIGH if high else DETAIL_NORMAL
+            read = functools.partial(read_table_area, detail=found.detail)
+            limit = {"time_limit_s": HIGH_DETAIL_TIMEOUT_S * len(found.areas)} if high else {}
             async with lane(EngineKind.GLM_OCR):
                 job.raise_if_cancelled()
-                await asyncio.to_thread(read_scanned_tables, found, read_table_region, job=job)
+                if high:
+                    job.set_phase("checking", "Reading the tables in high detail…", engine="glm_ocr")
+                await asyncio.to_thread(read_scanned_tables, found, read, job=job, **limit)
         # Pure, but it reads the whole Markdown: off the event loop.
         result, written, details = await asyncio.to_thread(write_scanned_tables, markdown, found)
+        await _offer_high_detail(found, summary)
     except ConversionCancelledError:
         raise
     except Exception as exc:
@@ -1222,6 +1245,39 @@ async def _scanned_tables(
     summary.details.extend(details)
     log.ran("scanned_tables", sum(w["tables"] for w in written))
     return result
+
+
+def high_detail_available() -> tuple[bool, str]:
+    """Whether this computer can read a dense table in high detail now (glm_ocr_manager). Never raises."""
+    try:
+        from app.core.glm_ocr_manager import high_detail_available as _available
+
+        return _available()
+    except Exception:
+        return False, "GLM-OCR isn't ready"
+
+
+async def _offer_high_detail(found: Any, summary: Any) -> None:
+    """After a normal reading: the tables too dense for it, offered for high detail when the
+    computer can, or a detail line saying why not."""
+    from app.core.scanned_tables import high_detail_pages, high_detail_seconds
+
+    if found.detail == "high":
+        return
+    pages = high_detail_pages(found)
+    if not pages:
+        return
+    can, why = await asyncio.to_thread(high_detail_available)
+    listed = format_pages(pages)
+    if can:
+        summary.high_detail = {"pages": pages, "seconds": round(high_detail_seconds(found))}
+        summary.details.append(
+            f"The table on {listed} is too dense to read at normal detail: it can be read again in high detail."
+        )
+    else:
+        summary.details.append(
+            f"The table on {listed} is too dense to read at normal detail, and high detail isn't available: {why}."
+        )
 
 
 # ─── The steps after the tables ──────────────────────────────────────────────
@@ -1508,6 +1564,7 @@ async def _image_tables(
     frames = await asyncio.to_thread(count_pages, path) or 1
     result = await _scanned_tables(
         path, markdown, None, summary, lane=lane, job=job, log=log, glm_pages=(), frames=frames,
+        detail=options.table_detail,
     )
     if summary.repaired:
         summary.checked, summary.skipped_reason = True, ""

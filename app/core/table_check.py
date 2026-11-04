@@ -502,6 +502,9 @@ class TableSummary:
     characters_restored: int = 0      # Thorough: '&', dashes and quotes put back
     # Every step of the level (app/core/thorough_passes.py): ran, changed, or skipped and why.
     passes: list[dict] = field(default_factory=list)
+    # A table too dense for normal detail, which this computer can read in high detail:
+    # {"pages": [...], "seconds": about how long}. What the page offers; None otherwise.
+    high_detail: dict | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -518,6 +521,7 @@ class TableSummary:
             "paragraphs_restored": self.paragraphs_restored,
             "characters_restored": self.characters_restored,
             "passes": [dict(p) for p in self.passes],
+            "high_detail": dict(self.high_detail) if self.high_detail else None,
         }
 
 

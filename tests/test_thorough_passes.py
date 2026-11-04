@@ -274,7 +274,8 @@ def test_tables_on_a_scanned_page_are_read_one_by_one(auto, monkeypatch, tmp_pat
 
     monkeypatch.setattr(auto_engine, "layout_model_location", lambda: (tmp_path, {"model.onnx": "ab" * 32}))
     monkeypatch.setattr(worker_client, "find_layout_in_worker", find_layout)
-    monkeypatch.setattr(glm_ocr_engine, "read_table_region", lambda path, page, bbox: LEFT if bbox[0] < 200 else RIGHT)
+    monkeypatch.setattr(glm_ocr_engine, "read_table_area", lambda path, page, bbox, detail="normal":
+                        glm_ocr_engine.TableReading(LEFT if bbox[0] < 200 else RIGHT))
     run, _asked = auto
     markdown, options, passes = run([image_page("ccitt")], MERGED_SCAN, engines=(G,), layout=True)
     assert options.engine_used == G

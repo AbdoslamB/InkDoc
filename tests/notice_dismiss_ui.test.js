@@ -124,6 +124,8 @@ const stubs = {
     previewSlice: (md) => ({ text: md || "", cut: false }),
     formatSize: (n) => String(n),
     formatTableNote: () => null,
+    highDetailOffer: (t) => (t && t.high_detail ? { title: "This table needs high detail", long: "x", highLabel: "h", keepLabel: "k" } : null),
+    highDetailActions: () => [],
     visibleHint: (hint) => hint || "",
     prefs: { hidden_engines: [] },
     markdownToHtml: (md) => md,
@@ -150,13 +152,19 @@ const noted = { id: "item-a", name: "a.pdf", status: "saved", markdown: "# A", w
 const fallback = { id: "item-b", name: "b.docx", status: "saved", markdown: "# B", fallbackOccurred: true };
 const warned = { id: "item-c", name: "c.pdf", status: "saved", markdown: "# C", quality: { warning: { title: "Some text may be missing", long: "Pages 2-3." } } };
 const plain = { id: "item-d", name: "d.txt", status: "saved", markdown: "# D" };
+const dense = { id: "item-e", name: "e.png", status: "saved", markdown: "# E", tables: { high_detail: { pages: [1], seconds: 90 } } };
 const failures = [
     { id: "item-f1", name: "f.pdf", status: "failed", error: "Broken file.", fileRef: {} },
     { id: "item-f2", name: "f.xyz", status: "unsupported" },
     { id: "item-f3", name: "f.pdf", status: "cancelled", fileRef: {} },
     { id: "item-f4", name: "f.pdf", status: "empty" },
 ];
-ui.setQueue([noted, fallback, warned, plain, ...failures]);
+ui.setQueue([noted, fallback, warned, plain, dense, ...failures]);
+
+// A table too dense for normal detail: the high-detail offer, a warning that can be closed.
+ui.selectItem("item-e");
+assert.ok(shown() && title.textContent === "This table needs high detail", "the high-detail offer isn't shown");
+assert.ok(noticeBar.className.includes("notice-warning") && close.hidden === false);
 
 // A result's note has the ×.
 ui.selectItem("item-a");

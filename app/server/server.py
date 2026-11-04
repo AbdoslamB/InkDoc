@@ -262,9 +262,10 @@ def _quality_check_enabled(override: bool | None) -> bool:
         return True
 
 
-def _auto_quality_options(override: str | None) -> dict[str, Any]:
+def _auto_quality_options(override: str | None, table_detail: str | None = None) -> dict[str, Any]:
     """ConversionOptions' "Auto quality" fields: the level (the per-request override,
-    else the user's setting; default fast) and the steps the user switched off."""
+    else the user's setting; default fast), the steps the user switched off, and the
+    table detail a request asks for ("high" only when the user took the offer)."""
     from app.core.table_stage import normalize_level
 
     try:
@@ -276,6 +277,7 @@ def _auto_quality_options(override: str | None) -> dict[str, Any]:
     return {
         "auto_quality": normalize_level(level),
         "passes_off": known_names(settings.get("thorough_passes_off")),
+        "table_detail": "high" if table_detail == "high" else "normal",
     }
 
 
@@ -775,6 +777,11 @@ AUTO_QUALITY_DESCRIPTION = (
     "and read hard tables with GLM-OCR."
 )
 AutoQuality = Literal["fast", "balanced", "thorough"]
+TableDetail = Literal["normal", "high"]
+TABLE_DETAIL_DESCRIPTION = (
+    "'high' reads the tables a Thorough conversion found too dense for normal detail whole, at "
+    "their full size (slower, more memory; only when tables.high_detail offered it). Default 'normal'."
+)
 PassName = Literal[PASS_NAMES]  # the steps of app/core/thorough_passes.py
 JOB_ID_DESCRIPTION = (
     "Optional client-generated id (8-100 chars of letters, digits, - _ . :) for "
@@ -800,6 +807,7 @@ class UrlConvertRequest(BaseModel):
     )
     check_quality: bool | None = Field(default=None, description=CHECK_QUALITY_DESCRIPTION)
     auto_quality: AutoQuality | None = Field(default=None, description=AUTO_QUALITY_DESCRIPTION)
+    table_detail: TableDetail | None = Field(default=None, description=TABLE_DETAIL_DESCRIPTION)
     job_id: str | None = Field(default=None, description=JOB_ID_DESCRIPTION)
 
 
@@ -1772,6 +1780,7 @@ async def convert_file(
     ),
     check_quality: bool | None = Query(None, description=CHECK_QUALITY_DESCRIPTION),
     auto_quality: AutoQuality | None = Query(None, description=AUTO_QUALITY_DESCRIPTION),
+    table_detail: TableDetail | None = Query(None, description=TABLE_DETAIL_DESCRIPTION),
     job_id: str | None = Query(None, description=JOB_ID_DESCRIPTION),
 ):
     """Convert an uploaded file (PDF, DOCX, XLSX, PPTX, Images, Audio, HTML, etc.) to Markdown."""
@@ -1803,7 +1812,7 @@ async def convert_file(
             keep_data_uris=keep_data_uris,
             engine=engine_kind,
             quality_check=_quality_check_enabled(check_quality),
-            **_auto_quality_options(auto_quality),
+            **_auto_quality_options(auto_quality, table_detail),
             **_docling_enrichment_options(engine_kind),
         )
         if engine_kind == EngineKind.AUTO:
@@ -1901,7 +1910,7 @@ async def convert_url(
             keep_data_uris=payload.keep_data_uris,
             engine=engine_kind,
             quality_check=_quality_check_enabled(payload.check_quality),
-            **_auto_quality_options(payload.auto_quality),
+            **_auto_quality_options(payload.auto_quality, payload.table_detail),
             **_docling_enrichment_options(engine_kind),
         )
         # Fetched first, in a thread but outside any lane: the fetch has its own

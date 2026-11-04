@@ -18,7 +18,7 @@ const helperBlock = slice("  // ─── Pure helpers", "  // ─── End of 
 const EXPORTS = [
     "readStorage", "removeStorage", "normalizePrefs", "legacyPrefsFrom", "effectiveEngine",
     "getEngineDisplayName", "formatQualityWarning", "qualityAction", "visibleHint", "describeQueueEngine",
-    "describePreviewEngine", "shouldShowHintToast", "getNextEngine", "newJobId",
+    "describePreviewEngine", "shouldShowHintToast", "getNextEngine", "newJobId", "highDetailOffer",
     "HIDE_AUTO_HINT_KEY", "LEGACY_PREF_KEYS",
 ];
 
@@ -239,6 +239,22 @@ assert.strictEqual(h.qualityAction(null), null);
     assert.ok(/id="previewQualityBadge"/.test(markup));
     assert.ok(/id="qualityCheckToggle"/.test(markup));
     assert.ok(/id="conversionNoticeBar"[^>]*role="status"/.test(markup), "warnings are announced politely");
+}
+
+// ─── High detail: offered only when the result says so ───────────────────────
+{
+    const { highDetailOffer } = load({});
+    assert.strictEqual(highDetailOffer(null), null);
+    assert.strictEqual(highDetailOffer({ high_detail: null }), null, "nothing to offer: no notice");
+    assert.strictEqual(highDetailOffer({ high_detail: { pages: [], seconds: 90 } }), null);
+    const one = highDetailOffer({ high_detail: { pages: [1], seconds: 100 } });
+    assert.strictEqual(one.title, "This table needs high detail");
+    assert.strictEqual(one.highLabel, "Read in high detail (about 2 min)");
+    assert.strictEqual(one.keepLabel, "Keep normal speed");
+    assert.ok(one.long.includes("page 1") && one.long.includes("takes longer") && one.long.includes("more memory"));
+    const two = highDetailOffer({ high_detail: { pages: [2, 5], seconds: 20 } });
+    assert.ok(two.title.startsWith("These tables") && two.long.includes("pages 2, 5"));
+    assert.strictEqual(two.highLabel, "Read in high detail (about 1 min)", "never under a minute");
 }
 
 console.log("[OK] auto_engine_ui.test.js passed");

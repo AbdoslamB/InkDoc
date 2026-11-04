@@ -30,6 +30,11 @@ inside InkDoc.
     image with GLM-OCR.
   - A table in a photo or scanned image comes out as a table, with its numbers
     checked against the first reading, instead of one cell per line.
+  - A table too dense to read at normal speed (a page-sized directory, a
+    ledger) can be read again in high detail: InkDoc offers it when your
+    computer can, says about how long it takes, and lets you keep the normal
+    result instead. On a 16-column directory page it found 92% of the numbers,
+    where normal speed found almost none.
   - A page an engine lost most of is read again by another engine.
   - Lines broken one per paragraph are joined, and checklist boxes are marked ☐.
   - Bold, italics, footnote marks and exponents come back from the PDF's fonts.

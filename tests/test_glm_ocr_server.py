@@ -491,3 +491,26 @@ def test_thread_count_suits_the_machine(monkeypatch, cpus, platform, expected):
     monkeypatch.setattr(gs.os, "cpu_count", lambda: cpus)
     monkeypatch.setattr(gs.sys, "platform", platform)
     assert gs.default_threads() == expected
+
+
+def test_high_detail_restarts_with_a_larger_context_only_while_it_needs_one(runtime, monkeypatch):
+    srv = _server(runtime, monkeypatch)
+    ctx = lambda argv: int(argv[argv.index("--ctx-size") + 1])  # noqa: E731
+    try:
+        srv.ocr("data:image/png;base64,AA", "Text Recognition:", 1024)
+        srv.use_context(24576)
+        srv.ocr("data:image/png;base64,AA", "Table Recognition:", 1024)
+        srv.use_context(0)
+        srv.ocr("data:image/png;base64,AA", "Text Recognition:", 1024)
+        assert [ctx(a) for a in launches(runtime)] == [8192, 24576], "restarted once, then kept"
+        assert srv.running_context() == 24576
+        srv.shutdown()
+        srv.ocr("data:image/png;base64,AA", "Text Recognition:", 1024)
+        assert ctx(launches(runtime)[-1]) == 8192, "the next start is the default again"
+    finally:
+        srv.shutdown()
+
+
+def test_free_memory_is_read_or_unknown():
+    free = gs.available_memory_bytes()
+    assert free is None or free > 0

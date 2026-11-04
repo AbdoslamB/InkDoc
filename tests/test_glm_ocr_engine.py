@@ -33,19 +33,23 @@ class FakeServer:
         self.replies = list(replies or [])
         self.finish = finish
         self.calls: list[dict] = []
+        self.contexts: list[int] = []
         self.running = True
         self.before_call = None
 
     def is_running(self):
         return self.running
 
-    def ocr(self, data_uri, prompt, max_tokens, *, repeat_penalty=None, area=False):
+    def use_context(self, ctx_size):
+        self.contexts.append(ctx_size)
+
+    def ocr(self, data_uri, prompt, max_tokens, *, repeat_penalty=None, area=False, timeout_s=None):
         if self.before_call:
             self.before_call(len(self.calls))
         png = base64.b64decode(data_uri.split(",", 1)[1])
         img = Image.open(io.BytesIO(png))
         img.load()
-        self.calls.append({"prompt": prompt, "max_tokens": max_tokens, "repeat_penalty": repeat_penalty, "area": area,
+        self.calls.append({"prompt": prompt, "max_tokens": max_tokens, "repeat_penalty": repeat_penalty, "area": area, "timeout_s": timeout_s,
                            "size": img.size, "image": img, "uri_prefix": data_uri[:22]})
         text = self.replies.pop(0) if self.replies else f"Page text {len(self.calls)}"
         return OcrResult(text=text, finish_reason=self.finish, prompt_tokens=0, completion_tokens=10, seconds=0.01)
@@ -354,3 +358,29 @@ def test_a_page_read_twice_is_mended_without_asking_again(fake, tmp_path):
     assert len(server.calls) == 1, "no retry: the first reading is mended"
     assert md.strip() == "\n".join(["Baden", *_ENTRIES])
     assert any("read part of the page twice" in w for w in opts.engine_warnings)
+
+
+# ─── High detail: a dense table read whole ───────────────────────────────────
+def test_a_table_too_long_to_finish_says_so(fake, tmp_path):
+    server, _ = fake
+    server.finish = "length"
+    server.replies = ["<table><tr><td>a</td>"]
+    pdf = write_pdf(tmp_path / "doc.pdf", [prose_page()])
+    reading = ge.read_table_area(str(pdf), 1, [100, 100, 300, 160])
+    assert reading.rows is None and reading.too_large
+    assert ge.read_table_region(str(pdf), 1, [100, 100, 300, 160]) is None, "the old answer stays: no reading"
+    assert server.contexts == [], "normal detail keeps the default context"
+
+
+def test_high_detail_reads_larger_with_room_and_time(fake, tmp_path):
+    from app.core.engines.glm_ocr_server import HIGH_DETAIL_CTX_SIZE, HIGH_DETAIL_TIMEOUT_S
+
+    server, _ = fake
+    server.replies = ["<table><tr><td>Region</td><td>Q1</td></tr><tr><td>North</td><td>10</td></tr></table>"]
+    pdf = write_pdf(tmp_path / "doc.pdf", [prose_page()])
+    reading = ge.read_table_area(str(pdf), 1, [100, 100, 500, 400], detail="high")
+    assert reading.rows == [["Region", "Q1"], ["North", "10"]] and not reading.too_large
+    call = server.calls[0]
+    assert server.contexts == [HIGH_DETAIL_CTX_SIZE, 0], "the larger context only while it reads"
+    assert call["timeout_s"] == HIGH_DETAIL_TIMEOUT_S and call["max_tokens"] > 4096
+    assert max(call["size"]) > 1600, "read larger than a normal reading"

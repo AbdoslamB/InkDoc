@@ -748,12 +748,16 @@ class GlmOcrServer:
 
         The request then raises ConversionCancelledError instead of restarting and
         retrying. For a high-detail reading, which may run for many minutes; a normal
-        page ends within a minute and a cancel waits for it.
+        page ends within a minute and a cancel waits for it. While the server is still
+        starting there is no process to stop yet: the request is then cancelled as soon
+        as the server is ready, before it is sent.
         """
-        proc = self._proc
-        if proc is None or not self._busy:
+        if not self._busy:
             return
         self._aborted = True
+        proc = self._proc
+        if proc is None:
+            return
         try:
             proc.stop()
         except Exception as exc:
@@ -898,12 +902,18 @@ class GlmOcrServer:
         """Recognise one page (or, `area`, one area of one: a longer time limit). Restarts once
         and retries if the server dies mid-request."""
         with self._lock:
-            self._busy = True
             self._aborted = False
+            self._busy = True
             try:
                 attempt = 0
                 while True:
                     proc = self.ensure_running()
+                    if self._aborted:            # cancelled while the server was starting
+                        from app.core.jobs import ConversionCancelledError
+
+                        self._aborted = False
+                        self._stop_locked()
+                        raise ConversionCancelledError("conversion_cancelled")
                     timeout = PAGE_TIMEOUT_GPU_S if proc.spec.uses_gpu else PAGE_TIMEOUT_CPU_S
                     if area:
                         timeout = min(PAGE_TIMEOUT_CPU_S, timeout * AREA_TIMEOUT_FACTOR)

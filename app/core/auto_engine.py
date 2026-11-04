@@ -1254,7 +1254,8 @@ CANCEL_POLL_S = 0.5
 
 def _cancellable(read: Callable[..., Any], job: JobHandle) -> Callable[..., Any]:
     """`read`, stopped as soon as the job is cancelled: a high-detail reading can run for
-    minutes, and a cancel between tables would wait for it."""
+    minutes, and a cancel between tables would wait for it. The cancel is repeated until
+    the reading ends: one that comes before the request has begun stops nothing."""
     import threading
 
     def run(*args: Any, **kwargs: Any) -> Any:
@@ -1266,7 +1267,6 @@ def _cancellable(read: Callable[..., Any], job: JobHandle) -> Callable[..., Any]
             while not done.wait(CANCEL_POLL_S):
                 if job.cancelled():
                     GlmOcrServer.get_instance().abort_request()
-                    return
 
         watcher = threading.Thread(target=watch, name="inkdoc-high-detail-cancel", daemon=True)
         watcher.start()

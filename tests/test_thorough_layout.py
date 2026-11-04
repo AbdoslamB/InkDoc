@@ -474,3 +474,35 @@ def test_a_cancel_stops_a_high_detail_reading_at_once(monkeypatch):
     aborted.clear()
     quick = auto_engine._cancellable(lambda *a: "read", Job(time.monotonic() + 60))
     assert quick("scan.png", 1, [0, 0, 1, 1]) == "read" and not aborted.is_set(), "no cancel: nothing stopped"
+
+
+def test_a_cancel_before_the_request_begins_is_repeated(monkeypatch):
+    import threading
+    import time
+
+    import app.core.auto_engine as auto_engine
+    import app.core.engines.glm_ocr_server as gs
+
+    begun = threading.Event()
+    aborted = threading.Event()
+
+    class Server:
+        def abort_request(self):
+            if begun.is_set():               # like the real server: nothing to stop before it begins
+                aborted.set()
+
+    class Job:
+        def cancelled(self):
+            return True
+
+    monkeypatch.setattr(gs.GlmOcrServer, "get_instance", classmethod(lambda cls: Server()))
+    monkeypatch.setattr(auto_engine, "CANCEL_POLL_S", 0.05)
+
+    def late_read(path, page, bbox):
+        time.sleep(0.3)                      # the cancel came first
+        begun.set()
+        assert aborted.wait(5), "the reading was never stopped"
+        return "stopped"
+
+    read = auto_engine._cancellable(late_read, Job())
+    assert read("scan.png", 1, [0, 0, 1, 1]) == "stopped"

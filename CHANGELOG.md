@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-11-04
+
 **If updating from inside InkDoc fails** with "CERTIFICATE_VERIFY_FAILED" (1.2.0 on
 some Windows computers; 1.3.0 on a Mac, or on Linux other than Ubuntu and Debian),
 download this version from the website once and install it over the one you have.
@@ -536,7 +538,8 @@ Initial release.
 - Windows installer (`inkdoc-setup.exe`), portable executable (`inkdoc.exe`) and
   portable ZIP; macOS (Apple Silicon) bundle; Linux (x86_64) bundle.
 
-[Unreleased]: https://github.com/AbdoslamB/InkDoc/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/AbdoslamB/InkDoc/compare/v1.3.1...HEAD
+[1.3.1]: https://github.com/AbdoslamB/InkDoc/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/AbdoslamB/InkDoc/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/AbdoslamB/InkDoc/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/AbdoslamB/InkDoc/compare/v1.1.0...v1.1.1

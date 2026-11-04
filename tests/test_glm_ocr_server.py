@@ -525,24 +525,28 @@ def test_a_request_in_flight_is_stopped_by_a_cancel_and_not_retried(runtime, mon
         outcome: dict = {}
 
         def read() -> None:
-            started = time.monotonic()
             try:
                 srv.ocr("data:image/png;base64,AA", "Table Recognition:", 1024, area=True, timeout_s=600)
             except BaseException as exc:  # noqa: BLE001 - the test looks at which one
                 outcome["error"] = exc
-            outcome["seconds"] = time.monotonic() - started
+            outcome["ended"] = time.monotonic()
 
+        started = time.monotonic()
         worker = threading.Thread(target=read)
         worker.start()
         deadline = time.monotonic() + 60                                     # slow runners start slowly
         while not requests_made(runtime) and time.monotonic() < deadline:
             time.sleep(0.05)
         assert requests_made(runtime), "the request never reached the server"
+        cancelled_at = time.monotonic()                                      # macOS CI: 16 s or more to here
         srv.abort_request()
         worker.join(timeout=20)
         assert not worker.is_alive(), "the request kept running after the cancel"
         assert isinstance(outcome.get("error"), ConversionCancelledError)
-        assert outcome["seconds"] < 15
+        stopped_after = outcome["ended"] - cancelled_at
+        assert stopped_after < 15, (
+            f"stopped {stopped_after:.1f} s after the cancel (the server started in {cancelled_at - started:.1f} s)"
+        )
         assert len(launches(runtime)) == 1, "a cancelled request is not restarted"
         assert not srv.is_running()
         srv.abort_request()   # nothing in flight: does nothing

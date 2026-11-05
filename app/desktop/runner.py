@@ -911,9 +911,11 @@ def run_desktop(
     if getattr(sys, "frozen", False):
         exe_dir = os.path.dirname(sys.executable)
         candidate_icons.extend([
+            os.path.join(exe_dir, "assets", "logo.icns"),
             os.path.join(exe_dir, "assets", "logo.ico"),
             os.path.join(exe_dir, "assets", "logo.png"),
             os.path.join(exe_dir, "assets", "logo.svg"),
+            os.path.join(exe_dir, "_internal", "assets", "logo.icns"),
             os.path.join(exe_dir, "_internal", "assets", "logo.ico"),
             os.path.join(exe_dir, "_internal", "assets", "logo.png"),
             os.path.join(exe_dir, "_internal", "assets", "logo.svg"),
@@ -921,6 +923,7 @@ def run_desktop(
         if hasattr(sys, "_MEIPASS"):
             mei = sys._MEIPASS
             candidate_icons.extend([
+                os.path.join(mei, "assets", "logo.icns"),
                 os.path.join(mei, "assets", "logo.ico"),
                 os.path.join(mei, "assets", "logo.png"),
                 os.path.join(mei, "assets", "logo.svg"),
@@ -930,19 +933,30 @@ def run_desktop(
     # 2. Search local development / source tree directories
     base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     candidate_icons.extend([
+        os.path.join(base_dir, "assets", "logo.icns"),
         os.path.join(base_dir, "assets", "logo.ico"),
         os.path.join(base_dir, "assets", "logo.png"),
         os.path.join(base_dir, "assets", "logo.svg"),
         os.path.join(base_dir, "app", "ui", "logo.svg"),
     ])
 
-    for p in candidate_icons:
-        if os.path.exists(p):
-            # On Windows, pywebview WinForms only accepts .ico files for window icon.
-            # Passing .svg or unsupported formats will throw ArgumentException in System.Drawing.Icon.
-            if sys.platform == "win32" and not p.lower().endswith(".ico"):
-                continue
-            icon_path = p
+    # Prefer each platform's native icon format: on macOS NSImage renders .icns
+    # with retina representations; .ico is a Windows format and only ships small sizes.
+    if sys.platform == "win32":
+        # pywebview WinForms only accepts .ico files for window icon.
+        # Passing .svg or unsupported formats will throw ArgumentException in System.Drawing.Icon.
+        preferred_exts = (".ico",)
+    elif sys.platform == "darwin":
+        preferred_exts = (".icns", ".png", ".svg")
+    else:
+        preferred_exts = (".png", ".svg", ".icns")
+
+    for ext in preferred_exts:
+        for p in candidate_icons:
+            if p.lower().endswith(ext) and os.path.exists(p):
+                icon_path = p
+                break
+        if icon_path:
             break
 
     window_title = "InkDoc"

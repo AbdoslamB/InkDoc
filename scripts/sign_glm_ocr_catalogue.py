@@ -80,7 +80,7 @@ def every_download(payload: dict) -> list[tuple[str, str, list[dict]]]:
 
 
 def gh(*args: str) -> str:
-    return subprocess.run(["gh", *args], capture_output=True, text=True, check=True).stdout
+    return subprocess.run(["gh", *args], capture_output=True, text=True, encoding="utf-8", check=True).stdout
 
 
 def main() -> int:

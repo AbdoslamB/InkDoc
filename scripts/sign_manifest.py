@@ -191,7 +191,7 @@ def verify_attestations(paths: list[Path], repo: str, run=None) -> None:
     run = run or subprocess.run
     for path in paths:
         res = run(["gh", "attestation", "verify", str(path), "--repo", repo],
-                  capture_output=True, text=True)
+                  capture_output=True, text=True, encoding="utf-8", errors="replace")
         if res.returncode != 0:
             raise RuntimeError(f"Build provenance did not verify for {path.name}:\n{res.stderr or res.stdout}")
         print(f"[OK] Build provenance verified: {path.name}")
@@ -274,10 +274,13 @@ def main() -> int:
     if gh_available:
         try:
             cmd = ["gh", "release", "view", args.tag, "--repo", args.repo, "--json", "isDraft,assets,body,url"]
-            res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            # gh writes UTF-8; Windows' default code page can't decode the notes' ☐ or →.
+            res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", check=True)
             release_info = json.loads(res.stdout)
-        except Exception:
-            pass
+        except Exception as exc:
+            detail = getattr(exc, "stderr", None) or exc
+            print(f"[Warning] gh could not read {args.tag} ({detail}); trying the public API, "
+                  "which can't see a draft.", file=sys.stderr)
 
     if not release_info:
         # Fallback to public GitHub API

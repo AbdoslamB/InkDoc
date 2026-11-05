@@ -256,3 +256,18 @@ def test_the_workflow_runs_the_check_on_every_published_release():
     assert "types: [published]" in text
     assert "python scripts/check_release.py --tag" in text
     assert "permissions:\n  contents: read" in text
+
+
+@pytest.mark.parametrize("script", ["sign_manifest.py", "sign_glm_ocr_catalogue.py"])
+def test_the_signers_read_gh_as_utf8(script):
+    """gh writes UTF-8, but text=True alone decodes with the system's code page (cp1252 on
+    Windows). v1.3.1's notes (☐, →) then broke `gh release view` in the signer, which fell
+    back to the public API and got 404 for the draft."""
+    import ast
+
+    tree = ast.parse((REPO / "scripts" / script).read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            names = {kw.arg for kw in node.keywords}
+            if "text" in names:
+                assert "encoding" in names, f"{script}:{node.lineno} decodes output without an encoding"

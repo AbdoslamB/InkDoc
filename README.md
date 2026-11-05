@@ -48,8 +48,8 @@ Ready-to-run desktop packages with every dependency and runtime bundled — **no
 <p align="center">
   <a href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-setup.exe"><img src="assets/readme/download-windows-setup.svg" width="400" alt="Download InkDoc for Windows: Setup installer (inkdoc-setup.exe)" /></a>
   <a href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc.exe"><img src="assets/readme/download-windows-portable.svg" width="400" alt="Download InkDoc for Windows: Portable executable (inkdoc.exe)" /></a>
-  <a href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-macos.zip"><img src="assets/readme/download-macos.svg" width="400" alt="Download InkDoc for macOS: Apple Silicon application (inkdoc-macos.zip)" /></a>
-  <a href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-linux.zip"><img src="assets/readme/download-linux.svg" width="400" alt="Download InkDoc for Linux: Portable bundle (inkdoc-linux.zip)" /></a>
+  <a href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-macos.dmg"><img src="assets/readme/download-macos.svg" width="400" alt="Download InkDoc for macOS: Apple Silicon disk image (inkdoc-macos.dmg)" /></a>
+  <a href="https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-linux-x86_64.AppImage"><img src="assets/readme/download-linux.svg" width="400" alt="Download InkDoc for Linux: AppImage (inkdoc-linux-x86_64.AppImage)" /></a>
 </p>
 
 <details>
@@ -62,11 +62,37 @@ Ready-to-run desktop packages with every dependency and runtime bundled — **no
 | **Windows 10 / 11** | Setup wizard | x86_64 | Windows 10 build 19041+ (WebView2 built-in) | [`inkdoc-setup.exe`](https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-setup.exe) |
 | **Windows 10 / 11** | Portable executable | x86_64 | Standalone single-file executable | [`inkdoc.exe`](https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc.exe) |
 | **Windows 10 / 11** | Portable ZIP archive | x86_64 | Portable folder bundle | [`inkdoc-windows.zip`](https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-windows.zip) |
-| **macOS** | Application bundle | Apple Silicon (arm64) | macOS 12 Monterey or newer (Apple Silicon M1/M2/M3/M4) | [`inkdoc-macos.zip`](https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-macos.zip) |
-| **Linux** | Portable bundle | x86_64 | Ubuntu 22.04 LTS+ (glibc 2.35+), WebKit2GTK runtime | [`inkdoc-linux.zip`](https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-linux.zip) |
+| **macOS** | Disk image | Apple Silicon (arm64) | macOS 12 Monterey or newer (Apple Silicon M1/M2/M3/M4) | [`inkdoc-macos.dmg`](https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-macos.dmg) |
+| **Linux** | AppImage | x86_64 | Ubuntu 24.04+, Debian 13+, Fedora 40+ (glibc 2.39+), with the distribution's WebKit2GTK 4.1 | [`inkdoc-linux-x86_64.AppImage`](https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-linux-x86_64.AppImage) |
 
 > [!IMPORTANT]
-> **Platform Support Note:** macOS builds are currently native for **Apple Silicon (arm64)** only. Intel Macs (x86_64) are not supported. Windows builds are compiled for **x86_64** (ARM64 Windows devices run x86_64 emulation). Linux builds are compiled and verified on **Ubuntu 22.04 LTS (glibc 2.35+)**.
+> **Platform Support Note:** macOS builds are currently native for **Apple Silicon (arm64)** only. Intel Macs (x86_64) are not supported. Windows builds are compiled for **x86_64** (ARM64 Windows devices run x86_64 emulation). Linux builds are compiled on **Ubuntu 24.04 LTS (glibc 2.39+)** and tested on Ubuntu 24.04, Debian 13 and Fedora 44. Ubuntu 22.04 and other systems older than glibc 2.39 can keep using [InkDoc 1.2.0](https://github.com/AbdoslamB/inkdoc/releases/tag/v1.2.0).
+
+</details>
+
+<details>
+<summary><b>Running the Linux AppImage</b></summary>
+
+<br />
+
+InkDoc's window is your system's own WebKit2GTK, so install it once if it isn't there already:
+
+| Distribution | Package |
+| :--- | :--- |
+| Ubuntu 24.04+, Debian 13+ | `sudo apt install gir1.2-webkit2-4.1` |
+| Fedora 40+ | `sudo dnf install webkit2gtk4.1` (minimal installs also need `gobject-introspection`) |
+| Others | WebKit2GTK 4.1 and GTK 3 with their GObject introspection data (typelibs) |
+
+Then make the download executable and start it (or tick **Allow executing file as program** in the file's Properties):
+
+```bash
+chmod +x inkdoc-linux-x86_64.AppImage
+./inkdoc-linux-x86_64.AppImage
+```
+
+On a system without FUSE, unpack it into a folder of your own and start it from there: `./inkdoc-linux-x86_64.AppImage --appimage-extract`, then `./squashfs-root/AppRun`. Updates downloaded from **Settings → Updates** are made executable for you.
+
+Without WebKit2GTK, InkDoc opens the same interface in your web browser instead and says what to install. It then keeps running without a window until you stop it with `pkill -f inkdoc` (or Ctrl+C when started from a terminal); starting it again just reopens the browser tab.
 
 </details>
 
@@ -91,12 +117,12 @@ The Windows uninstaller asks whether to remove them (Docling and GLM-OCR, with t
 > **Windows SmartScreen:** InkDoc's Windows builds aren't code-signed yet, so Windows may show "Windows protected your PC" on first run. Verify your download below, then choose **More info → Run anyway**.
 
 > [!NOTE]
-> **macOS First Run (Unsigned Application):** InkDoc macOS builds are currently unsigned. On first launch, macOS Gatekeeper may show a warning ("cannot be opened because the developer cannot be verified"). To open the application:
+> **macOS First Run (Unsigned Application):** Open `inkdoc-macos.dmg`, drag `inkdoc` onto the **Applications** folder beside it, then eject the disk image. InkDoc macOS builds are currently unsigned, so on first launch macOS Gatekeeper may show a warning ("cannot be opened because the developer cannot be verified"). To open the application:
 > - **macOS 15 Sequoia and later:** Try to open `inkdoc.app` once, then go to **System Settings → Privacy & Security**, scroll to the message about InkDoc, and click **Open Anyway**. Right-click → Open no longer bypasses the warning on these versions.
 > - **macOS 14 and earlier:** In Finder, **right-click (or Control-click)** `inkdoc.app`, select **Open**, and click **Open** in the confirmation dialog.
 > - **Terminal:** Remove the quarantine attribute recursively:
 >   ```bash
->   xattr -dr com.apple.quarantine inkdoc.app
+>   xattr -dr com.apple.quarantine /Applications/inkdoc.app
 >   ```
 
 <details open>
@@ -111,7 +137,7 @@ InkDoc features a security-first update workflow designed to protect users again
 - **Pre-execution Re-hashing & Disk Checks:** Downloads stream with HTTP Range-resume support and verify 2.5× required disk headroom. Downloaded files are verified against the manifest's SHA-256 digest upon completion and re-hashed immediately prior to execution.
 - **Platform-Specific Update Scope:**
   - **Windows Installer (`inkdoc-setup.exe`):** Silent in-app background upgrade (`/VERYSILENT /SUPPRESSMSGBOXES /NORESTART`) followed by clean process termination and relaunch.
-  - **Windows Portable, macOS (arm64), Linux (x86_64):** Verified download directly to `~/Downloads` (`.part` streaming followed by atomic rename), with a one-click **Reveal in Folder** option.
+  - **Windows Portable, macOS (arm64), Linux (x86_64):** Verified download directly to `~/Downloads` (`.part` streaming followed by atomic rename), with a one-click **Reveal in Folder** option. On Linux the verified AppImage is made executable, and an update that needs a newer glibc than the system's is not offered.
 - **Manual Rollback Policy:** The Windows installer path executes an in-place upgrade without automatic rollback. If an issue occurs after an update, users can manually roll back at any time by downloading and installing any prior release from the [GitHub Releases](https://github.com/AbdoslamB/inkdoc/releases) archive.
 - **macOS Gatekeeper & Quarantine:** InkDoc builds are unsigned. The updater strictly preserves macOS quarantine attributes and does not strip quarantine. If Gatekeeper blocks execution, right-click `inkdoc.app` and choose **Open**, or run:
   ```bash
@@ -129,7 +155,7 @@ Get-FileHash .\inkdoc-setup.exe -Algorithm SHA256
 
 ```bash
 # macOS / Linux
-shasum -a 256 inkdoc-macos.zip
+shasum -a 256 inkdoc-macos.dmg
 ```
 
 Verify build provenance attestations generated by GitHub Actions:
@@ -162,7 +188,7 @@ gh attestation verify inkdoc-setup.exe --repo AbdoslamB/inkdoc
       <br />
       <b>Single Source of Truth Interface</b>
       <br />
-      The native desktop executable (Edge WebView2 on Windows, WebKit on macOS/Linux) and the local web workbench (<code>http://127.0.0.1:13118/InkDoc</code>) run the <b>exact same user interface</b> without code divergence. On large screens, <b>Settings → General → Layout width</b> (Standard, Wide or Full) gives tables, code and images more room, and <b>A− / A+</b> set the preview's text size. LaTeX formulas from Docling and GLM-OCR are drawn as real math (bundled KaTeX, works offline; switch it off in <b>Settings → Add-ons</b>).
+      The native desktop executable (Edge WebView2 on Windows, WebKit on macOS/Linux) and the local web workbench (<code>http://127.0.0.1:13118/InkDoc</code>) run the <b>exact same user interface</b> without code divergence. On large screens, <b>Settings → General → Layout width</b> (Standard, Wide or Full) gives tables, code and images more room, and <b>A− / A+</b> set the preview's text size. The <b>Original</b> switch next to Rendered and Raw shows a PDF's pages or an image beside its Markdown, to check tables and numbers against the source. LaTeX formulas from Docling and GLM-OCR are drawn as real math (bundled KaTeX, works offline; switch it off in <b>Settings → Add-ons</b>). Engines you don't use can be hidden from the main screen (<b>Settings → Engines → Show on main screen</b>) without uninstalling them or changing Auto, your theme, engine and other preferences are remembered between launches, and <b>Settings → General → Restore defaults</b> puts them back without touching engines, add-ons or files. MarkItDown runs in a background process that starts when you're about to convert and closes when idle, so InkDoc stays light while you aren't converting.
     </td>
   </tr>
   <tr>
@@ -171,7 +197,7 @@ gh attestation verify inkdoc-setup.exe --repo AbdoslamB/inkdoc
       <br />
       <b>Zero-Friction Auto-Save</b>
       <br />
-      Documents convert asynchronously and are <b>automatically saved to <code>~/Downloads</code></b>, or to a folder you pick in Settings, the moment they finish, with collision-safe numbered suffixes (e.g., <code>report (1).md</code>). No manual export required. If the chosen folder is missing or read-only, the file goes to Downloads and InkDoc tells you.
+      With <b>Auto-save</b> on (Settings → General; remembered between launches), documents convert asynchronously and are <b>automatically saved to <code>~/Downloads</code></b>, or to a folder you pick in Settings, the moment they finish, with collision-safe numbered suffixes (e.g., <code>report (1).md</code>). No manual export required. If the chosen folder is missing or read-only, the file goes to Downloads and InkDoc tells you.
     </td>
     <td width="50%" valign="top">
       <img src="assets/readme/feature-api.svg" width="44" alt="" />
@@ -240,6 +266,27 @@ After every PDF conversion, with any engine, InkDoc compares the Markdown with t
 
 When Auto's first result fails the check and Docling is installed, Auto converts once more with Docling and keeps the better result, and says so. That is the only automatic re-run: with an explicitly chosen engine, InkDoc warns and leaves the choice to you.
 
+### Table check (Auto quality)
+
+Complex tables are where every engine slips: side-by-side tables merged into one, merged cells shifted, tables that come out as loose lines or as a picture, shapes in cells dropped. **Settings → General → Auto quality** sets how hard InkDoc checks:
+
+- **Fast** (the default): conversions are exactly as before.
+- **Balanced**: after a PDF conversion InkDoc reads the PDF's own tables, from their ruling lines and the text layer, and compares them with the result. With **Auto**, a table the engine got wrong is rebuilt from the PDF. It is rebuilt only when every word of the PDF inside it lands in one of its cells, and it is marked in the saved file with `<!-- inkdoc:table page=3 source=pdf-lines checked=text-layer -->`. With other engines InkDoc only warns.
+- **Thorough**: the best result InkDoc can make, at the cost of speed. A digital PDF is read with Docling, which follows the page layout (columns, sidebars, side-by-side tables), instead of MarkItDown, which interleaves them. Long PDFs go in 12-page parts. Without Docling, GLM-OCR is used. Then InkDoc repairs what the engine missed, all from the PDF's own text:
+  - **Charts:** a chart's labels and values are added; a labelled bar chart becomes a table.
+  - **Rating grids:** grids drawn with coloured markers (Underweight … Overweight, with ◀ ▶ change arrows) are read from the markers and written as a table.
+  - **Dropped paragraphs:** whole paragraphs the engine left out are put back.
+  - **Simplified characters:** `&`, dashes and quotes are restored.
+  - **Mixed PDFs:** with GLM-OCR installed too, pages are split: Docling reads the text pages, GLM-OCR the scanned ones.
+  - **Tables without lines:** found from word positions and rebuilt only when GLM-OCR's reading of that area agrees.
+  - **Tables on scanned pages:** with GLM-OCR and the layout model (Settings → Add-ons; the Docling engine already includes it), each table on a scanned page is found and read again on its own. A table GLM-OCR wrote as plain lines, merged with its neighbour or with a shifted header comes out as a table, but only when the second reading holds the same words. On InkDoc's table test pages scanned at 200 DPI, tables read exactly went from 4 to 9 of 13, with no invented cells.
+
+  On an 8-page investment report with two columns, side-by-side tables, rating grids and charts, Thorough found 97.5% of the PDF's words and filled 292 table cells. GLM-OCR found 89.6% and filled 217, and left the ratings and chart values out. The rest was page footers.
+
+  Each of these is a step you can switch off under **Auto quality → Steps**. A step that needs an engine you haven't installed is greyed out, with a button to install it.
+
+Rebuilt tables are plain Markdown. Merged cells are repeated and stacked headers flattened ("Revenue 2023"). Shapes in cells are named by what is drawn ("[green shape]", "[3 blue shapes]"). On InkDoc's table test pages at Thorough, tables read exactly went from 2 to 12 of 12 with MarkItDown, from 3 to 12 of 12 with Docling and from 6 to 11 of 12 with GLM-OCR, with no invented cells.
+
 <br />
 
 ## <a id="formats"></a>Supported Document Formats
@@ -251,7 +298,7 @@ Each format has a recommended engine, which is what **Auto** uses, and you can a
 | 📊 | **Office documents** | Microsoft Word (`.docx`), Excel (`.xlsx`), PowerPoint (`.pptx`), CSV, TSV | `MarkItDown` |
 | 📕 | **PDFs & scanned docs** | Native PDF, scanned PDF (with OCR), multi-column articles, research papers | `MarkItDown` for digital PDFs, `GLM-OCR` or `Docling` for scanned pages |
 | 💻 | **Developer & data** | Jupyter Notebooks (`.ipynb`), YAML (`.yaml`, `.yml`), JSON, XML | `Markit` for YAML and XML, `MarkItDown` for notebooks and JSON |
-| 📚 | **Publications & web** | EPUB e-books, web URLs, YouTube links (transcripts are fetched from YouTube) | `MarkItDown` |
+| 📚 | **Publications & web** | EPUB e-books, web URLs (a page built with JavaScript, such as a job board, is read from the copy it carries for search engines), YouTube links (transcripts are fetched from YouTube) | `MarkItDown` |
 | 🎙️ | **Audio recordings** | WAV, MP3, M4A (speech-to-text through Google's speech-recognition service; MP3 and M4A also need ffmpeg) | `MarkItDown` |
 | 🖼️ | **Images & photos** | PNG, JPEG, TIFF, BMP, WebP, GIF (EXIF metadata & technical attributes) | `GLM-OCR` or `Docling` for OCR when installed, otherwise `MarkItDown` |
 
@@ -313,7 +360,7 @@ InkDoc ships with an embedded REST API for automated pipelines, agents, and deve
 
 | Endpoint | What it does |
 | :--- | :--- |
-| `POST /convert/file` | Upload a file (multipart). Choose an engine with `?engine=` (`markitdown`, `docling`, `markit`, `glm_ocr` or `auto`) and auto-save with `?save_to_downloads=true` (into the save folder chosen in Settings, `~/Downloads` by default). JSON responses include the missing-text check (`quality`) and Auto's choice (`auto`). |
+| `POST /convert/file` | Upload a file (multipart). Choose an engine with `?engine=` (`markitdown`, `docling`, `markit`, `glm_ocr` or `auto`) and auto-save with `?save_to_downloads=true` (into the save folder chosen in Settings, `~/Downloads` by default). JSON responses include the missing-text check (`quality`), Auto's choice (`auto`) and, with `?auto_quality=balanced` or `thorough`, the table check (`tables`). |
 | `POST /convert/url` | Convert a web page from a JSON body: `{"url": "...", "save_to_downloads": true}`. |
 | `GET /convert/progress/{job_id}` | Live phase of a conversion started with `?job_id=`; `POST /convert/cancel/{job_id}` stops it. |
 | `GET /docs` | Interactive OpenAPI (Swagger) UI. |
@@ -361,6 +408,8 @@ inkdoc/
 │   │   ├── auto_engine.py     # Auto engine: per-file routing & verified Docling retry
 │   │   ├── pdf_probe.py       # Fast PDF text-layer & scanned-page probe (pypdfium2)
 │   │   ├── quality_check.py   # Missing-text check for PDF conversions
+│   │   ├── table_stage.py     # Table check: find (table_finder.py), compare & rebuild (table_check.py)
+│   │   ├── markdown_tables.py # Reading & writing Markdown tables (merged cells, stacked headers)
 │   │   ├── jobs.py            # Conversion progress & cancel registry
 │   │   ├── glm_ocr_catalogue.py  # GLM-OCR pins, hashes & sources (+ signed online catalogue)
 │   │   ├── glm_ocr_manager.py    # GLM-OCR download (upstream → mirror), self-test, update, remove
@@ -377,6 +426,8 @@ inkdoc/
 ├── scripts/                   # Build, release & calibration tooling
 ├── examples/                  # Developer client scripts & cURL examples
 ├── docs/                      # GitHub Pages landing page website
+├── guides/                    # Developer guides, one per area of the code
+├── AGENTS.md                  # What every change needs, and which guide to read
 ├── API.md                     # Dedicated REST API reference manual
 ├── CONTRIBUTING.md            # Contribution guidelines & security policy
 ├── main.py                    # Unified entry point (Desktop GUI or --headless)
@@ -397,20 +448,8 @@ python -m compileall -q main.py app tests examples scripts
 # 2. Run the whole test suite, exactly as CI does
 python -m pytest tests/
 
-# 3. UI logic tests (need Node.js; CI runs them on Linux)
-node tests/auto_engine_ui.test.js
-node tests/docs_release_selector.test.js
-node tests/enrichment_addon_ui.test.js
-node tests/glm_ocr_ui.test.js
-node tests/preview_word_count.test.js
-node tests/desktop_download_ui.test.js
-node tests/save_folder_ui.test.js
-node tests/preview_links_ui.test.js
-node tests/theme_toggle_ui.test.js
-node tests/settings_drawer_ui.test.js
-node tests/layout_width_ui.test.js
-node tests/text_size_ui.test.js
-node tests/math_render_ui.test.js
+# 3. UI logic tests (need Node.js; CI runs every tests/*.test.js on Linux)
+(for t in tests/*.test.js; do node "$t" || exit 1; done)
 
 # 4. Verify code style and formatting with Ruff
 ruff check .
@@ -425,7 +464,9 @@ ruff check .
 Contributions, bug reports, and feature proposals are welcome.
 
 - Review **[`CONTRIBUTING.md`](CONTRIBUTING.md)** for architecture guidelines, pull request protocols, and test requirements.
-- Report security vulnerabilities confidentially via the **[Security Policy](CONTRIBUTING.md#6-security-policy)**.
+- Using AI tools to contribute? They're welcome; read the **[AI Policy](AI_POLICY.md)** first.
+- Report security vulnerabilities confidentially via the **[Security Policy](SECURITY.md)**.
+- Built with love by one independent developer. If InkDoc saves you time, you can **[buy me a coffee](https://buymeacoffee.com/abdoslamb)**.
 
 <br />
 

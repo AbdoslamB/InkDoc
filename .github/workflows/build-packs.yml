@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Dedicated release tag to publish packs to (e.g. docling-pack-v1)"
+        description: "Dedicated release tag to publish packs to (e.g. docling-pack-v2)"
         required: true
-        default: "docling-pack-v1"
+        default: "docling-pack-v2"
 
 permissions:
   contents: write
@@ -17,7 +17,7 @@ permissions:
   attestations: write
 
 env:
-  DEFAULT_RELEASE_TAG: "docling-pack-v1"
+  DEFAULT_RELEASE_TAG: "docling-pack-v2"
 
 jobs:
   build-pack:

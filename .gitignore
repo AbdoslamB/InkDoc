@@ -33,4 +33,6 @@ CLAUDE.md
 
 # Smoke test and scratch artifacts
 scratch/
+# Private benchmark documents and their recordings (benchmarks/README.md)
+benchmarks/local/
 smoke-logs/

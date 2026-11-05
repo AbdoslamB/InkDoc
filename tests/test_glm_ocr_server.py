@@ -491,3 +491,94 @@ def test_thread_count_suits_the_machine(monkeypatch, cpus, platform, expected):
     monkeypatch.setattr(gs.os, "cpu_count", lambda: cpus)
     monkeypatch.setattr(gs.sys, "platform", platform)
     assert gs.default_threads() == expected
+
+
+def test_high_detail_restarts_with_a_larger_context_only_while_it_needs_one(runtime, monkeypatch):
+    srv = _server(runtime, monkeypatch)
+    ctx = lambda argv: int(argv[argv.index("--ctx-size") + 1])  # noqa: E731
+    try:
+        srv.ocr("data:image/png;base64,AA", "Text Recognition:", 1024)
+        srv.use_context(24576)
+        srv.ocr("data:image/png;base64,AA", "Table Recognition:", 1024)
+        srv.use_context(0)
+        srv.ocr("data:image/png;base64,AA", "Text Recognition:", 1024)
+        assert [ctx(a) for a in launches(runtime)] == [8192, 24576], "restarted once, then kept"
+        assert srv.running_context() == 24576
+        srv.shutdown()
+        srv.ocr("data:image/png;base64,AA", "Text Recognition:", 1024)
+        assert ctx(launches(runtime)[-1]) == 8192, "the next start is the default again"
+    finally:
+        srv.shutdown()
+
+
+def test_free_memory_is_read_or_unknown():
+    free = gs.available_memory_bytes()
+    assert free is None or free > 0
+
+
+def test_a_request_in_flight_is_stopped_by_a_cancel_and_not_retried(runtime, monkeypatch):
+    from app.core.jobs import ConversionCancelledError
+
+    configure(runtime, first_delay=30.0)                                 # the first request takes 30 s
+    srv = _server(runtime, monkeypatch)
+    try:
+        outcome: dict = {}
+
+        def read() -> None:
+            try:
+                srv.ocr("data:image/png;base64,AA", "Table Recognition:", 1024, area=True, timeout_s=600)
+            except BaseException as exc:  # noqa: BLE001 - the test looks at which one
+                outcome["error"] = exc
+            outcome["ended"] = time.monotonic()
+
+        started = time.monotonic()
+        worker = threading.Thread(target=read)
+        worker.start()
+        deadline = time.monotonic() + 60                                     # slow runners start slowly
+        while not requests_made(runtime) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert requests_made(runtime), "the request never reached the server"
+        cancelled_at = time.monotonic()                                      # macOS CI: 16 s or more to here
+        srv.abort_request()
+        worker.join(timeout=20)
+        assert not worker.is_alive(), "the request kept running after the cancel"
+        assert isinstance(outcome.get("error"), ConversionCancelledError)
+        stopped_after = outcome["ended"] - cancelled_at
+        assert stopped_after < 15, (
+            f"stopped {stopped_after:.1f} s after the cancel (the server started in {cancelled_at - started:.1f} s)"
+        )
+        assert len(launches(runtime)) == 1, "a cancelled request is not restarted"
+        assert not srv.is_running()
+        srv.abort_request()   # nothing in flight: does nothing
+    finally:
+        srv.shutdown()
+
+
+def test_a_cancel_while_the_server_starts_stops_the_request_before_it_is_sent(runtime, monkeypatch):
+    from app.core.jobs import ConversionCancelledError
+
+    configure(runtime, load_seconds=3.0, first_delay=30.0)              # loading for 3 s after launch
+    srv = _server(runtime, monkeypatch)
+    try:
+        outcome: dict = {}
+
+        def read() -> None:
+            try:
+                srv.ocr("data:image/png;base64,AA", "Table Recognition:", 1024, area=True, timeout_s=600)
+            except BaseException as exc:  # noqa: BLE001 - the test looks at which one
+                outcome["error"] = exc
+
+        worker = threading.Thread(target=read)
+        worker.start()
+        deadline = time.monotonic() + 60
+        while not launches(runtime) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert launches(runtime) and not requests_made(runtime), "the server is still starting"
+        srv.abort_request()
+        worker.join(timeout=60)
+        assert not worker.is_alive(), "the request kept running after the cancel"
+        assert isinstance(outcome.get("error"), ConversionCancelledError)
+        assert not requests_made(runtime), "a cancelled request is never sent"
+        assert len(launches(runtime)) == 1 and not srv.is_running()
+    finally:
+        srv.shutdown()

@@ -21,6 +21,7 @@ import io
 import logging
 import math
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -70,12 +71,12 @@ def estimate_image_tokens(width: int, height: int) -> int:
     return math.ceil(width / PIXELS_PER_TOKEN_SIDE) * math.ceil(height / PIXELS_PER_TOKEN_SIDE) + 2
 
 
-def output_budget(ctx_size: int, image_tokens: int) -> int | None:
-    """max_tokens for a page, clamped to [1024, 4096]; None when the page cannot fit."""
+def output_budget(ctx_size: int, image_tokens: int, max_tokens: int = MAX_OUTPUT_TOKENS) -> int | None:
+    """max_tokens for a page, clamped to [1024, max_tokens]; None when the page cannot fit."""
     room = ctx_size - image_tokens - PROMPT_OVERHEAD_TOKENS
     if room < MIN_OUTPUT_TOKENS:
         return None
-    return min(MAX_OUTPUT_TOKENS, room)
+    return min(max_tokens, room)
 
 
 def scaled_size(width: int, height: int, long_side: int) -> tuple[int, int]:
@@ -86,11 +87,76 @@ def scaled_size(width: int, height: int, long_side: int) -> tuple[int, int]:
     return max(1, round(width * factor)), max(1, round(height * factor))
 
 
+REPLAY_MIN_LINES = 8          # a page's last lines replaying this many of its earlier ones...
+REPLAY_MIN_CHARS = 12         # ...counting lines this long (short ones repeat in any document)
+REPLAY_SHARE = 0.8            # ...this share of them, mostly in the same order
+
+
+def _line_keys(lines: list[str]) -> list[str]:
+    return [" ".join(ln.split()).lower() for ln in lines]
+
+
+def _replay(lines: list[str]) -> tuple[int, int] | None:
+    """(the line where the text starts over, the first line after the replay that adds something).
+
+    The model writes the page's list a second time: from a line that repeats an
+    earlier one, the rest mostly repeats earlier lines in their order. What it
+    writes after its copy of the earlier text ends (the page's last entries the
+    first pass never reached) is new.
+    """
+    keys = _line_keys(lines)
+    long_lines = [i for i, k in enumerate(keys) if len(k) >= REPLAY_MIN_CHARS]
+    if len(long_lines) < 2 * REPLAY_MIN_LINES:
+        return None
+    best: tuple[int, set[str]] | None = None
+    for n in range(len(long_lines) - REPLAY_MIN_LINES, REPLAY_MIN_LINES - 1, -1):
+        start = long_lines[n]
+        earlier = {keys[i] for i in long_lines[:n]}
+        if keys[start] not in earlier:
+            continue     # the replay starts with a repeated line (it may misread some inside)
+        first: dict[str, int] = {}
+        for i in long_lines[:n]:
+            first.setdefault(keys[i], i)
+        tail = long_lines[n:]
+        # The replay ends with its last repeated line; what comes after is new and doesn't count.
+        last = max(k for k, i in enumerate(tail) if keys[i] in first)
+        tail = tail[:last + 1]
+        where = [first[keys[i]] for i in tail if keys[i] in first]
+        if len(tail) < REPLAY_MIN_LINES or len(where) < REPLAY_SHARE * len(tail):
+            if best is not None:
+                break
+            continue
+        in_order = sum(1 for a, b in zip(where, where[1:], strict=False) if b > a)
+        if in_order >= REPLAY_SHARE * max(1, len(where) - 1):
+            best = (start, earlier)   # keep going back: the replay may start earlier
+    if best is None:
+        return None
+    start, earlier = best
+    repeated = [i for i in long_lines if i >= start and keys[i] in earlier]
+    return start, repeated[-1] + 1
+
+
+def _replayed_block_start(lines: list[str]) -> int | None:
+    found = _replay(lines)
+    return found[0] if found else None
+
+
+def drop_replay(text: str) -> str:
+    """`text` without the model's second pass over it, keeping what that pass adds at its end."""
+    lines = text.split("\n")
+    found = _replay(lines)
+    if found is None:
+        return text
+    start, resume = found
+    return "\n".join(lines[:start] + lines[resume:])
+
+
 def find_repetition_start(text: str) -> int | None:
     """Index where a trailing loop starts, or None when the text does not end in one.
 
-    Two shapes: the same non-empty line many times in a row, and a short unit of
-    characters repeated back to back (the model stuck on "| | | |" or a word).
+    Three shapes: the same non-empty line many times in a row, the page's last
+    lines replaying its earlier ones in order (the model starting the page over),
+    and a short unit of characters repeated back to back (stuck on "| | | |").
     """
     lines = text.rstrip().split("\n")
     if len(lines) >= REPEAT_MIN_RUN:
@@ -105,6 +171,9 @@ def find_repetition_start(text: str) -> int | None:
             if run >= REPEAT_MIN_RUN:
                 keep = len(lines) - run + 1           # keep one copy of the line
                 return len("\n".join(lines[:keep]))
+    block = _replayed_block_start(lines)
+    if block is not None:
+        return len("\n".join(lines[:block]))
     stripped = text.rstrip()
     for period in range(1, REPEAT_PERIOD_MAX + 1):
         span = period * REPEAT_PERIOD_MIN_COPIES
@@ -122,13 +191,45 @@ def find_repetition_start(text: str) -> int | None:
 
 
 def clean_page_output(text: str) -> str:
-    """Strip a Markdown code fence the model sometimes wraps its whole answer in."""
+    """Strip a Markdown code fence the model sometimes wraps its whole answer in, and mend its table rows."""
     t = text.strip()
     if t.startswith("```"):
         first_nl = t.find("\n")
         if first_nl != -1 and t.endswith("```"):
             t = t[first_nl + 1:-3].strip()
-    return t
+    return join_table_rows(t)
+
+
+ROW_MAX_LINES = 8              # a table row continued on more lines than this is not one row
+
+
+def join_table_rows(text: str) -> str:
+    """Pipe-table rows the model broke inside a cell ("| **Unit 1**  " / "*Page 1* | ... |") as one row.
+
+    A line that opens a row with "|" but doesn't close it goes on until a line
+    that does; the breaks inside the cell become "<br>". Anything else stays.
+    """
+    lines = text.split("\n")
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        if stripped.startswith("|") and not stripped.endswith("|") and stripped.count("|") >= 1:
+            parts = [stripped]
+            j = i + 1
+            while j < len(lines) and j - i <= ROW_MAX_LINES and lines[j].strip() and not lines[j].strip().startswith("|"):
+                parts.append(lines[j].strip())
+                if lines[j].strip().endswith("|"):
+                    break
+                j += 1
+            if parts[-1].endswith("|") and len(parts) > 1:
+                out.append("<br>".join(p.rstrip() for p in parts))
+                i = j + 1
+                continue
+        out.append(line)
+        i += 1
+    return "\n".join(out)
 
 
 # ─── Page sources ────────────────────────────────────────────────────────────
@@ -286,13 +387,18 @@ def convert_with_glm_ocr(item: QueueItem, options: ConversionOptions) -> str:
     job = getattr(options, "job", None) or NULL_JOB
     server = GlmOcrServer.get_instance()
     pages = open_pages(item.source)
-    total = pages.count
     long_side = mgr.render_long_side()
     ctx_size = DEFAULT_CTX_SIZE
     token_factor = 1.0          # actual / estimated image tokens, learned from page 1
     results: list[str] = []
     warnings: list[str] = []
     page_seconds: list[float] = []
+    # Auto's page split reads only some pages (1-based); labels keep their numbers.
+    subset = getattr(options, "page_subset", None)
+    indices = (
+        [p - 1 for p in subset if 1 <= p <= pages.count] if subset else list(range(pages.count))
+    )
+    total = len(indices)
 
     try:
         if total <= 0:
@@ -301,21 +407,23 @@ def convert_with_glm_ocr(item: QueueItem, options: ConversionOptions) -> str:
         if cold:
             job.set_phase("starting", "Starting GLM-OCR…", engine="glm_ocr")
         job.set_pages(0, total)
-        for index in range(total):
+        for position, index in enumerate(indices):
             job.raise_if_cancelled()
-            job.set_phase(
-                "converting",
-                f"Reading page {index + 1} of {total} with GLM-OCR…" if total > 1 else "Reading with GLM-OCR…",
-                engine="glm_ocr",
-            )
+            if subset:
+                message = f"Reading page {index + 1} ({position + 1} of {total}) with GLM-OCR…"
+            elif total > 1:
+                message = f"Reading page {index + 1} of {total} with GLM-OCR…"
+            else:
+                message = "Reading with GLM-OCR…"
+            job.set_phase("converting", message, engine="glm_ocr")
             started = time.time()
             text, token_factor = _read_page(
-                server, pages, index, total, long_side, ctx_size, token_factor, warnings, image_to_data_uri,
+                server, pages, index, pages.count, long_side, ctx_size, token_factor, warnings, image_to_data_uri,
             )
-            if not (cold and index == 0):     # the first page after a cold start also loads the model
+            if not (cold and position == 0):  # the first page after a cold start also loads the model
                 page_seconds.append(time.time() - started)
             results.append(text)
-            job.set_pages(index + 1, total)
+            job.set_pages(position + 1, total)
     except GlmOcrServerError as exc:
         # Its messages are written for the user ("did not become ready within 90
         # seconds", "needs the Visual C++ Redistributable").
@@ -364,6 +472,13 @@ def _read_page(
         token_factor = max(0.2, min(3.0, result.prompt_tokens / max(1.0, est / token_factor)))
 
     text = result.text
+    # A second pass over the page is cut out exactly (its new end kept); a retry would
+    # read the page differently, not better.
+    if result.finish_reason != "length":
+        mended = drop_replay(text)
+        if mended != text:
+            warnings.append(f"{label}: the model read part of the page twice; the second reading was left out.")
+            text = mended
     looped = result.finish_reason == "length" or find_repetition_start(text) is not None
     if looped:
         logger.info("GLM-OCR %s hit its limit or repeated itself; retrying with a repeat penalty.", label.lower())
@@ -372,11 +487,204 @@ def _read_page(
         cut = find_repetition_start(text)
         if cut is not None or retry.finish_reason == "length":
             if cut is not None:
-                text = text[:cut]
+                # A second pass over the page keeps the entries it adds at its end.
+                text = drop_replay(text) if _replay(text.rstrip().split("\n")) else text[:cut]
             warnings.append(
                 f"{label}: the model started repeating itself, so the text after that point was dropped."
             )
     return clean_page_output(text), token_factor
+
+
+# ─── One table area (the table check's second reading) ───────────────────────
+TABLE_PROMPT = "Table Recognition:"
+CROP_PAD_PT = 6.0
+MAX_CROP_SCALE = 4.0          # small tables are enlarged, but not without limit
+
+
+def render_region(path: str, page: int, bbox: list[float], long_side: int) -> Any:
+    """An RGB image of one area of a PDF page, or of an image file's frame.
+
+    `bbox` is (x0, top, x1, bottom) in points from the top-left corner (the
+    table finder's coordinates); for an image file, in its pixels (the layout
+    model's, layout_model.image_frame). The page is cut down to the area before
+    rendering, so a small table costs a small image. pdfium lock held.
+    """
+    import pypdfium2 as pdfium
+
+    from app.core.pdf_probe import is_pdf, pdfium_lock
+
+    x0, top, x1, bottom = (float(v) for v in bbox)
+    if not is_pdf(path):
+        return _image_region(path, page, (x0, top, x1, bottom), long_side)
+    with pdfium_lock():
+        doc = pdfium.PdfDocument(path)
+        try:
+            pg = doc[page - 1]
+            try:
+                width, height = pg.get_size()
+                left = max(0.0, x0 - CROP_PAD_PT)
+                right = max(0.0, width - (x1 + CROP_PAD_PT))
+                upper = max(0.0, top - CROP_PAD_PT)
+                lower = max(0.0, height - (bottom + CROP_PAD_PT))
+                area_w = max(1.0, width - left - right)
+                area_h = max(1.0, height - upper - lower)
+                scale = min(MAX_CROP_SCALE, long_side / max(area_w, area_h))
+                bitmap = pg.render(scale=scale, crop=(left, lower, right, upper))
+                try:
+                    return bitmap.to_pil().convert("RGB")
+                finally:
+                    bitmap.close()
+            finally:
+                pg.close()
+        finally:
+            doc.close()
+
+
+def _image_region(path: str, page: int, box: tuple[float, float, float, float], long_side: int) -> Any:
+    """One area of an image file's frame, enlarged up to MAX_CROP_SCALE (a small scan reads better larger)."""
+    from PIL import Image
+
+    from app.core.engines.layout_model import image_frame
+
+    frame = image_frame(path, page)
+    if frame is None:
+        raise ValueError(f"the image has no frame {page}")
+    x0, top, x1, bottom = box
+    area = frame.crop((
+        max(0, int(x0 - CROP_PAD_PT)), max(0, int(top - CROP_PAD_PT)),
+        min(frame.width, int(math.ceil(x1 + CROP_PAD_PT))), min(frame.height, int(math.ceil(bottom + CROP_PAD_PT))),
+    ))
+    scale = min(MAX_CROP_SCALE, long_side / max(1, area.width, area.height))
+    if abs(scale - 1.0) > 0.01:
+        area = area.resize((max(1, round(area.width * scale)), max(1, round(area.height * scale))), Image.LANCZOS)
+    return area
+
+
+def table_rows_from_output(text: str) -> list[list[str]] | None:
+    """The rows of the first table in a model answer (HTML or pipe), InkDoc's way; None if none."""
+    from app.core.markdown_tables import find_table_blocks, parse_html_cells, to_markdown_grid
+
+    text = clean_page_output(text)
+    if "<table" in text.lower():
+        cells, n_rows, n_cols = parse_html_cells(text)
+        _captions, rows = to_markdown_grid(cells, n_rows, n_cols)
+        return rows or None
+    blocks = find_table_blocks(text.split("\n"))
+    return blocks[0].rows if blocks else None
+
+
+# High detail: a dense table read whole at about its own size, with the larger context the
+# server takes for it (glm_ocr_server.HIGH_DETAIL_*). Only where it is offered and chosen.
+HIGH_DETAIL_LONG_SIDE = 2800
+DETAIL_NORMAL = "normal"
+DETAIL_HIGH = "high"
+
+
+@dataclass
+class TableReading:
+    """One table area as GLM-OCR read it."""
+
+    rows: list[list[str]] | None        # None: no table (none there, a loop, or no room)
+    too_large: bool = False             # the answer ran out of room: high detail may read it
+    seconds: float = 0.0
+
+
+def read_table_area(path: str, page: int, bbox: list[float], *, detail: str = DETAIL_NORMAL) -> TableReading:
+    """GLM-OCR's reading of one table area, and whether it was too large to finish.
+
+    `detail` "high" reads it at up to HIGH_DETAIL_LONG_SIDE pixels with the server's
+    high-detail context, answer length and time limit; the caller has checked that
+    the computer can (glm_ocr_manager.high_detail_available).
+    """
+    from app.core.engines.glm_ocr_server import (
+        DEFAULT_CTX_SIZE,
+        HIGH_DETAIL_CTX_SIZE,
+        HIGH_DETAIL_MAX_OUTPUT,
+        HIGH_DETAIL_TIMEOUT_S,
+        GlmOcrServer,
+        image_to_data_uri,
+    )
+    from app.core.glm_ocr_manager import GlmOcrManager
+
+    mgr = GlmOcrManager.get_instance()
+    if not mgr.is_usable():
+        return TableReading(None)
+    high = detail == DETAIL_HIGH
+    ctx = HIGH_DETAIL_CTX_SIZE if high else DEFAULT_CTX_SIZE
+    longest = HIGH_DETAIL_MAX_OUTPUT if high else MAX_OUTPUT_TOKENS
+    side = HIGH_DETAIL_LONG_SIDE if high else mgr.render_long_side()
+    for _attempt in range(MAX_RERENDERS + 1):
+        img = render_region(path, page, bbox, side)
+        budget = output_budget(ctx, estimate_image_tokens(img.width, img.height), longest)
+        if budget is not None:
+            break
+        side = int(side * RERENDER_FACTOR)
+    else:
+        return TableReading(None, too_large=not high)
+    server = GlmOcrServer.get_instance()
+    started = time.monotonic()
+    if high:
+        server.use_context(ctx)
+    try:
+        result = server.ocr(
+            image_to_data_uri(_png_bytes(img)), TABLE_PROMPT, budget, area=True,
+            timeout_s=HIGH_DETAIL_TIMEOUT_S if high else None,
+        )
+    finally:
+        if high:
+            server.use_context(0)    # the next start is the default context again
+    took = time.monotonic() - started
+    if result.finish_reason == "length":
+        return TableReading(None, too_large=True, seconds=took)
+    if find_repetition_start(result.text) is not None:
+        return TableReading(None, seconds=took)
+    return TableReading(table_rows_from_output(result.text), seconds=took)
+
+
+def read_table_region(path: str, page: int, bbox: list[float]) -> list[list[str]] | None:
+    """GLM-OCR's reading of one table area, as rows (header first); None if it read no table.
+
+    Used by the table check at Thorough as an independent second reading of a
+    table found from word positions (app/core/table_stage.confirm_tables).
+    An answer that loops or runs out of room counts as no reading.
+    """
+    return read_table_area(path, page, bbox).rows
+
+
+FORMULA_PROMPT = "Formula Recognition:"
+
+
+def _read_region(path: str, page: int, bbox: list[float], prompt: str) -> str | None:
+    """GLM-OCR's answer for one area of a page, or None (not usable, out of room, or looping)."""
+    from app.core.engines.glm_ocr_server import DEFAULT_CTX_SIZE, GlmOcrServer, image_to_data_uri
+    from app.core.glm_ocr_manager import GlmOcrManager
+
+    mgr = GlmOcrManager.get_instance()
+    if not mgr.is_usable():
+        return None
+    side = mgr.render_long_side()
+    for _attempt in range(MAX_RERENDERS + 1):
+        img = render_region(path, page, bbox, side)
+        budget = output_budget(DEFAULT_CTX_SIZE, estimate_image_tokens(img.width, img.height))
+        if budget is not None:
+            break
+        side = int(side * RERENDER_FACTOR)
+    else:
+        return None
+    result = GlmOcrServer.get_instance().ocr(image_to_data_uri(_png_bytes(img)), prompt, budget, area=True)
+    if result.finish_reason == "length" or find_repetition_start(result.text) is not None:
+        return None
+    return clean_page_output(result.text).strip() or None
+
+
+def read_text_region(path: str, page: int, bbox: list[float]) -> str | None:
+    """The text GLM-OCR reads in one area (a picture on a text page); None if it reads none."""
+    return _read_region(path, page, bbox, PROMPT_TEXT)
+
+
+def read_formula_region(path: str, page: int, bbox: list[float]) -> str | None:
+    """One formula as GLM-OCR reads it (LaTeX); None if it reads none."""
+    return _read_region(path, page, bbox, FORMULA_PROMPT)
 
 
 def estimate_for_file(path: str) -> dict[str, Any]:
@@ -407,6 +715,9 @@ __all__ = [
     "find_repetition_start",
     "open_pages",
     "output_budget",
+    "read_table_region",
+    "render_region",
     "scaled_size",
+    "table_rows_from_output",
 ]
 

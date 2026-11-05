@@ -38,6 +38,7 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from app.core.download_utils import SecurityError
 from app.core.update_manager import (
+    NO_MANIFEST_YET,
     OFFICIAL_UPDATE_MANIFEST_URL,
     UpdateManager,
     UpdateState,
@@ -185,9 +186,10 @@ class TestUpdateE2EHarness(unittest.TestCase):
         self.assertEqual(res["state"], UpdateState.ERROR.value)
         self.assertEqual(
             res["error"],
-            "No signed update information has been published for the latest release yet.",
+            NO_MANIFEST_YET,
         )
         self.assertNotEqual(res["state"], UpdateState.UP_TO_DATE.value)
+        self.assertTrue(res["offer_download"])
 
     def test_envelope_payload_tampering_rejected(self) -> None:
         """Requirement A: Verify signature over exact received bytes before parsing."""

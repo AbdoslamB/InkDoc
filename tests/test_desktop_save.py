@@ -472,3 +472,24 @@ def test_real_pywebview_window_gets_only_the_exposed_functions():
         assert set(window._functions) == PAGE_NAMES
     finally:
         webview.windows.remove(window)
+
+
+# ─── Window colour before the page paints ─────────────────────────────────────
+
+@pytest.mark.parametrize("theme, colour", [
+    ("light", "#f1f3f0"),
+    ("dark", "#101614"),
+    (None, "#101614"),
+    ("LIGHT", "#101614"),
+    (["light"], "#101614"),
+])
+def test_window_background_follows_the_saved_theme(theme, colour):
+    assert runner._window_background({"theme": theme}) == colour
+    assert runner._window_background({}) == "#101614"
+
+
+def test_window_background_matches_each_themes_paper():
+    css = (REPO_ROOT / "app" / "ui" / "style.css").read_text(encoding="utf-8")
+    for theme, colour in runner._WINDOW_BACKGROUND.items():
+        block = css.split(f'[data-theme="{theme}"] {{', 1)[1].split("}", 1)[0]
+        assert f"--paper: {colour};" in block, theme

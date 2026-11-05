@@ -19,6 +19,9 @@
   --faint: #6b766f;
   --rule: #242c27;
   --rule-subtle: #1c2420;
+  /* Lines between unrelated groups of settings: subtle, but visible on the
+     drawer (about 1.5:1, as in the light theme; --rule is 1.18:1 here). */
+  --divider: #343d38;
   --mark: #3dab86;
   --mark-hover: #56c49c;
   --mark-pressed: #2e8a6a;
@@ -27,6 +30,7 @@
   --on-mark: #06241b;
   --danger: #f97066;
   --danger-tint: #3b1c1a;
+  --heart: #f2666c;
   --success: #3dab86;
   --success-tint: #16352c;
   --shadow-card: 0 8px 32px rgba(0, 0, 0, 0.4);
@@ -56,6 +60,7 @@
   --faint: #8a948c;
   --rule: #c5cec6;
   --rule-subtle: #dbe2dc;
+  --divider: #c5cec6;
   --mark: #0f6e56;
   --mark-hover: #0c5a47;
   --mark-pressed: #094536;
@@ -64,6 +69,7 @@
   --on-mark: #f4fbf7;
   --danger: #b42318;
   --danger-tint: #f8e6e4;
+  --heart: #cf2e3e;
   --success: #0f6e56;
   --success-tint: #dcebe4;
   --shadow-card: 0 8px 30px rgba(0, 0, 0, 0.08);
@@ -138,6 +144,14 @@
   border-width: 0;
 }
 
+/* Holds the <symbol>s in index.html; takes no space. */
+.svg-sprite {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
 html,
 body {
   height: 100vh;
@@ -166,6 +180,16 @@ body {
 html.theme-switching,
 html.theme-switching * {
   transition: none !important;
+}
+
+/* Switching to dark, the old (light) view shrinks back into the button, so it
+   has to be drawn above the new one; by default the new view is on top. */
+html.theme-to-dark::view-transition-old(root) {
+  z-index: 2;
+}
+
+html.theme-to-dark::view-transition-new(root) {
+  z-index: 1;
 }
 
 /* Layout width (Settings → General → Display). The server puts the saved
@@ -250,18 +274,21 @@ html[data-layout-width="full"] {
   min-width: 0;
 }
 
-/* Hands the drag strip to WebView2 as a real caption region, so the shell sees
-   a native drag (edge snapping, drag-to-top maximise) instead of the JavaScript
-   SetWindowPos loop pywebview falls back to. Only takes effect once
-   IsNonClientRegionSupportEnabled is set on the WebView2; ignored otherwise.
-   The window buttons opt back out so their clicks still reach the DOM. */
-.has-custom-titlebar .pywebview-drag-region {
+/* The whole header is the window's caption. WebView2 hands it to Windows as
+   one (IsNonClientRegionSupportEnabled), so dragging, double-click to maximise,
+   edge snapping and the system menu are the shell's own, with no JavaScript.
+   Its buttons opt back out so their clicks still reach the page, and so do the
+   Settings drawer and scrim, which sit inside the header in the DOM. Over a
+   caption region WebView2 itself makes the top few pixels the resize edge. */
+.has-custom-titlebar .app-header {
   -webkit-app-region: drag;
   app-region: drag;
 }
 
 .has-custom-titlebar .window-control,
-.has-custom-titlebar .btn-icon {
+.has-custom-titlebar .btn-icon,
+.has-custom-titlebar .settings-scrim,
+.has-custom-titlebar .settings-drawer {
   -webkit-app-region: no-drag;
   app-region: no-drag;
 }
@@ -500,13 +527,19 @@ html[data-layout-width="full"] {
   min-height: 0;
 }
 
+.settings-side {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--rule);
+  background-color: var(--sunken);
+}
+
 .settings-nav {
   display: flex;
   flex-direction: column;
   gap: 2px;
   padding: 10px 8px;
-  border-right: 1px solid var(--rule);
-  background-color: var(--sunken);
   overflow-y: auto;
 }
 
@@ -554,6 +587,48 @@ html[data-layout-width="full"] {
 }
 
 .settings-nav-dot[hidden] {
+  display: none;
+}
+
+/* Support: a red outline heart, never filled; the same icon as About's link.
+   At the foot of the section list, but not one of the sections. */
+.support-heart {
+  color: var(--heart);
+  flex-shrink: 0;
+  transition: transform var(--transition-fast);
+}
+
+.settings-support {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-start;
+  margin: auto 8px 10px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  transition: background-color var(--transition-fast);
+}
+
+.settings-support:hover {
+  background-color: var(--elevated);
+}
+
+.settings-support:hover .support-heart {
+  transform: scale(1.12);
+}
+
+.settings-support:active .support-heart,
+.about-support-link:active .support-heart {
+  transform: scale(0.92);
+}
+
+.settings-support:focus-visible {
+  outline: 2px solid var(--mark);
+  outline-offset: -2px;
+}
+
+/* About shows its own link. */
+.settings-drawer[data-section="about"] .settings-support {
   display: none;
 }
 
@@ -620,6 +695,35 @@ html[data-layout-width="full"] {
   border-radius: 2px;
 }
 
+.about-support {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--faint);
+}
+
+.about-support-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 500;
+  color: var(--muted);
+  text-decoration: none;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.about-support-link:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+.about-support-link:focus-visible {
+  outline: 2px solid var(--mark);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
 /* Narrow browser tabs (Web Bench; the desktop window is at least 960px wide):
    full width, with the sections as a row of tabs above the content. */
 @media (max-width: 640px) {
@@ -636,12 +740,24 @@ html[data-layout-width="full"] {
     grid-template-rows: auto minmax(0, 1fr);
   }
 
-  .settings-nav {
+  .settings-side {
     flex-direction: row;
+    align-items: center;
     border-right: none;
     border-bottom: 1px solid var(--rule);
+  }
+
+  .settings-nav {
+    flex: 1;
+    min-width: 0;
+    flex-direction: row;
     overflow-x: auto;
     overflow-y: hidden;
+  }
+
+  .settings-support {
+    align-self: center;
+    margin: 0 8px 0 0;
   }
 
   .settings-nav-item {
@@ -687,7 +803,7 @@ html[data-layout-width="full"] {
   line-height: 1.45;
 }
 
-/* Save folder (Preferences): where auto-save writes. */
+/* Save folder (General → Conversion): where auto-save writes. */
 .save-folder {
   margin-top: 10px;
 }
@@ -708,16 +824,85 @@ html[data-layout-width="full"] {
    radio buttons, hidden with .sr-only, so arrow keys and screen readers
    treat it as one group. */
 .settings-display {
-  border-top: 1px solid var(--rule);
+  border-top: 1px solid var(--divider);
 }
 
-/* Unrelated groups within a section (Preferences: saving, Docling fallback,
-   PDF check) get a thin line between them, inset by the section's padding so
-   it reads lighter than the full-width line between sections. */
+/* Unrelated groups within a section (Conversion: saving, Auto quality, PDF
+   check; Display: text size, width; Updates: status, daily check) get a
+   thin line between them, inset by the section's padding so it reads lighter
+   than the full-width line between sections. */
 .settings-group + .settings-group {
   margin-top: 12px;
   padding-top: 12px;
-  border-top: 1px solid var(--rule);
+  border-top: 1px solid var(--divider);
+}
+
+/* Auto quality -> Steps (General): one switch per step of Balanced and
+   Thorough, built by app.js. Collapsed until opened, like GLM-OCR's Advanced. */
+.auto-steps {
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.auto-steps > summary {
+  cursor: pointer;
+  color: var(--muted);
+  user-select: none;
+}
+
+.auto-steps-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+}
+
+.auto-step + .auto-step {
+  margin-top: 10px;
+}
+
+.auto-step-level {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+/* Under the step's name: past the switch (34px) and the label's gap (8px). */
+.auto-step .settings-caption,
+.auto-step-needs {
+  margin-top: 2px;
+  padding-left: 42px;
+}
+
+.auto-step-needs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.auto-step-needs[hidden] {
+  display: none;
+}
+
+.auto-step-needs .btn {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+/* Restore defaults: the last section of General. */
+.settings-reset {
+  border-top: 1px solid var(--divider);
+}
+
+.settings-reset .btn {
+  gap: 6px;
+}
+
+.btn[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: progress;
 }
 
 .layout-width-row {
@@ -807,9 +992,15 @@ html[data-layout-width="full"] {
   color: var(--faint);
 }
 
+/* A downloadable add-on's card (the layout model) shows its buttons with the
+   hidden attribute, which .btn's display would otherwise override. */
+.addon-card .btn[hidden] {
+  display: none;
+}
+
 /* Preview text size (Display): A- and A+ only, with a live sample below. */
 .text-size {
-  margin-top: 14px;
+  margin-top: 0;
 }
 
 .text-size-row {
@@ -1240,6 +1431,7 @@ html[data-layout-width="full"] {
 }
 
 .settings-drawer.keyboard-nav .settings-nav-item:focus,
+.settings-drawer.keyboard-nav .settings-support:focus,
 .settings-drawer.keyboard-nav .text-size-btn:focus,
 .settings-drawer.keyboard-nav .segmented-option input:focus + span {
   outline: 2px solid var(--mark);
@@ -1274,13 +1466,25 @@ html[data-layout-width="full"] {
   transition: var(--transition-fast);
 }
 
+/* An engine card's details (size, version, source) sit below its buttons. */
+.engine-actions + .engine-meta-grid {
+  margin-top: 10px;
+}
+
+/* Docling's fallback switch: an option of that engine, so it lives in its card. */
+.engine-fallback {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--divider);
+}
+
 /* Enrichment options inside the Docling engine card. Shown greyed out while
    the optional recognition model is missing, rather than hidden: a control that
    silently does nothing is worse than one that says why it cannot run yet. */
 .engine-enrichment {
   margin-top: 14px;
   padding-top: 12px;
-  border-top: 1px solid var(--rule-subtle);
+  border-top: 1px solid var(--divider);
 }
 
 .engine-enrichment-title {
@@ -1684,6 +1888,43 @@ html[data-layout-width="full"] {
 
 .engine-pill.is-hidden {
   display: none !important;
+}
+
+/* Engines the user hid (Settings → Engines → "Show on main screen"). Driven by
+   data-hidden-engines on <html>, which the server sets before first paint, so
+   a hidden pill never flashes in. Exact ids: a change restyles only these.
+   Kept apart from .is-hidden (not offered here), which status checks set. */
+html[data-hidden-engines~="markitdown"] #pillMarkitdown,
+html[data-hidden-engines~="docling"] #pillDocling,
+html[data-hidden-engines~="markit"] #pillMarkit,
+html[data-hidden-engines~="glm_ocr"] #pillGlmOcr {
+  display: none !important;
+}
+
+/* The "Hidden" chip in a collapsed engine card's header, same mechanism. */
+.engine-hidden-chip {
+  display: none;
+  color: var(--faint);
+  background: transparent;
+  border: 1px solid var(--divider);
+}
+
+html[data-hidden-engines~="markitdown"] #engineCardMarkitdown .engine-hidden-chip,
+html[data-hidden-engines~="docling"] #engineCardDocling .engine-hidden-chip,
+html[data-hidden-engines~="markit"] #engineCardMarkit .engine-hidden-chip,
+html[data-hidden-engines~="glm_ocr"] #engineCardGlmOcr .engine-hidden-chip {
+  display: inline-block;
+}
+
+/* "Show on main screen": the first row of each engine card. */
+.engine-visibility {
+  margin: 4px 0 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.engines-intro {
+  margin: 0 0 4px;
 }
 
 /* ── Pill Engine Icons (Clean, no surrounding box) ── */
@@ -2517,6 +2758,127 @@ html[data-layout-width="full"] {
   display: block;
 }
 
+/* Original view: the source document beside the Rendered or Raw view */
+.split-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background-color: var(--sunken);
+  border: 1px solid transparent;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  padding: 5px 10px;
+  border-radius: 6px;
+  flex-shrink: 0;
+  transition: all var(--transition-fast);
+}
+
+.split-toggle:hover {
+  color: var(--ink);
+}
+
+.split-toggle[aria-pressed="true"] {
+  background-color: var(--mark-tint);
+  border-color: var(--mark);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.split-toggle:focus-visible,
+.source-pane:focus-visible {
+  outline: 2px solid var(--mark);
+  outline-offset: -2px;
+}
+
+.preview-panes {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.result-pane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.source-pane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  background-color: var(--sunken);
+  border-right: 1px solid var(--rule);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.source-pane[hidden] {
+  display: none;
+}
+
+/* Laid out at its own proportions before it is drawn, so scrolling never jumps */
+.source-page {
+  position: relative;
+  flex-shrink: 0;
+  width: 100%;
+  background-color: #fff;
+  box-shadow: var(--shadow-subtle);
+}
+
+.source-page::after {
+  content: "Page " attr(data-page);
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #6b766f;
+  font-size: 12px;
+}
+
+.source-page.is-failed::after {
+  content: "Page " attr(data-page) " couldn't be drawn";
+}
+
+.source-page img {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.source-image {
+  max-width: 100%;
+  height: auto;
+  flex-shrink: 0;
+}
+
+.source-note {
+  margin: auto;
+  max-width: 34ch;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* End of a preview that shows only the start of a very large result */
+.preview-cut-note {
+  margin-top: 24px;
+  padding-top: 12px;
+  border-top: 1px solid var(--divider);
+  color: var(--muted);
+  font-size: 13px;
+}
+
 /* Empty State Hint */
 .empty-preview-hint {
   height: 100%;
@@ -2978,6 +3340,40 @@ html[data-layout-width="full"] {
   display: none;
 }
 
+/* Closes a result's note: in the note's own colour, at the end of the row so
+   text wraps before it rather than running under it. */
+.conversion-notice-close {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin: -3px -6px 0 auto;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  opacity: 0.7;
+  cursor: pointer;
+}
+
+.conversion-notice-close:hover {
+  opacity: 1;
+  background-color: rgba(127, 127, 127, 0.16);
+}
+
+.conversion-notice-close:focus-visible {
+  opacity: 1;
+  outline: 2px solid currentColor;
+  outline-offset: 1px;
+}
+
+.conversion-notice-close[hidden] {
+  display: none;
+}
+
 .conversion-notice-details {
   margin: 4px 0 0 16px;
   font-weight: 400;
@@ -3020,10 +3416,12 @@ html[data-layout-width="full"] {
   background-color: var(--sunken);
   border: 1px solid var(--rule);
   border-radius: 9px;
-  padding: 12px 14px;
+  padding: 16px 18px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 16px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .update-status-row {
@@ -3053,16 +3451,17 @@ html[data-layout-width="full"] {
 
 .update-details {
   border-top: 1px solid var(--rule);
-  padding-top: 10px;
+  padding-top: 16px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 
 .update-release-meta {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
+  gap: 12px;
 }
 
 .update-new-version {
@@ -3076,40 +3475,118 @@ html[data-layout-width="full"] {
   color: var(--muted);
 }
 
-.update-notes-accordion {
-  background: var(--elevated);
-  border: 1px solid var(--rule);
-  border-radius: 6px;
-  overflow: hidden;
+/* What's new: the release's first entries, below everything else in the card. */
+.update-notes {
+  border-top: 1px solid var(--rule);
+  padding-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
 }
 
-.update-notes-summary {
-  font-size: 12px;
+.update-notes[hidden] {
+  display: none;
+}
+
+.update-notes-title {
+  margin: 0;
+  font-size: 13px;
   font-weight: 600;
   color: var(--ink);
-  padding: 6px 10px;
-  cursor: pointer;
-  user-select: none;
-  background: rgba(255, 255, 255, 0.02);
 }
 
-.update-notes-content {
-  padding: 8px 12px;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--ink);
-  max-height: 150px;
-  overflow-y: auto;
-  border-top: 1px solid var(--rule);
+.update-notes-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
-.update-notes-content p {
-  margin: 0 0 6px;
+.update-notes-group {
+  margin: 6px 0 2px;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--faint);
 }
 
-.update-notes-content ul {
-  margin: 0 0 6px;
+.update-notes-group:first-child {
+  margin-top: 0;
+}
+
+.update-notes-list {
+  margin: 0;
   padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+.update-notes-list li::marker {
+  color: var(--mark);
+}
+
+.update-notes-list strong {
+  font-weight: 600;
+}
+
+.update-notes-list code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background-color: var(--elevated);
+  border: 1px solid var(--rule);
+}
+
+.update-notes-empty {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.update-notes-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.update-notes-more:empty {
+  display: none;
+}
+
+.update-notes-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  font-weight: 600;
+  color: var(--mark);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.update-notes-link[hidden] {
+  display: none;
+}
+
+.update-notes-link:hover {
+  text-decoration: underline;
+}
+
+.update-notes-link:focus-visible {
+  outline: 2px solid var(--mark);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 
 .update-actions {
@@ -3130,6 +3607,30 @@ html[data-layout-width="full"] {
   color: var(--danger, #ef4444);
   font-size: 12px;
   line-height: 1.4;
+}
+
+.update-error-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.update-error-download {
+  align-self: flex-start;
+  font-weight: 600;
+  color: inherit;
+  text-decoration: underline;
+}
+
+.update-error-download[hidden] {
+  display: none;
+}
+
+.update-error-download:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 
 .spin-icon {
@@ -3171,6 +3672,16 @@ html[data-layout-width="full"] {
 
   .engine-pill-group {
     flex-wrap: wrap;
+  }
+
+  /* Too narrow for two columns: the original above, the result below */
+  .preview-panes.is-split {
+    flex-direction: column;
+  }
+
+  .preview-panes.is-split .source-pane {
+    border-right: none;
+    border-bottom: 1px solid var(--rule);
   }
 }
 
@@ -3488,7 +3999,9 @@ input[type="url"] {
 }
 
 .glm-advanced {
-  margin-top: 10px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--divider);
   font-size: 12px;
 }
 
@@ -3538,4 +4051,9 @@ input[type="url"] {
 
 .app-dialog-details li + li {
   margin-top: 4px;
+}
+
+/* Docling enrichment: the formula switch below the code switch. */
+.engine-enrichment-second {
+  margin-top: 8px;
 }

@@ -6,6 +6,7 @@ and dispatches file-based IPC requests.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -16,6 +17,7 @@ import tempfile
 import threading
 import time
 import uuid
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -104,6 +106,9 @@ class DoclingWorkerClient:
             except Exception:
                 try:
                     proc.kill()
+                    # Until it has exited, Windows keeps its files open, and a pack
+                    # update that renames them next would fail.
+                    proc.wait(timeout=5.0)
                 except Exception:
                     pass
             finally:
@@ -129,6 +134,23 @@ class DoclingWorkerClient:
         """Terminate the running worker subprocess."""
         with self._mutex:
             self._shutdown_locked()
+
+    @contextlib.contextmanager
+    def paused(self, timeout: float = CONVERSION_TIMEOUT_SECONDS + 30.0) -> Iterator[None]:
+        """Stop the worker and keep it stopped while the pack's files are replaced.
+
+        Waits for a conversion in progress (the mutex is held for the whole of
+        one, and the worker ends any at CONVERSION_TIMEOUT_SECONDS), and holds the
+        mutex so none starts until the block ends. The next conversion launches
+        the new pack's worker.
+        """
+        if not self._mutex.acquire(timeout=timeout):
+            raise RuntimeError("Docling is still converting a file. Try again when it has finished.")
+        try:
+            self._shutdown_locked()
+            yield
+        finally:
+            self._mutex.release()
 
     def is_running(self) -> bool:
         """True while a worker process is alive (it holds the Docling models in RAM)."""
@@ -224,19 +246,13 @@ class DoclingWorkerClient:
         if self._proc is not None and self._proc.poll() is None:
             return self._proc
 
-        pack_info = mgr.get_platform_pack_info("docling")
-        if not pack_info:
+        # Exactly the files verify_launch_integrity hashed: an earlier pack's own
+        # paths, not the current manifest's.
+        launch = mgr.launch_paths("docling")
+        if not launch:
             raise RuntimeError("Platform unsupported for Docling engine.")
-
+        interpreter, worker_script = launch
         target_dir = mgr.get_engine_dir("docling")
-        interpreter = target_dir / pack_info.interpreter_path
-        worker_script = target_dir / pack_info.worker_script
-
-        # If worker script not yet copied to pack dir, copy it from repository
-        if not worker_script.is_file():
-            repo_worker = Path(__file__).resolve().parent / "worker.py"
-            if repo_worker.is_file():
-                worker_script.write_text(repo_worker.read_text(encoding="utf-8"), encoding="utf-8")
 
         # Build minimal allowlisted environment (Security Requirement #8)
         minimal_env: dict[str, str] = {

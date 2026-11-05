@@ -49,6 +49,55 @@ class PlatformPackInfo:
     sha256_files: dict[str, str] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class EarlierPackFiles:
+    """The two files checked before every launch, for a pack older than the manifest's."""
+
+    interpreter_path: str
+    interpreter_sha256: str
+    worker_script: str
+    worker_sha256: str
+
+
+# Packs published before the one manifest.json describes, so an installed older
+# pack keeps working until the user chooses to update it. Only the launch files
+# are known here: the full per-file list of a pack is ~4 MB per platform.
+# Taken from docling-pack-v1's manifest; add the outgoing pack whenever
+# manifest.json moves to a new one.
+EARLIER_PACKS: dict[str, dict[str, EarlierPackFiles]] = {
+    "1.0.0": {
+        "windows-x86_64": EarlierPackFiles(
+            "python/python.exe", "5040847fa3e3cc8f0224dbd4f629c8658672e9eeb282d3f4d2c82daab61ec494",
+            "worker.py", "37f61cae9ad564bb76f19ae1a1e5dbc6722199fd5ef82fb3704050621c60a574",
+        ),
+        "linux-x86_64": EarlierPackFiles(
+            "python/bin/python3", "3885b038a55ebd5144410a0294f60f31c917ed64f42d4643b00dd54b6efe2bab",
+            "worker.py", "13f94f06850a2d5c81c4a881e10697653f51b301eaf44508f8deb237e0e2c15e",
+        ),
+        "macos-arm64": EarlierPackFiles(
+            "python/bin/python3", "1f54f1df218a89bed838bdd04836f86b3828a936083de27c81463cf975b83ecc",
+            "worker.py", "13f94f06850a2d5c81c4a881e10697653f51b301eaf44508f8deb237e0e2c15e",
+        ),
+    },
+}
+
+# Published security advisories in an earlier pack's Docling that the current pack
+# fixes, so the Docling card can say the update is a security fix (/engines
+# `security_fixes`). Docling 2.130.0 (pack 1.0.0): both fixed in 2.132.
+EARLIER_PACK_ADVISORIES: dict[str, tuple[str, ...]] = {
+    "1.0.0": ("GHSA-cgc7-9qp3-86m3", "GHSA-3cr3-8m4c-fpxw"),
+}
+
+
+def docling_version_in(sha256_files: dict[str, str]) -> str:
+    """Docling's version, from the dist-info folder a pack's file list names, or ""."""
+    for path in sha256_files:
+        match = re.search(r"(?:^|/)docling-([0-9][^/]*)\.dist-info/", path)
+        if match:
+            return match.group(1)
+    return ""
+
+
 @dataclass
 class EngineManifest:
     manifest_version: str

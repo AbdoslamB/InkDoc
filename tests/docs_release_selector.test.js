@@ -12,7 +12,7 @@ const releaseIife = source.slice(start, end);
 async function runSelector(releases) {
     const links = [
         { href: "https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc.exe" },
-        { href: "https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-linux.zip" },
+        { href: "https://github.com/AbdoslamB/inkdoc/releases/latest/download/inkdoc-linux-x86_64.AppImage" },
     ];
     const context = {
         AbortController: class { abort() { } },

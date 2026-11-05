@@ -32,9 +32,17 @@ The page cannot paint into a hole it no longer owns, so this module draws that
 one button itself, from colours the page reports, which is why the title bar
 still looks identical in both themes.
 
+The top resize edge is WebView2's to answer, not ours. Reclaiming the top frame
+made it client area, where WebView2 sits, so it once answered as page content
+and the window could not be resized from the top. The page now makes the whole
+header a caption region (app-region: drag in style.css), and over a caption
+region WebView2 itself answers HTTOP, HTTOPLEFT and HTTOPRIGHT within the resize
+border along the top -- measured: the top 8 px at 96 DPI, and only while the
+window is restored. Nothing is cut or drawn here for it.
+
 Hit testing asks the original window procedure first and only ever rewrites an
 HTCLIENT answer, so every resize code Windows computed is passed through
-untouched; the top edge, whose non-client strip we removed, is synthesised back.
+untouched.
 """
 from __future__ import annotations
 
@@ -62,11 +70,6 @@ WM_NCMOUSELEAVE = 0x02A2
 
 HTCLIENT = 1
 HTMAXBUTTON = 9
-HTLEFT = 10
-HTRIGHT = 11
-HTTOP = 12
-HTTOPLEFT = 13
-HTTOPRIGHT = 14
 
 GWLP_WNDPROC = -4
 GWL_STYLE = -16
@@ -169,6 +172,12 @@ if _IS_WINDOWS:
     ]
     user32.SetWindowRgn.argtypes = [wt.HWND, ctypes.c_void_p, wt.BOOL]
     user32.FillRect.argtypes = [wt.HDC, ctypes.POINTER(_RECT), ctypes.c_void_p]
+    # Windows 10 1607 and later; _window_dpi and _metric fall back without them.
+    if hasattr(user32, "GetDpiForWindow"):
+        user32.GetDpiForWindow.restype = wt.UINT
+        user32.GetDpiForWindow.argtypes = [wt.HWND]
+    if hasattr(user32, "GetSystemMetricsForDpi"):
+        user32.GetSystemMetricsForDpi.argtypes = [ctypes.c_int, wt.UINT]
 else:  # pragma: no cover
     _WNDPROC = None
 
@@ -185,8 +194,25 @@ def is_maximized(hwnd: int) -> bool:
         return False
 
 
-def _frame_thickness() -> int:
-    return user32.GetSystemMetrics(SM_CYSIZEFRAME) + user32.GetSystemMetrics(SM_CXPADDEDBORDER)
+def _window_dpi(hwnd: int) -> int:
+    """The window's DPI, which is the system DPI while the process is only
+    system-aware (pywebview calls SetProcessDPIAware)."""
+    try:
+        dpi = user32.GetDpiForWindow(wt.HWND(hwnd))
+    except (AttributeError, OSError):
+        dpi = 0
+    return dpi or 96
+
+
+def _metric(index: int, dpi: int) -> int:
+    try:
+        return user32.GetSystemMetricsForDpi(index, dpi)
+    except (AttributeError, OSError):
+        return user32.GetSystemMetrics(index)
+
+
+def _frame_thickness(dpi: int) -> int:
+    return _metric(SM_CYSIZEFRAME, dpi) + _metric(SM_CXPADDEDBORDER, dpi)
 
 
 def _wanted_style(hwnd: int) -> int:
@@ -469,9 +495,10 @@ class WindowChrome:
                 # Reclaim the caption, and the top frame too unless maximised --
                 # while maximised that frame hangs off-screen and is exactly what
                 # keeps the client area aligned to the work area.
-                reclaim = user32.GetSystemMetrics(SM_CYCAPTION)
+                dpi = _window_dpi(self._hwnd)
+                reclaim = _metric(SM_CYCAPTION, dpi)
                 if not is_maximized(self._hwnd):
-                    reclaim += _frame_thickness()
+                    reclaim += _frame_thickness(dpi)
                 params.rgrc[0].top -= reclaim
                 return result
 
@@ -481,17 +508,8 @@ class WindowChrome:
                     return code
                 x = ctypes.c_short(lparam & 0xFFFF).value
                 y = ctypes.c_short((lparam >> 16) & 0xFFFF).value
-                # The top resize strip is client area now, so put it back.
-                if not is_maximized(self._hwnd):
-                    r = _RECT()
-                    user32.GetWindowRect(wt.HWND(self._hwnd), ctypes.byref(r))
-                    grip = _frame_thickness()
-                    if y < r.top + grip:
-                        if x < r.left + grip * 2:
-                            return HTTOPLEFT
-                        if x >= r.right - grip * 2:
-                            return HTTOPRIGHT
-                        return HTTOP
+                # The top resize edge never arrives here: WebView2 covers it and
+                # answers HTTOP itself over the header's caption region.
                 if self._point_in_button(x, y):
                     return HTMAXBUTTON
                 return code

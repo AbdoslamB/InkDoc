@@ -1,0 +1,4 @@
+# Linux release build, pass 3 of 3: PyGObject (the gi package), compiled from its sdist
+# against the runner's GLib. PyGObject 3.52+ needs GLib 2.80, i.e. Ubuntu 24.04 or newer.
+PyGObject==3.58.1 \
+    --hash=sha256:4c80598ade17fbaa7798e01a25d0bf29ce109740786026a074c5c62bb3e79d23

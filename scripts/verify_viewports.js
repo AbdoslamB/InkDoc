@@ -7,7 +7,8 @@ const os = require('os');
 const EDGE_PATH = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
 const PORT = 13199;
 const CDP_PORT = 9222;
-const ARTIFACT_DIR = 'C:\\Users\\baaba\\.gemini\\antigravity-ide\\brain\\2da14e95-6f0b-401a-a370-83b4753cc4ac';
+// Screenshots go to INKDOC_SCREENSHOT_DIR, else a folder in the system's temp directory.
+const ARTIFACT_DIR = process.env.INKDOC_SCREENSHOT_DIR || path.join(os.tmpdir(), 'inkdoc-viewports');
 
 async function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -167,8 +168,9 @@ async function run() {
     async function saveScreenshot(filename) {
       const res = await cdp('Page.captureScreenshot', { format: 'png' });
       if (res && res.data) {
+        fs.mkdirSync(ARTIFACT_DIR, { recursive: true });
         fs.writeFileSync(path.join(ARTIFACT_DIR, filename), Buffer.from(res.data, 'base64'));
-        console.log('Saved screenshot:', filename);
+        console.log('Saved screenshot:', path.join(ARTIFACT_DIR, filename));
       }
     }
 

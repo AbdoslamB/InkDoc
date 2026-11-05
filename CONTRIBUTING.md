@@ -84,6 +84,11 @@ inkdoc/
 └── main.py                    # Unified desktop & headless CLI entry point
 ```
 
+Each area of the code has a developer guide in [`guides/`](guides/README.md): how it works,
+the rules it must keep, the tests that cover it, and lessons from earlier work there.
+[AGENTS.md](AGENTS.md) says which guide covers which file; read that guide before you change
+the file, and update it in the same pull request when the code changes how the area works.
+
 ---
 
 ## 3. Development Guidelines
@@ -100,6 +105,29 @@ inkdoc/
 * **Cross-Platform Compatibility**:
   - Keep all features compatible with Windows, macOS, and Linux.
   - Use `pathlib.Path` for filesystem operations rather than platform-specific string concatenation.
+
+### Core feature or download?
+
+A new feature ships inside InkDoc unless at least one of these is true. If one is, it becomes a download (an engine pack or add-on that users install from Settings):
+
+- it needs model weights or a native runtime;
+- it adds more than 25 MB to the app or slows its startup;
+- it needs separate builds per platform;
+- its license isn't a permissive one like MIT, BSD or Apache-2.0 (for example GPL, LGPL, AGPL, MPL, or a model license that restricts use);
+- it uses the network.
+
+Not sure? Open an issue first. The full rule is in [AGENTS.md](AGENTS.md#core-or-add-on).
+
+### Adding an Auto quality step
+
+Steps are what Balanced and Thorough add to an engine's result (for example the table check or chart text). Each one is core code and gets its own switch under Settings → General → Auto quality → Steps automatically. To add one:
+
+1. **Register it** in [`app/core/thorough_passes.py`](app/core/thorough_passes.py): a `PassInfo` whose place in `PASSES` is its order, with its lowest level, its stage, the engines it needs (`needs_all` / `needs_any`) and `modules`, the modules that do its work.
+2. **Write the work** in its own module under `app/core/`, pure where possible. It may import the standard library, InkDoc's own code and the PDF libraries InkDoc ships (pypdfium2, pdfplumber, pdfminer.six); import those libraries inside the function that uses them. `tests/test_step_imports.py` checks this.
+3. **Call it** where its stage runs (`run_auto` or `_check_tables` in [`app/core/auto_engine.py`](app/core/auto_engine.py)), only when `plan.on("<name>")`, and record what it did with `log.ran(...)` or `log.skipped(...)`. That record is the response's `tables.passes`.
+4. **Test it**: the step's own behaviour, and its `tables.passes` entry (see `tests/test_thorough_passes.py`).
+
+A step that needs a model is still core code; the model is an add-on. Put the code that runs the model under `app/core/engines/` (it runs in the MarkItDown worker, so InkDoc's own process never loads its runtime), describe the model in [`app/core/addons.json`](app/core/addons.json), and name it in the step's `needs_all`. "Tables on scanned pages" is the example: `scanned_tables.py` is the step, `engines/layout_model.py` runs the `layout_model` add-on.
 
 ---
 
@@ -130,6 +158,14 @@ InkDoc supports optional deep layout parsing via isolated engine packs (IBM Docl
    python scripts/generate_engine_manifest.py --verify-manifest
    ```
 
+### The layout model add-on
+
+The `layout_model` entry in [`app/core/addons.json`](app/core/addons.json) ships unreleased, which is valid: with the Docling engine installed, InkDoc uses the identical copy that comes with it, and otherwise the add-on is not offered for download. To publish it:
+
+1. Build it: `python scripts/build_layout_addon.py --release-tag layout-addon-v1` (add `--model-dir <folder>` to use a local copy instead of downloading the pinned Hugging Face revision). It refuses any `model.onnx` but the one `pack_copy` pins, and writes `dist/addons/inkdoc-addon-layout_model.tar.gz` and `dist/addons/addons.json` with the asset URL derived from the tag. The archive is reproducible.
+2. Publish the archive on that release tag, not marked Latest (the in-app updater uses `/releases/latest`).
+3. Commit `dist/addons/addons.json` as `app/core/addons.json`. `scripts/verify_addon_catalogue.py` checks it in CI.
+
 ---
 
 ## 5. Testing & Verification
@@ -146,20 +182,12 @@ python scripts/generate_engine_manifest.py --verify-manifest
 # 3. Run the whole test suite, exactly as CI does
 python -m pytest tests/
 
-# 4. UI logic tests (need Node.js; CI runs them on Linux)
-node tests/auto_engine_ui.test.js
-node tests/docs_release_selector.test.js
-node tests/enrichment_addon_ui.test.js
-node tests/glm_ocr_ui.test.js
-node tests/preview_word_count.test.js
-node tests/desktop_download_ui.test.js
-node tests/save_folder_ui.test.js
-node tests/preview_links_ui.test.js
-node tests/theme_toggle_ui.test.js
-node tests/settings_drawer_ui.test.js
-node tests/layout_width_ui.test.js
-node tests/text_size_ui.test.js
-node tests/math_render_ui.test.js
+# 4. UI logic tests (need Node.js; CI runs every tests/*.test.js on Linux)
+(for t in tests/*.test.js; do node "$t" || exit 1; done)
+
+# Optional: how engines read tables, before and after the table check
+# (synthetic test pages, plus your own PDFs with NAME.tables.json; see the script)
+python scripts/table_bench.py --engines markitdown
 
 # 5. Verify code style with ruff
 ruff check .
@@ -172,6 +200,7 @@ ruff check .
 1. **Open an Issue First**: For non-trivial changes, new features, or architectural adjustments, open an issue first to discuss the design.
 2. **Keep PRs Focused**: Keep pull requests focused on a single feature or bug fix.
 3. **Describe Your Verification**: Document the exact commands you ran and operating systems tested in the PR description using the template.
+4. **Using AI Tools**: They're welcome. You are the author of everything you submit: say which parts an AI tool wrote, and review and test all of it. The details are in the [AI Policy](AI_POLICY.md).
 
 ### Dependency Updates
 

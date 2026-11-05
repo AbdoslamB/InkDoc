@@ -56,12 +56,14 @@ function setup({ initial } = {}) {
     const posts = [];
     const pending = [];
     const toasts = [];
+    const keepalives = [];
     const env = {
         document: { documentElement: root, getElementById: (id) => els[id] },
         apiBase: "/InkDoc",
         showToast: (msg, kind) => toasts.push({ msg, kind }),
         fetchWithToken: (url, opts) => {
             posts.push(JSON.parse(opts.body));
+            keepalives.push(opts.keepalive);
             return new Promise((resolve, reject) => pending.push({ resolve, reject }));
         },
         setTimeout: setTimeoutStub,
@@ -70,11 +72,11 @@ function setup({ initial } = {}) {
     const api = new Function("env", `
         const { document, apiBase, showToast, fetchWithToken, setTimeout, clearTimeout } = env;
         ${block}
-        return { syncTextSize, size: () => textSize, saved: () => textSizeSaved };
+        return { syncTextSize, flushTextSize, settleTextSize, size: () => textSize, saved: () => textSizeSaved };
     `)(env);
     const settle = () => new Promise((r) => setImmediate(r));
     const disabled = () => [els.btnTextSmaller.getAttribute("aria-disabled"), els.btnTextLarger.getAttribute("aria-disabled")];
-    return { ...api, root, els, posts, pending, toasts, advance, settle, disabled, timers: () => timers };
+    return { ...api, root, els, posts, pending, toasts, keepalives, advance, settle, disabled, timers: () => timers };
 }
 
 (async () => {
@@ -176,6 +178,45 @@ function setup({ initial } = {}) {
         assert.deepStrictEqual(t.toasts, []);
     }
 
+    // Settings closing saves a waiting size at once; the page going away too,
+    // with a request that outlives it. Nothing waiting, nothing sent.
+    {
+        const t = setup();
+        t.flushTextSize();
+        assert.deepStrictEqual(t.posts, []);
+        t.els.btnTextLarger.click(); // 110
+        t.flushTextSize();
+        await t.settle();
+        assert.deepStrictEqual(t.posts, [{ preview_text_size: 110 }], "sent without waiting 400 ms");
+        assert.deepStrictEqual(t.keepalives, [false]);
+        assert.strictEqual(t.timers().length, 0);
+        t.pending[0].resolve({ ok: true });
+        await t.settle();
+        t.els.btnTextLarger.click(); // 120
+        t.flushTextSize(true);
+        await t.settle();
+        assert.deepStrictEqual(t.keepalives, [false, true]);
+    }
+
+    // Restore defaults: a waiting size is dropped, one on its way is waited for.
+    {
+        const t = setup();
+        t.els.btnTextLarger.click(); // 110, waiting
+        await t.settleTextSize();
+        await t.advance(1000);
+        assert.deepStrictEqual(t.posts, [], "the dropped size is never sent");
+
+        t.els.btnTextLarger.click(); // 120
+        await t.advance(400);
+        let settled = false;
+        const done = t.settleTextSize().then(() => { settled = true; });
+        await t.settle();
+        assert.ok(!settled, "waits for the save on its way");
+        t.pending[0].resolve({ ok: true });
+        await done;
+        assert.ok(settled);
+    }
+
     // Opening Settings re-reads the size, but never over a pending change.
     {
         const t = setup();
@@ -214,17 +255,20 @@ function setup({ initial } = {}) {
         assert.ok(/id="textSizeStatus" role="status" aria-live="polite"/.test(display));
     }
 
-    // Preferences: three groups (saving, Docling fallback, PDF check), each toggle
-    // in its own, no inline spacing left over.
+    // Conversion: three groups, most used first (saving, Auto quality, PDF
+    // check), each setting in its own, no inline spacing left over. Docling's
+    // fallback is an option of that engine, in its card.
     {
-        const prefs = html.slice(html.indexOf(">Preferences<"), html.indexOf('class="settings-section settings-display"'));
+        const prefs = html.slice(html.indexOf(">Conversion<"), html.indexOf('class="settings-section settings-display"'));
         const groups = prefs.split('<div class="settings-group">').slice(1);
         assert.strictEqual(groups.length, 3);
         assert.ok(groups[0].includes('id="autoSaveToggle"') && groups[0].includes('id="btnChangeSaveFolder"'));
-        assert.ok(groups[1].includes('id="doclingFallbackToggle"'));
+        assert.ok(groups[1].includes('id="autoQualityGroup"'));
         assert.ok(groups[2].includes('id="qualityCheckToggle"'));
+        const docling = html.slice(html.indexOf('id="engineCardDocling"'), html.indexOf('id="engineCardGlmOcr"'));
+        assert.ok(docling.includes('id="doclingFallbackToggle"'), "fallback sits in the Docling card");
         assert.ok(!/toggle-switch" style="margin-top/.test(prefs));
-        assert.ok(/\.settings-group \+ \.settings-group \{[^}]*border-top: 1px solid var\(--rule\);/.test(css), "a line only between groups");
+        assert.ok(/\.settings-group \+ \.settings-group \{[^}]*border-top: 1px solid var\(--divider\);/.test(css), "a line only between groups");
     }
 
     // CSS: one rule per step, and every preview font size scales from its former value.

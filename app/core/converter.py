@@ -1,6 +1,6 @@
 """MarkItDown wrapper and background conversion workers.
 
-Wires the GUI to the real markitdown 0.1.7 API as found in
+Wires the GUI to the real markitdown 0.1.8 API as found in
 markitdown/_markitdown.py, markitdown/_stream_info.py and
 markitdown/converters/_doc_intel_converter.py / _cu_converter.py:
 
@@ -32,6 +32,8 @@ markitdown/converters/_markdownify.py).
 """
 from __future__ import annotations
 
+import codecs
+import logging
 import os
 import re
 import warnings
@@ -54,14 +56,18 @@ warnings.filterwarnings(
     module=r"pydub\.utils",
 )
 
-# markitdown is imported lazily: importing it loads magika and onnxruntime,
-# about 2s that would otherwise sit between launching the app and the window
-# appearing. prewarm_markitdown() pays that cost in the background instead.
-# tests/test_startup_imports.py keeps a module-level import from creeping back.
+# markitdown is never imported by InkDoc's own process. Loading it brings in
+# magika, onnxruntime, pandas and ~20 other libraries (about 95 MB that Python
+# never gives back), so conversions run in a separate worker process that
+# starts on demand and exits when idle (app/core/engines/markitdown_worker*.py).
+# Only that worker, or the in-process fallback when it can't start, calls
+# run_markitdown(). tests/test_startup_imports.py keeps an import from creeping back.
 if TYPE_CHECKING:
     from markitdown import MarkItDown
 
 from app.core.queue_model import EngineKind, QueueItem, SourceKind
+
+logger = logging.getLogger(__name__)
 
 _ILLEGAL_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
@@ -73,25 +79,27 @@ def sanitize_filename(name: str) -> str:
 
 
 def get_markitdown_version() -> str:
-    """Best-effort markitdown package version for display (About dialog)."""
+    """Best-effort markitdown package version for display (About dialog).
+
+    From the package metadata only: importing markitdown to ask it would load
+    it into this process, which is what the worker exists to avoid.
+    """
     try:
         return pkg_version("markitdown")
     except PackageNotFoundError:
-        from markitdown import __about__
-        return getattr(__about__, "__version__", "unknown")
+        return "bundled"
 
 
 def prewarm_markitdown() -> None:
-    """Import markitdown ahead of the first conversion.
+    """Start the MarkItDown worker ahead of a conversion. Returns at once.
 
-    Meant to run on a background thread once the UI is up. A conversion that
-    arrives while this is still running just waits on Python's import lock.
+    Called when the user shows they are about to convert something (POST
+    /convert/warmup). A conversion that arrives while it is starting waits for
+    that same start instead of launching another.
     """
-    try:
-        import markitdown  # noqa: F401
-    except Exception:
-        # The real conversion will raise and report the problem properly.
-        pass
+    from app.core.engines.markitdown_worker_client import MarkItDownWorker
+
+    MarkItDownWorker.get_instance().warm()
 
 
 def url_to_basename(url: str) -> str:
@@ -253,11 +261,25 @@ class ConversionOptions:
     allow_engine_fallback: bool = True
     # Run the missing-text check after a PDF conversion (app/core/quality_check.py).
     quality_check: bool = True
+    # "fast" | "balanced" | "thorough" (app/core/table_stage.py). Balanced and
+    # Thorough check a PDF's tables against the PDF itself; Auto then replaces
+    # the ones an engine got wrong. Thorough also lets Auto split mixed PDFs
+    # by page and read hard tables with GLM-OCR.
+    auto_quality: str = "fast"
+    # "high": the tables Auto found too dense to read at normal detail are read whole, at
+    # their full size (an offer the result makes, which the user took). "normal" otherwise.
+    table_detail: str = "normal"
+    # Steps of that level not to run, by name (app/core/thorough_passes.py).
+    passes_off: tuple[str, ...] = ()
+    # GLM-OCR reads only these 1-based pages (Auto's page split); None = all.
+    page_subset: list[int] | None = None
 
     # Results written by whichever path ran, read by the server. Plain data only.
     engine_used: EngineKind | None = None   # always concrete, never AUTO
     auto_decision: Any = None               # auto_engine.AutoDecision when engine=auto
     quality_report: Any = None              # quality_check.QualityReport for PDFs
+    table_report: Any = None                # table_check.TableSummary when tables were checked
+    polish_counts: tuple[int, int] = (0, 0)  # Thorough: ('&' restored, words given back their dashes/quotes)
     # Notes about the result that are not failures (GLM-OCR: a page that looped
     # and was cut short, the GPU falling back to the CPU). Replaced, never
     # mutated in place, since dataclasses.replace shares the list.
@@ -320,6 +342,8 @@ class FetchedSource:
     filename: str
     content_type: str
     stream_info_kwargs: dict[str, str]
+    # Sentences for the response's warnings (a page rebuilt by app.core.web_shell).
+    notes: list[str] = field(default_factory=list)
 
     def cleanup(self) -> None:
         try:
@@ -370,13 +394,31 @@ def open_url_source(item: QueueItem) -> FetchedSource:
     if "charset" not in hints and fetched.charset:
         hints["charset"] = fetched.charset
 
-    return FetchedSource(
+    source = FetchedSource(
         path=fetched.temp_file_path,
         final_url=fetched.final_url,
         filename=fetched.filename,
         content_type=fetched.content_type or "",
         stream_info_kwargs=hints,
     )
+    # A page that builds its content with JavaScript: converted from the copy it
+    # carries for search engines, or refused with a sentence saying what to do.
+    # Not when the item says what the file is.
+    is_html = (hints.get("extension", "").lower() in (".html", ".htm", ".xhtml")
+               or hints.get("mimetype", "").lower() in ("text/html", "application/xhtml+xml"))
+    if is_html and not (item.extension_override.strip() or item.mimetype_override.strip()):
+        from app.core.web_shell import inspect_page
+
+        try:
+            rebuilt = inspect_page(source.path, url=source.final_url, charset=hints.get("charset"))
+            if rebuilt is not None:
+                source.path.write_bytes(rebuilt.html)
+                hints.update(extension=".html", mimetype="text/html", charset="utf-8")
+                source.notes.append(rebuilt.note)
+        except BaseException:
+            source.cleanup()  # the caller never gets the file to delete
+            raise
+    return source
 
 
 @contextmanager
@@ -437,20 +479,73 @@ def convert_local(
         from app.core.engines.glm_ocr_engine import convert_with_glm_ocr
         return convert_with_glm_ocr(file_item, options)
 
+    from app.core.engines.markitdown_worker_client import convert_with_markitdown
+
+    stream_info_kwargs = dict(fetched.stream_info_kwargs) if fetched else _override_stream_info(file_item)
+    url = fetched.final_url if fetched is not None else None
+    return convert_with_markitdown(file_item.source, options, stream_info_kwargs, url)
+
+
+def run_markitdown(
+    source: str,
+    options: ConversionOptions,
+    stream_info_kwargs: dict[str, str],
+    url: str | None,
+) -> str:
+    """One MarkItDown conversion, in the current process.
+
+    Runs inside the MarkItDown worker, and in InkDoc's own process only when
+    the worker can't be started (convert_with_markitdown falls back to it).
+    """
     from markitdown import StreamInfo
 
     md = options.build_markitdown()
-    stream_info_kwargs = dict(fetched.stream_info_kwargs) if fetched else _override_stream_info(file_item)
-
     convert_kwargs: dict[str, Any] = {}
     if options.keep_data_uris:
         convert_kwargs["keep_data_uris"] = True
-    if fetched is not None:
-        convert_kwargs["url"] = fetched.final_url
+    if url is not None:
+        convert_kwargs["url"] = url
 
     stream_info = StreamInfo(**stream_info_kwargs) if stream_info_kwargs else None
-    result = md.convert_local(file_item.source, stream_info=stream_info, **convert_kwargs)
+    try:
+        result = md.convert_local(source, stream_info=stream_info, **convert_kwargs)
+    except Exception as exc:
+        # MarkItDown guesses a text file's charset from its first 64 KB, so a file
+        # that is plain ASCII there and UTF-8 further on (a CSV export with one
+        # accented name near the end) fails with UnicodeDecodeError. Such a file
+        # is retried once as UTF-8, if the whole of it decodes as UTF-8. A charset
+        # given explicitly is never second-guessed.
+        if "charset" in stream_info_kwargs or not _failed_on_decoding(exc) or not _is_utf8_file(source):
+            raise
+        logger.info("Retrying %s as UTF-8 after a wrong charset guess.", os.path.basename(source))
+        result = md.convert_local(
+            source, stream_info=StreamInfo(**{**stream_info_kwargs, "charset": "utf-8"}), **convert_kwargs
+        )
     return result.text_content
+
+
+def _failed_on_decoding(exc: BaseException) -> bool:
+    """True when a MarkItDown failure came from decoding text with the wrong charset."""
+    if isinstance(exc, UnicodeDecodeError):
+        return True
+    for attempt in getattr(exc, "attempts", None) or []:
+        info = getattr(attempt, "exc_info", None)
+        if info and isinstance(info[1], UnicodeDecodeError):
+            return True
+    return False
+
+
+def _is_utf8_file(path: str, chunk_size: int = 1 << 20) -> bool:
+    """True when the file decodes as UTF-8 from start to end. Reads it in 1 MB pieces."""
+    decoder = codecs.getincrementaldecoder("utf-8")()
+    try:
+        with open(path, "rb") as fh:
+            while chunk := fh.read(chunk_size):
+                decoder.decode(chunk)
+            decoder.decode(b"", final=True)
+    except (OSError, UnicodeDecodeError):
+        return False
+    return True
 
 
 def convert_item(

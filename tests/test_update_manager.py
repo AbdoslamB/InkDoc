@@ -1,5 +1,6 @@
 """Unit tests for UpdateManager lifecycle, state transitions, and security checks."""
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -13,7 +14,13 @@ if str(REPO_ROOT) not in sys.path:
 
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
-from app.core.update_manager import UpdateManager, UpdateState, get_current_platform_key
+from app.core.update_manager import (
+    NO_MANIFEST_YET,
+    UpdateManager,
+    UpdateState,
+    get_current_platform_key,
+    glibc_incompatibility,
+)
 from scripts.sign_manifest import build_envelope
 
 
@@ -103,6 +110,77 @@ class TestUpdateManager(unittest.TestCase):
             status = mgr.check_for_updates(force=True)
             self.assertEqual(status["state"], UpdateState.UP_TO_DATE.value)
 
+    def _linux_manifest(self, mgr: UpdateManager) -> bytes:
+        manifest_data = {
+            "version": "2.0.0",
+            "issued_at": "2026-09-19T00:00:00Z",
+            "assets": {
+                mgr._platform_key: {
+                    "filename": "inkdoc-linux-x86_64.AppImage",
+                    "url": "https://github.com/AbdoslamB/InkDoc/releases/download/v2.0.0/inkdoc-linux-x86_64.AppImage",
+                    "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                    "size_bytes": 1024,
+                    "install_method": "download_reveal",
+                    "min_glibc": "2.39",
+                }
+            },
+        }
+        return json.dumps(build_envelope(manifest_data, self.private_key)).encode("utf-8")
+
+    def test_update_needing_newer_glibc_is_not_offered(self) -> None:
+        mgr = UpdateManager(
+            manifest_url_override="https://github.com/AbdoslamB/InkDoc/releases/latest/download/inkdoc-update-manifest.json",
+            test_public_keys=[self.public_key],
+        )
+        envelope_bytes = self._linux_manifest(mgr)
+        with patch.object(mgr, "_fetch_manifest_bytes", return_value=envelope_bytes), \
+             patch("app.core.update_manager.host_glibc", return_value=(2, 35)):
+            status = mgr.check_for_updates(force=True)
+        self.assertEqual(status["state"], UpdateState.ERROR.value)
+        self.assertIn("glibc 2.39 or newer", status["error"])
+        self.assertIn("2.35", status["error"])
+        self.assertIsNone(mgr._verified_target_asset, "an update this system can't start was kept")
+
+        with patch.object(mgr, "_fetch_manifest_bytes", return_value=envelope_bytes), \
+             patch("app.core.update_manager.host_glibc", return_value=(2, 41)):
+            status = mgr.check_for_updates(force=True)
+        self.assertEqual(status["state"], UpdateState.AVAILABLE.value)
+
+    def test_glibc_incompatibility_rules(self) -> None:
+        asset = {"min_glibc": "2.39"}
+        self.assertIsNone(glibc_incompatibility(asset, (2, 39)))
+        self.assertIsNone(glibc_incompatibility(asset, (2, 43)))
+        self.assertIsNotNone(glibc_incompatibility(asset, (2, 38)))
+        # Unknown either way never blocks: no field, a malformed field, or no glibc (musl, macOS).
+        self.assertIsNone(glibc_incompatibility({}, (2, 17)))
+        self.assertIsNone(glibc_incompatibility({"min_glibc": "two"}, (2, 17)))
+        self.assertIsNone(glibc_incompatibility(asset, None))
+
+    @unittest.skipIf(sys.platform == "win32", "POSIX permission bits")
+    def test_downloaded_appimage_is_made_executable(self) -> None:
+        mgr = UpdateManager(test_public_keys=[self.public_key])
+        payload = b"FAKE_APPIMAGE"
+        import hashlib
+
+        def fake_stream_download(url, destination_path, **kwargs):
+            Path(destination_path).write_bytes(payload)
+            Path(destination_path).chmod(0o644)  # as a download arrives
+            return hashlib.sha256(payload).hexdigest()
+
+        asset = {
+            "filename": "inkdoc-linux-x86_64.AppImage",
+            "url": "https://github.com/AbdoslamB/InkDoc/releases/download/v2.0.0/inkdoc-linux-x86_64.AppImage",
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "size_bytes": len(payload),
+            "install_method": "download_reveal",
+        }
+        with patch("app.core.update_manager.stream_download", side_effect=fake_stream_download), \
+             patch("app.core.update_manager.get_downloads_dir", return_value=self.temp_dir):
+            mgr._run_download(asset)
+        target = self.temp_dir / "inkdoc-linux-x86_64.AppImage"
+        self.assertEqual(mgr._status.state, UpdateState.READY_TO_REVEAL.value, mgr._status.error)
+        self.assertTrue(os.access(target, os.X_OK), "the verified AppImage is not executable")
+
     def test_check_404_error_does_not_show_up_to_date(self) -> None:
         """Requirement B: A 404 manifest means 'couldn't check' and must never display 'up to date'."""
         mgr = UpdateManager(
@@ -124,11 +202,12 @@ class TestUpdateManager(unittest.TestCase):
             self.assertEqual(status["state"], UpdateState.ERROR.value)
             self.assertEqual(
                 status["error"],
-                "No signed update information has been published for the latest release yet.",
+                NO_MANIFEST_YET,
             )
             # Must not read as a fault on the user's machine.
             self.assertNotIn("failed", status["error"].lower())
             self.assertNotEqual(status["state"], UpdateState.UP_TO_DATE.value)
+            self.assertTrue(status["offer_download"])
 
     def test_failed_check_discards_previously_verified_asset(self) -> None:
         """A failing check must not leave the previous check's asset usable.

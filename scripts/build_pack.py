@@ -35,11 +35,12 @@ if str(REPO_ROOT) not in sys.path:
 from app.core.engine_manifest import get_current_platform_key
 
 MAX_ALLOWED_PACK_SIZE = 1900 * 1024 * 1024  # 1.9 GiB maximum limit
+SMOKE_CONVERSION_TIMEOUT_S = 180  # the app's own limit for one Docling conversion
 # Only used when --release-tag is omitted. build-packs.yml always passes it, so
 # this matters only for a manual run: the asset URLs written into the manifest
 # fragment are derived from it, and pointing them at an already-published tag
 # produces a fragment describing assets that will never be uploaded there.
-DEFAULT_RELEASE_TAG = "docling-pack-v1"
+DEFAULT_RELEASE_TAG = "docling-pack-v2"
 
 # Shared with .github/workflows/build-addon.yml so the pack and the enrichment
 # add-on are built against the same Docling. See the file for why.
@@ -146,7 +147,7 @@ def install_standalone_python(staging_dir: Path, platform_key: str) -> Path:
 def assert_pack_is_self_contained(staging_dir: Path, platform_key: str) -> None:
     """Fail the build unless the pack carries its own interpreter and stdlib.
 
-    This is the check that would have caught docling-pack-v2. It needs no runtime
+    This is the check that would have caught a broken pack built before 1.0.0. It needs no runtime
     and cannot be fooled by running on the machine that produced the pack, which is
     exactly how the previous breakage escaped every test.
     """
@@ -392,7 +393,7 @@ def run_post_build_smoke_test(
         # Prove the extracted interpreter resolves itself inside the extraction
         # directory rather than against anything on this machine. A virtualenv fails
         # this: its sys.prefix follows pyvenv.cfg back to the build toolcache, which
-        # is why docling-pack-v2 started here and died on users' machines.
+        # is why a pack built before 1.0.0 started here and died on users' machines.
         probe = subprocess.run(
             [str(extracted_python), "-I", "-c", "import sys; print(sys.prefix); print(sys.executable)"],
             capture_output=True,
@@ -476,7 +477,19 @@ def run_post_build_smoke_test(
             text=True,
             env=offline_env,
         )
-        stdout_data2, stderr_data2 = proc2.communicate(input=convert_rpc, timeout=60)
+        # The app allows a conversion 180 s (CONVERSION_TIMEOUT_SECONDS in
+        # docling_worker_client.py). A freshly extracted pack is read cold, and on
+        # Windows each new DLL is scanned as it loads, which took a first conversion
+        # past 60 s on a desktop PC. A worker still running at the limit is stopped
+        # here, or the temporary directory can't be removed (Windows keeps its DLLs locked).
+        try:
+            stdout_data2, stderr_data2 = proc2.communicate(input=convert_rpc, timeout=SMOKE_CONVERSION_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            proc2.kill()
+            proc2.communicate()
+            raise RuntimeError(
+                f"Post-build offline PDF conversion did not finish within {SMOKE_CONVERSION_TIMEOUT_S} s."
+            ) from None
         if proc2.returncode != 0:
             raise RuntimeError(f"Post-build offline PDF conversion failed with code {proc2.returncode}: {stderr_data2}")
         lines2 = [ln.strip() for ln in stdout_data2.strip().split("\n") if ln.strip()]
@@ -516,7 +529,7 @@ def build_pack(
     # python311.dll stay in the base installation, located at runtime through
     # pyvenv.cfg's `home` key. That path is the build runner's toolcache and does not
     # exist on a user's machine, so the interpreter died during initialisation before
-    # running a line of worker.py. docling-pack-v2 shipped that way and every
+    # running a line of worker.py. A pack built before 1.0.0 shipped that way and every
     # conversion failed with "Docling worker exited prematurely".
     #
     # python-build-standalone distributions are self-contained and relocatable by

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -15,6 +16,14 @@ import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
+
+# Run as a script, Python puts scripts/ on sys.path, not the repo root, and some
+# interpreters put neither (an embeddable Python's ._pth file, `python -I`).
+_REPO_ROOT = str(Path(__file__).resolve().parent.parent)
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+from scripts.build_dmg import copy_app, mounted, verify_signature  # noqa: E402
 
 
 def get_free_port() -> int:
@@ -85,14 +94,33 @@ def prepare_target_executable(artifact_path: Path, artifact_type: str, temp_dir:
         extract_dir = temp_dir / "unpacked"
         extract_dir.mkdir(parents=True, exist_ok=True)
         print(f"[*] Unpacking {artifact_path.name} to {extract_dir} ...")
-        if sys.platform == "darwin":
-            subprocess.run(["ditto", "-x", "-k", str(artifact_path), str(extract_dir)], check=True)
-        elif shutil.which("unzip"):
+        if shutil.which("unzip"):
             subprocess.run(["unzip", "-q", str(artifact_path), "-d", str(extract_dir)], check=True)
         else:
             with zipfile.ZipFile(artifact_path, "r") as z:
                 z.extractall(extract_dir)
         return find_executable(extract_dir)
+
+    if artifact_type == "dmg":
+        if sys.platform != "darwin":
+            raise RuntimeError("Disk image smoke testing is only supported on macOS runners.")
+        mountpoint = temp_dir / "mnt"
+        app_dir = temp_dir / "app"
+        app_dir.mkdir(parents=True, exist_ok=True)
+        print(f"[*] Mounting {artifact_path.name} at {mountpoint} ...")
+        with mounted(artifact_path, mountpoint):
+            # What a user does: drag the app out of the image into a folder of theirs.
+            copy_app(mountpoint / "inkdoc.app", app_dir / "inkdoc.app")
+        verify_signature(app_dir / "inkdoc.app")
+        return find_executable(app_dir)
+
+    if artifact_type == "appimage":
+        if not sys.platform.startswith("linux"):
+            raise RuntimeError("AppImage smoke testing is only supported on Linux runners.")
+        target = temp_dir / artifact_path.name
+        shutil.copy2(artifact_path, target)
+        target.chmod(0o755)  # as a browser download, it arrives without the executable bit
+        return target
 
     if artifact_type == "installer":
         if sys.platform != "win32":
@@ -114,7 +142,60 @@ def prepare_target_executable(artifact_path: Path, artifact_type: str, temp_dir:
             )
         return find_executable(install_dir)
 
-    raise ValueError(f"Unknown artifact type '{artifact_type}'. Expected: onefile, zip, or installer.")
+    raise ValueError(
+        f"Unknown artifact type '{artifact_type}'. Expected: onefile, zip, dmg, appimage, or installer."
+    )
+
+
+def launch_env(artifact_type: str, use_fuse: bool = False) -> dict[str, str]:
+    """The environment the artifact runs with. An AppImage normally mounts itself with FUSE,
+    which CI runners and containers may lack; APPIMAGE_EXTRACT_AND_RUN=1 unpacks it instead
+    (the same contents, so the same test). --appimage-fuse tests the mount path."""
+    env = dict(os.environ)
+    if artifact_type == "appimage" and not use_fuse:
+        env["APPIMAGE_EXTRACT_AND_RUN"] = "1"
+    return env
+
+
+def xwd_colour_count(data: bytes, step: int = 5) -> int:
+    """Distinct pixel values in an X window dump (`xwd -root`), sampling every `step`-th pixel.
+
+    A rendered InkDoc window (antialiased text, icons) has hundreds; an empty display or a
+    WebKit view that drew nothing has a handful. ZPixmap with 24 or 32 bits per pixel only.
+    """
+    import struct
+
+    if len(data) < 100:
+        raise ValueError("not an XWD dump")
+    fields = struct.unpack(">25I", data[:100])
+    header_size, version, pixmap_format = fields[0], fields[1], fields[2]
+    height, bits_per_pixel, bytes_per_line, ncolors = fields[5], fields[11], fields[12], fields[19]
+    if version != 7 or pixmap_format != 2 or bits_per_pixel not in (24, 32):
+        raise ValueError(f"unsupported XWD dump (version {version}, format {pixmap_format}, {bits_per_pixel} bpp)")
+    offset, size = header_size + ncolors * 12, bits_per_pixel // 8
+    seen = set()
+    for row in range(0, height, step):
+        line = data[offset + row * bytes_per_line: offset + (row + 1) * bytes_per_line]
+        for col in range(0, len(line) - size + 1, size * step):
+            seen.add(line[col:col + size])
+    return len(seen)
+
+
+GUI_MIN_COLOURS = 64
+
+
+def check_window_rendered(artifact_name: str, log_dir: Path) -> None:
+    """Fail when the X display shows no rendered window (needs `xwd`, from x11-apps)."""
+    if not shutil.which("xwd"):
+        record_summary_line(f"[GUI-RENDER] {artifact_name}: skipped (xwd is not installed)")
+        return
+    shot = subprocess.run(["xwd", "-root", "-silent"], capture_output=True, timeout=30, check=True).stdout
+    (log_dir / f"{Path(artifact_name).stem}.screen.xwd").write_bytes(shot)
+    colours = xwd_colour_count(shot)
+    if colours < GUI_MIN_COLOURS:
+        record_summary_line(f"[GUI-RENDER] {artifact_name}: FAIL ({colours} colours on screen)")
+        raise RuntimeError(f"The window shows nothing ({colours} distinct colours on the X display).")
+    record_summary_line(f"[GUI-RENDER] {artifact_name}: PASS ({colours} colours on screen)")
 
 
 def generate_sample_docx() -> bytes:
@@ -200,6 +281,55 @@ def send_file_conversion(port: int, filename: str, content: bytes, content_type:
         return markdown
 
 
+def send_preview_page(port: int, pdf: bytes) -> tuple[int, int]:
+    """Keep a PDF for the preview's Original view, draw its first page, close it; return the PNG's size.
+
+    Needs pdfium and Pillow's PNG writer in the bundle. The session token is read from
+    the page, as the UI gets it.
+    """
+    base = f"http://127.0.0.1:{port}"
+    with urllib.request.urlopen(f"{base}/InkDoc", timeout=10.0) as resp:
+        page = resp.read().decode("utf-8", errors="replace")
+    match = re.search(r'__INKDOC_SESSION_TOKEN__ = "([^"]+)"', page)
+    if not match:
+        raise RuntimeError("/InkDoc carries no session token")
+    token = {"X-InkDoc-Token": match.group(1)}
+
+    boundary = "----SmokeTestBoundary123456789"
+    body = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="file"; filename="sample.pdf"\r\n'
+        "Content-Type: application/pdf\r\n\r\n"
+    ).encode() + pdf + f"\r\n--{boundary}--\r\n".encode()
+    req = urllib.request.Request(
+        f"{base}/preview/pdf",
+        data=body,
+        headers={**token, "Content-Type": f"multipart/form-data; boundary={boundary}"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=20.0) as resp:
+        kept = json.loads(resp.read().decode("utf-8"))
+    if not kept.get("id") or not kept.get("pages"):
+        raise RuntimeError(f"/preview/pdf kept nothing: {kept}")
+
+    req = urllib.request.Request(f"{base}/preview/pdf/{kept['id']}/page/1?width=600", headers=token)
+    with urllib.request.urlopen(req, timeout=20.0) as resp:
+        png = resp.read()
+        content_type = resp.headers.get("Content-Type", "")
+    if content_type != "image/png" or png[:8] != b"\x89PNG\r\n\x1a\n":
+        raise RuntimeError(f"Page 1 is not a PNG ({content_type}, {len(png)} bytes)")
+    size = (int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big"))
+    if size[0] != 600:
+        raise RuntimeError(f"Page 1 was drawn {size[0]} pixels wide, not 600")
+
+    req = urllib.request.Request(f"{base}/preview/pdf/{kept['id']}", headers=token, method="DELETE")
+    with urllib.request.urlopen(req, timeout=10.0) as resp:
+        closed = json.loads(resp.read().decode("utf-8"))
+    if closed.get("status") != "closed":
+        raise RuntimeError(f"/preview/pdf/{{id}} didn't close it: {closed}")
+    return size
+
+
 def send_audio_conversion(port: int, content: bytes) -> str:
     """Require HTTP 200 or a clean non-5xx no-transcription response."""
     try:
@@ -225,14 +355,46 @@ def record_summary_line(line: str) -> None:
             summary.write(f"{line}\n")
 
 
+def run_selftest(exe_path: Path, env: dict, flag: str, label: str, name: str, timeout: float,
+                 failure: str = "") -> str:
+    """Run `exe_path flag`; its stdout once it exits 0. A failure or a timeout is recorded in the
+    summary as [label] and raised, with the app's output."""
+    print(f"[*] Running {flag}: {exe_path} {flag}")
+    proc = subprocess.Popen(
+        [str(exe_path), flag],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+        # Its own process group, so kill_process_tree never reaches this script.
+        start_new_session=sys.platform != "win32",
+    )
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        kill_process_tree(proc.pid)
+        out, err = proc.communicate()
+        record_summary_line(f"[{label}] {name}: TIMEOUT")
+        raise RuntimeError(f"{flag} timed out after {timeout:.0f}s for {name}:\nSTDOUT:\n{out}\nSTDERR:\n{err}") from e
+    if proc.returncode != 0:
+        record_summary_line(f"[{label}] {name}: FAIL (exit code {proc.returncode})")
+        raise RuntimeError(
+            f"{flag} failed with code {proc.returncode}{': ' + failure if failure else ''}.\n"
+            f"STDOUT:\n{out}\nSTDERR:\n{err}"
+        )
+    return out
+
+
 def run_smoke_test(
     artifact_path: Path,
     artifact_type: str,
     expected_version: str,
     timeout: float = 60.0,
     log_dir: Path | None = None,
+    appimage_fuse: bool = False,
 ) -> None:
     """Execute end-to-end smoke test on the specified artifact."""
+    env = launch_env(artifact_type, appimage_fuse)
     if not artifact_path.is_file():
         raise FileNotFoundError(f"Target artifact does not exist: {artifact_path}")
 
@@ -260,28 +422,27 @@ def run_smoke_test(
                 raise RuntimeError(f"macOS executable path does not contain .app/Contents/MacOS: {exe_path}")
         print(f"[*] Prepared executable: {exe_path}")
 
-        # 1. Run GUI backend self-test in frozen build
-        print(f"[*] Running GUI backend self-test: {exe_path} --selftest")
-        selftest_proc = subprocess.Popen(
-            [str(exe_path), "--selftest"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        try:
-            out, err = selftest_proc.communicate(timeout=15.0)
-            if selftest_proc.returncode != 0:
-                record_summary_line(f"[SELFTEST] {artifact_path.name}: FAIL (exit code {selftest_proc.returncode})")
-                raise RuntimeError(
-                    f"--selftest failed with code {selftest_proc.returncode}:\n"
-                    f"STDOUT:\n{out}\n"
-                    f"STDERR:\n{err}"
-                )
-            record_summary_line(f"[SELFTEST] {artifact_path.name}: PASS (exit code {selftest_proc.returncode})")
-        except subprocess.TimeoutExpired as e:
-            kill_process_tree(selftest_proc.pid)
-            record_summary_line(f"[SELFTEST] {artifact_path.name}: TIMEOUT")
-            raise RuntimeError(f"--selftest timed out after 15s for {artifact_path.name}") from e
+        # 1. GUI backend self-test in the frozen build. An AppImage run with
+        # APPIMAGE_EXTRACT_AND_RUN unpacks itself (~280 MB) first.
+        selftest_timeout = 60.0 if artifact_type == "appimage" else 15.0
+        run_selftest(exe_path, env, "--selftest", "SELFTEST", artifact_path.name, selftest_timeout)
+        record_summary_line(f"[SELFTEST] {artifact_path.name}: PASS (exit code 0)")
+
+        # 1b. A real window under the page's own policy: one page -> app -> page round trip
+        # (app/desktop/webview_bridge.py). The app gives up after 30 s by itself.
+        run_selftest(exe_path, env, "--selftest-bridge", "BRIDGE", artifact_path.name, selftest_timeout + 60.0,
+                     "the page could not reach the window's functions")
+        record_summary_line(f"[BRIDGE] {artifact_path.name}: PASS")
+
+        # 1c. HTTPS as the updater does it: the real update manifest, its signature checked
+        # (app/core/tls_trust.py). The app retries network errors by itself, never a
+        # certificate error.
+        out = run_selftest(exe_path, env, "--selftest-https", "HTTPS", artifact_path.name, selftest_timeout + 90.0,
+                           "the app could not make verified HTTPS requests")
+        print(out)
+        source = next((line.split(": ", 1)[1] for line in out.splitlines()
+                       if line.startswith("[*] HTTPS certificates: ")), "not reported")
+        record_summary_line(f"[HTTPS] {artifact_path.name}: PASS ({source})")
 
         port = get_free_port()
         print(f"[*] Selected ephemeral port: {port}")
@@ -290,6 +451,7 @@ def run_smoke_test(
             kwargs: dict = {
                 "stdout": log_f,
                 "stderr": subprocess.STDOUT,
+                "env": env,
             }
             if sys.platform == "win32":
                 kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
@@ -355,6 +517,7 @@ def run_smoke_test(
                             raise RuntimeError(f"GUI process exited before 15 seconds with code {proc.returncode}")
                         time.sleep(0.5)
                     record_summary_line(f"[GUI] {artifact_path.name}: stayed alive for 15 seconds")
+                    check_window_rendered(artifact_path.name, log_dir)
 
                 # 3. Verify reported version matches expected tag/dev version
                 if reported_version != expected_version:
@@ -404,7 +567,11 @@ def run_smoke_test(
                     raise AssertionError(f"Expected content in pdf markdown output, got: {pdf_md[:200]}")
                 record_summary_line(f"[CONVERT-PDF] {artifact_path.name}: PASS (output length: {len(pdf_md)} bytes)")
 
-                # 4e. WAV audio conversion; transcription is optional.
+                # 4e. The preview's Original view draws a PDF page.
+                width, height = send_preview_page(port, pdf_data)
+                record_summary_line(f"[PREVIEW-PDF] {artifact_path.name}: PASS ({width}x{height} PNG)")
+
+                # 4f. WAV audio conversion; transcription is optional.
                 audio_result = send_audio_conversion(port, generate_sample_wav())
                 if not audio_result.strip():
                     raise AssertionError("Audio conversion returned no result")
@@ -428,10 +595,12 @@ def main() -> int:
     parser.add_argument("--artifact", type=Path, required=True, help="Path to artifact to test.")
     parser.add_argument(
         "--type",
-        choices=["onefile", "zip", "installer"],
+        choices=["onefile", "zip", "dmg", "appimage", "installer"],
         required=True,
         help="Artifact distribution packaging type.",
     )
+    parser.add_argument("--appimage-fuse", action="store_true",
+                        help="Run an AppImage through its FUSE mount instead of APPIMAGE_EXTRACT_AND_RUN.")
     parser.add_argument("--expected-version", required=True, help="Expected version reported by /health.")
     parser.add_argument("--timeout", type=float, default=60.0, help="Timeout in seconds for /health polling.")
     parser.add_argument("--log-dir", type=Path, default=None, help="Directory to save process logs.")
@@ -445,6 +614,7 @@ def main() -> int:
             expected_version=args.expected_version,
             timeout=args.timeout,
             log_dir=args.log_dir,
+            appimage_fuse=args.appimage_fuse,
         )
         return 0
     except Exception as e:

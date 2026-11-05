@@ -110,11 +110,15 @@ function setup() {
         loadSettings: () => calls.push("loadSettings"),
         fetchUpdateStatus: () => calls.push("fetchUpdateStatus"),
         refreshAddonStatus: () => calls.push("refreshAddonStatus"),
+        refreshLayoutAddon: () => calls.push("refreshLayoutAddon"),
         refreshGlm: (force) => calls.push(`refreshGlm(${force})`),
+        flushPrefs: () => calls.push("flushPrefs"),
+        flushTextSize: () => calls.push("flushTextSize"),
     };
     const api = new Function("env", `
         const { window, document, settingsPopover, settingsBtn, appDialogOverlay, toastNotification,
-                loadSettings, fetchUpdateStatus, refreshAddonStatus, refreshGlm } = env;
+                loadSettings, fetchUpdateStatus, refreshAddonStatus, refreshLayoutAddon, refreshGlm, flushPrefs,
+                flushTextSize } = env;
         ${block}
         return { openSettings, closeSettings, isOpen: isSettingsOpen, section: () => settingsSection };
     `)(env);
@@ -158,7 +162,7 @@ function setup() {
     assert.deepStrictEqual(t.shownPane(), ["general"]);
     assert.deepStrictEqual(t.current(), ["general"]);
     assert.strictEqual(t.doc.activeElement, t.navItems[0], "focus moves to the current section");
-    assert.deepStrictEqual(t.calls, ["loadSettings", "fetchUpdateStatus", "refreshAddonStatus", "refreshGlm(true)"]);
+    assert.deepStrictEqual(t.calls, ["loadSettings", "fetchUpdateStatus", "refreshAddonStatus", "refreshLayoutAddon", "refreshGlm(true)"]);
 
     t.click(t.gear);
     assert.ok(!t.isOpen());
@@ -166,6 +170,12 @@ function setup() {
     assert.strictEqual(t.gear.getAttribute("aria-expanded"), "false");
     assert.ok(!t.doc.rootClasses.has("settings-open"));
     assert.strictEqual(t.doc.activeElement, t.gear, "focus returns to the gear");
+    // Changes made in Settings are saved as it closes, not after their pause.
+    assert.deepStrictEqual(t.calls.slice(5), ["flushPrefs", "flushTextSize"]);
+
+    // Closing what is already closed saves nothing.
+    t.closeSettings();
+    assert.strictEqual(t.calls.length, 7);
 }
 
 // The X and Escape close it and hand focus back.
@@ -369,11 +379,16 @@ function setup() {
 }
 
 // Every caller outside the drawer is about an engine, so it opens Engines.
+// openEngineCard opens the section its table names: Engines for an engine,
+// Add-ons for the layout model add-on.
 {
     const outside = source.slice(0, start) + source.slice(end);
-    const callers = outside.match(/openSettings\([^)]*\)/g) || [];
-    assert.ok(callers.length >= 6, `expected the engine prompts to call openSettings, found ${callers.length}`);
+    const callers = (outside.match(/openSettings\([^)]*\)/g) || []).filter((call) => call !== "openSettings(e, section)");
+    assert.ok(callers.length >= 5, `expected the engine prompts to call openSettings, found ${callers.length}`);
     callers.forEach((call) => assert.ok(call.includes('"engines"'), `${call} should open the Engines section`));
+    const cards = source.match(/const ENGINE_CARDS = \{([\s\S]*?)\};/)[1];
+    assert.ok(/docling: \["engines", /.test(cards) && /glm_ocr: \["engines", /.test(cards), "engines open Engines");
+    assert.ok(/layout_model: \["addons", "layoutAddonCard"\]/.test(cards), "the layout model opens its Add-ons card");
 }
 
 // Markup: one nav item and one pane per section (the stubs above use four;
@@ -410,6 +425,18 @@ function setup() {
     assert.ok(/<div class="settings-scrim" id="settingsScrim" hidden>/.test(html), "the scrim starts hidden");
 }
 
+// The drawer carries the section shown, so the CSS can hide the support heart
+// on About (which has its own link); it starts on General in the markup.
+{
+    const t = setup();
+    t.click(t.gear);
+    t.click(t.navItems[SECTIONS.indexOf("about")]);
+    assert.strictEqual(t.drawer.dataset.section, "about");
+    t.click(t.navItems[SECTIONS.indexOf("updates")]);
+    assert.strictEqual(t.drawer.dataset.section, "updates");
+    assert.ok(/<div[^>]*id="settingsPopover"[^>]*data-section="general"/.test(html));
+}
+
 // Every element the old popover had is still there exactly once, so no
 // getElementById in app.js lost its target in the move.
 {
@@ -426,11 +453,11 @@ function setup() {
         btnGlmInstall btnGlmUpdate btnGlmVerify btnGlmRemove btnGlmCancel glmOptions glmGpuToggle glmGpuLabel
         glmGpuCaption glmAdvanced glmSourceSelect glmVariantSelect btnGlmSelftest glmCatalogueInfo
         settingsUpdatesSection appCurrentVersionBadge updateCard updateStatusTitle updateStatusSubtitle btnCheckUpdates
-        iconCheckUpdatesSpin btnCheckUpdatesText updateDetails updateNewVersion updateAssetSize updateNotesAccordion
-        updateNotesContent updateProgressWrapper updateProgressFill updateProgressText updateActions btnDownloadUpdate
+        iconCheckUpdatesSpin btnCheckUpdatesText updateDetails updateNewVersion updateAssetSize updateNotes updateNotesTitle
+        updateNotesBody updateNotesMore updateNotesLink updateProgressWrapper updateProgressFill updateProgressText updateActions btnDownloadUpdate
         btnApplyUpdate btnRevealUpdate btnCancelUpdate updateActionHelp updateErrorBox updateErrorMsg aboutUsLink`
         .split(/\s+/).filter(Boolean);
-    assert.strictEqual(ids.length, 100);
+    assert.strictEqual(ids.length, 103);
     ids.forEach((id) => {
         const count = (html.match(new RegExp(`id="${id}"`, "g")) || []).length;
         assert.strictEqual(count, 1, `#${id} should appear exactly once, found ${count}`);

@@ -83,6 +83,10 @@ that should trust it.
 ### Step 1: Prepare the Release
 
 1. Update `CHANGELOG.md`: move items from `[Unreleased]` into a new section `[X.Y.Z] - YYYY-MM-DD`.
+   This section becomes the release notes: `release.yml` puts it on the release page
+   and `sign_manifest.py` signs it into the update manifest. Settings → Updates shows
+   five entries, the first ones of each heading in turn, so put each heading's most
+   important entries first.
 2. Commit and push the changelog:
    ```bash
    git add CHANGELOG.md
@@ -100,50 +104,64 @@ git push origin vX.Y.Z
 ```
 
 GitHub Actions will automatically run `.github/workflows/release.yml`, which:
-- Compiles binaries for Windows (`inkdoc-setup.exe`, `inkdoc.exe`, `inkdoc-windows.zip`), macOS (`inkdoc-macos.zip`), and Linux (`inkdoc-linux.zip`).
+- Compiles binaries for Windows (`inkdoc-setup.exe`, `inkdoc.exe`, `inkdoc-windows.zip`), macOS (`inkdoc-macos.dmg`, from 1.3.0; earlier releases shipped `inkdoc-macos.zip`), and Linux (`inkdoc-linux-x86_64.AppImage`, from 1.3.0; earlier releases shipped `inkdoc-linux.zip`).
+- Runs the Linux AppImage's smoke test on Ubuntu 24.04, Debian 13 and Fedora 44 (`linux-compat`); the `publish-release` job (its asset check, and publishing for pre-releases) runs only when all three pass.
 - Injects the build version dynamically into `app/_version.py`.
 - Generates SHA-256 checksums (`SHA256SUMS-*.txt`).
 - Generates GitHub build provenance attestations (`actions/attest-build-provenance`).
 - Creates a **DRAFT** GitHub release containing all compiled binaries and checksum files.
 
-### Step 3: Locally Verify and Sign the Release Manifest
+### Step 3: Sign the Manifest and Publish the Release
 
-Once the GitHub Actions workflow finishes:
+Once the GitHub Actions workflow finishes, and the release's draft holds every asset:
 
-1. Confirm GitHub build provenance for every asset. `sign_manifest.py` does **not** do
-   this for you, so run it yourself first:
+0. Open `https://abdoslamb.github.io/InkDoc/support/` and check that it lands on
+   Buy Me a Coffee. The app's support links open that page (from 1.3.0), and
+   GitHub Pages serves it from `main`, so `docs/support/index.html` must be on
+   `main` before anyone can download the release.
+1. Sign and publish with one command, from the repo root:
    ```bash
-   gh release download vX.Y.Z --dir /tmp/inkdoc-vXYZ --repo AbdoslamB/InkDoc
-   for f in /tmp/inkdoc-vXYZ/*; do gh attestation verify "$f" --repo AbdoslamB/InkDoc; done
-   ```
-2. Run the local manifest generation and signing script:
-   ```bash
-   python scripts/sign_manifest.py --tag vX.Y.Z
+   python scripts/sign_manifest.py --tag vX.Y.Z --publish
    ```
    Add `--key-file <path>` if the key is not at the default `~/.inkdoc-keys/inkdoc_signing_key.pem`.
-   Use `--dry-run --out-manifest <path>` first to inspect the envelope without uploading.
-3. The script will interactively:
-   - Fetch the draft release metadata and download all release assets into a temporary directory.
-   - Verify all downloaded binaries against `SHA256SUMS-*.txt`.
-   - Prompt for the private key passphrase.
-   - Construct the release envelope containing download URLs, expected file sizes, and SHA-256 digests.
-   - Cryptographically sign the base64 payload bytes using the Ed25519 key.
-   - Upload the signed `inkdoc-update-manifest.json` to the draft release on GitHub.
+   Use `--dry-run --out-manifest <path>` first to inspect the envelope without uploading
+   (it can't be combined with `--publish`). Any Python with `cryptography` works, an
+   embeddable one included.
+2. The script, in this order, stopping at the first thing that fails:
+   - Fetches the draft's metadata (it refuses a release that is already published) and
+     downloads every asset into a temporary directory.
+   - Verifies them against `SHA256SUMS-*.txt`, and checks each one's build provenance
+     (`gh attestation verify`).
+   - Prompts for the private key passphrase, builds the envelope (download URLs, sizes,
+     SHA-256 digests, the CHANGELOG's notes) and signs its base64 payload with Ed25519.
+   - Checks the envelope as the app will: signed by a key the app embeds, for this
+     version, with an asset for every platform.
+   - Uploads `inkdoc-update-manifest.json` to the draft and reads it back.
+   - Publishes the draft as **Latest**. The updater fetches
+     `/releases/latest/download/inkdoc-update-manifest.json`, which only resolves for the
+     release GitHub marks as Latest.
+   - Waits (up to 5 minutes) until that address serves the exact manifest it signed.
+3. When it says `[Success] Installed copies now find X.Y.Z`, the release is live. The
+   **Release check** workflow runs on its own when the release is published and checks the
+   same address and every file the manifest lists; if it fails, GitHub emails you. Run it
+   yourself at any time: `python scripts/check_release.py --tag vX.Y.Z`.
 
-### Step 4: Publish the Release
+Without `--publish`, the script only signs and uploads: verify provenance yourself first
+(`gh attestation verify <file> --repo AbdoslamB/InkDoc` for every asset), then publish the
+draft with **Set as the latest release** checked, never before the manifest is on it. A
+Latest release without its manifest is what 1.3.0 shipped as: every installed copy said
+"No signed update information has been published" until it was uploaded.
 
-1. Navigate to the GitHub Releases page: `https://github.com/AbdoslamB/InkDoc/releases`.
-2. Open the draft release for `vX.Y.Z`.
-3. Confirm that `inkdoc-update-manifest.json` is present among the release assets.
-4. Ensure **Set as the latest release** is checked. The in-app updater fetches
-   `/releases/latest/download/inkdoc-update-manifest.json`, which only resolves for the
-   release GitHub marks as Latest. If this is left unchecked, every install gets an
-   HTTP 404 on "Check for updates".
-5. Click **Publish release**.
+Existing InkDoc desktop installations discover the update upon their next check, provided
+their embedded public keys include the key that signed this manifest.
 
-The release is now live. Existing InkDoc desktop installations will discover the update
-upon their next check — provided their embedded public keys include the key that signed
-this manifest.
+### Step 4: After Publishing
+
+1. **Only now** push a commit that renames a download in `README.md` or `docs/index.html`
+   (as 1.3.0's switches from `inkdoc-linux.zip` to `inkdoc-linux-x86_64.AppImage` and from
+   `inkdoc-macos.zip` to `inkdoc-macos.dmg` do). Their
+   links go through `/releases/latest/download/`, and the landing page pins them to the
+   newest stable tag, so a new file name 404s until the release that has it is Latest.
 
 ### GLM-OCR catalogue
 
@@ -191,6 +209,61 @@ fallback would fail (the error names both sources).
 
 If the tracker fails, it records why in the issue and drafts nothing; users keep the
 last good pins.
+
+### Docling engine pack
+
+The Docling pack is not an app asset either. It is built by `build-packs.yml` on its own
+release (`docling-pack-vN`, never Latest; published assets are never replaced, so a
+rebuild always takes the next N). Each app release names one pack: `app/core/manifest.json`
+is that release's merged `manifest.json`, copied in unchanged. Users who have an earlier
+pack keep it, checked against its launch hashes in `engine_manifest.EARLIER_PACKS`,
+until they click **Update Docling** in Settings → Engines.
+
+**A new pack, before the app release that ships it** (1.3.0 ships `docling-pack-v2`):
+
+1. Set the versions in `scripts/docling-constraints.txt` and push the commit. CI's
+   `test_the_shipped_pack_matches_the_pin` fails from here until step 4, by design: the
+   pin no longer matches the pack in `manifest.json`.
+2. Build and publish the pack:
+   ```bash
+   git tag docling-pack-vN && git push origin docling-pack-vN
+   ```
+   The workflow builds on Windows, Linux and macOS, smoke-tests each pack (offline PDF
+   conversion), merges the three fragments, re-verifies the packs as `EngineManager`
+   installs them, publishes them with `manifest.json` (not Latest), attests provenance,
+   then re-downloads the public assets and checks their sizes and SHA-256s.
+3. Download that release's `manifest.json` and check it:
+   ```bash
+   gh release download docling-pack-vN --pattern manifest.json --dir /tmp/pack-vN --repo AbdoslamB/InkDoc
+   gh attestation verify /tmp/pack-vN/manifest.json --repo AbdoslamB/InkDoc
+   ```
+4. Before replacing the file, add the **outgoing** pack to `EARLIER_PACKS` in
+   `app/core/engine_manifest.py`: for each platform, its `interpreter_path`, `worker_script` and
+   their two hashes from the current `app/core/manifest.json`. Without this, everyone with
+   the outgoing pack gets "Launch integrity check failed" after updating InkDoc.
+   Then copy `/tmp/pack-vN/manifest.json` over `app/core/manifest.json`, unchanged.
+5. Bring the pack's license list up to date, then read the license of every package it
+   reports as new (PyPI metadata and the files in its dist-info) and write its row:
+   ```bash
+   python scripts/pack_license_list.py --write
+   python scripts/pack_license_list.py            # must end with [OK]
+   ```
+   Update the package count and release tag in `NOTICE` and `THIRD_PARTY_NOTICES.md`.
+6. Check the result:
+   ```bash
+   python scripts/verify_engine_manifest_guard.py       # hashes, sizes, asset presence
+   python -m pytest tests/ -q                           # the pin test passes again
+   ```
+7. The code & formula add-on: if the new Docling still looks for the model under the same
+   folder (`CodeFormulaModel._model_repo_folder`, `docling-project--CodeFormulaV2` in
+   Docling 2.130 and 2.140), the published add-on stays valid and needs no rebuild.
+   Installed copies are moved into the new pack and re-checked by its worker during the
+   update. Otherwise, publish `docling-addon-vN+1` with `build-addon.yml` after step 4.
+8. On a Windows PC with the outgoing pack installed, run the new build from source and
+   update Docling from Settings → Engines. Check that a scanned PDF converts with OCR,
+   and that the code & formula add-on is still usable afterwards.
+
+Then release the app as usual (Step 1 onwards).
 
 ---
 

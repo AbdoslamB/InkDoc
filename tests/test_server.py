@@ -237,20 +237,128 @@ def test_error_sanitization():
     print("[OK] test_error_sanitization passed")
 
 
-def test_upload_size_limit():
-    """Verify that uploads exceeding MAX_FILE_SIZE_BYTES return HTTP 413."""
+class _ChunkedUpload:
+    """Stands in for UploadFile: `total` bytes of zeros, read in chunks, nothing held."""
+
+    def __init__(self, total: int, size: int | None = None):
+        self.remaining = total
+        self.size = total if size is None else size
+
+    async def read(self, n: int) -> bytes:
+        n = min(n, self.remaining)
+        self.remaining -= n
+        return b"\0" * n
+
+
+def test_large_upload_is_not_refused():
+    """A file over the old 100 MB limit is stored whole (the page only warns)."""
+    import asyncio
+
     import app.server.server as srv
-    original_max = srv.MAX_FILE_SIZE_BYTES
+
+    total = 100 * 1024 * 1024 + 1
+    path = asyncio.run(srv._save_upload_to_temp(_ChunkedUpload(total), ".pdf"))
     try:
-        # Set threshold to 10 bytes for unit testing
-        srv.MAX_FILE_SIZE_BYTES = 10
-        payload = {"file": ("big.txt", io.BytesIO(b"This text is definitely longer than 10 bytes"), "text/plain")}
-        resp = client.post("/convert/file", files=payload)
-        assert resp.status_code == 413, f"Expected 413, got {resp.status_code}: {resp.text}"
-        assert "exceeds maximum allowed size" in resp.text
+        assert os.path.getsize(path) == total
+        assert path.endswith(".pdf")
     finally:
-        srv.MAX_FILE_SIZE_BYTES = original_max
-    print("[OK] test_upload_size_limit passed")
+        os.remove(path)
+    assert not hasattr(srv, "MAX_FILE_SIZE_BYTES"), "a per-file size limit is back"
+    print("[OK] test_large_upload_is_not_refused passed")
+
+
+def test_upload_refused_when_disk_is_full(monkeypatch):
+    """An upload the temp disk can't hold is a clear 507 that ends its job, not a 500."""
+    import errno
+    import shutil
+    import tempfile
+    from collections import namedtuple
+
+    import app.server.server as srv
+
+    usage = namedtuple("usage", "total used free")
+    monkeypatch.setattr(srv.shutil, "disk_usage", lambda _p: usage(100, 100, 0))
+    payload = {"file": ("big.txt", io.BytesIO(b"This text needs more than zero free bytes"), "text/plain")}
+    resp = client.post("/convert/file?job_id=job-disk-full-01", files=payload)
+    assert resp.status_code == 507, f"Expected 507, got {resp.status_code}: {resp.text}"
+    assert resp.json()["detail"] == srv.DISK_FULL_DETAIL
+    assert client.get("/convert/progress/job-disk-full-01").json()["status"] == "error"
+    monkeypatch.setattr(srv.shutil, "disk_usage", shutil.disk_usage)
+
+    # The disk filling up during the copy: same 507, and no partial file is left.
+    made = []
+    real_ntf = tempfile.NamedTemporaryFile
+
+    class _FullDisk:
+        def __init__(self, *args, **kwargs):
+            self._f = real_ntf(*args, **kwargs)
+            self.name = self._f.name
+            made.append(self.name)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self._f.close()
+
+        def write(self, _data):
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        def flush(self):
+            self._f.flush()
+
+        def close(self):
+            self._f.close()
+
+    monkeypatch.setattr(srv.tempfile, "NamedTemporaryFile", _FullDisk)
+    import asyncio
+
+    from fastapi import HTTPException
+
+    try:
+        asyncio.run(srv._save_upload_to_temp(_ChunkedUpload(1024, size=0), ".txt"))
+    except HTTPException as exc:
+        assert exc.status_code == 507
+    else:
+        raise AssertionError("a disk-full copy was not refused")
+    assert made and not os.path.exists(made[0]), "the partial temp file was left behind"
+    print("[OK] test_upload_refused_when_disk_is_full passed")
+
+
+def test_large_upload_keeps_free_space_small_upload_does_not_need_it(monkeypatch):
+    """Over 100 MB, the copy must leave 1 GB free; smaller files only need room for the copy."""
+    import asyncio
+    from collections import namedtuple
+
+    from fastapi import HTTPException
+
+    import app.server.server as srv
+
+    usage = namedtuple("usage", "total used free")
+    large = srv.LARGE_UPLOAD_BYTES + 1
+    # Room for the copy, but it would leave only 500 MB: refused.
+    monkeypatch.setattr(srv.shutil, "disk_usage", lambda _p: usage(0, 0, large + 500 * 1024 * 1024))
+    try:
+        asyncio.run(srv._save_upload_to_temp(_ChunkedUpload(16, size=large), ".pdf"))
+    except HTTPException as exc:
+        assert exc.status_code == 507
+        assert "less than 1 GB free" in exc.detail
+    else:
+        raise AssertionError("a large upload that would leave under 1 GB free was accepted")
+
+    # A small file on the same nearly full disk is converted as before.
+    small = 1024
+    monkeypatch.setattr(srv.shutil, "disk_usage", lambda _p: usage(0, 0, small + 1024 * 1024))
+    path = asyncio.run(srv._save_upload_to_temp(_ChunkedUpload(small), ".txt"))
+    try:
+        assert os.path.getsize(path) == small
+    finally:
+        os.remove(path)
+
+    # A large file with enough room left is accepted.
+    monkeypatch.setattr(srv.shutil, "disk_usage", lambda _p: usage(0, 0, large + 2 * 1024**3))
+    path = asyncio.run(srv._save_upload_to_temp(_ChunkedUpload(16, size=large), ".pdf"))
+    os.remove(path)
 
 
 def test_plugin_permission_guard():
@@ -1246,7 +1354,7 @@ if __name__ == "__main__":
     test_cors_restriction()
     test_batch_size_limit()
     test_error_sanitization()
-    test_upload_size_limit()
+    test_large_upload_is_not_refused()
     test_plugin_permission_guard()
     test_epub_zip_bomb_protection()
     test_server_verification_check()

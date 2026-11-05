@@ -4,7 +4,12 @@
 document.addEventListener("DOMContentLoaded", () => {
   // ─── Pure helpers (no DOM; sliced out and tested by tests/auto_engine_ui.test.js) ──
   const ENGINES = ["auto", "markitdown", "docling", "markit", "glm_ocr"];
+  // Auto is the fallback and always stays on the main screen.
+  const HIDEABLE_ENGINES = ["markitdown", "docling", "markit", "glm_ocr"];
   const HIDE_AUTO_HINT_KEY = "inkdoc-hide-auto-hint";
+  // Where InkDoc 1.2 and earlier kept preferences (browser storage, which the
+  // desktop window clears at every launch). Read once, moved to settings.json.
+  const LEGACY_PREF_KEYS = ["inkdoc-theme", "markitdown-theme", "inkdoc-engine", "markitdown-engine", HIDE_AUTO_HINT_KEY];
 
   // Storage can throw (private windows, browsers set to block site data), and
   // a failed read must never stop the app from starting.
@@ -16,18 +21,51 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function writeStorage(key, value) {
+  function removeStorage(key) {
     try {
-      window.localStorage.setItem(key, value);
+      window.localStorage.removeItem(key);
     } catch (_) {
-      // Not remembered this time; nothing else depends on it.
+      // Nothing to clean up, or no access; either way nothing depends on it.
     }
   }
 
-  // New users start on Auto. Anyone with a saved choice keeps it.
-  function initialEngine(read) {
-    const saved = read("inkdoc-engine") || read("markitdown-engine");
-    return ENGINES.includes(saved) ? saved : "auto";
+  // The saved preferences with every value checked; anything unexpected is the
+  // default. New users start on Auto, in the dark theme, with every engine shown.
+  function normalizePrefs(raw) {
+    const p = raw && typeof raw === "object" ? raw : {};
+    const hidden = Array.isArray(p.hidden_engines)
+      ? HIDEABLE_ENGINES.filter((e) => p.hidden_engines.includes(e))
+      : [];
+    let engine = ENGINES.includes(p.preferred_engine) ? p.preferred_engine : "auto";
+    if (hidden.includes(engine)) engine = "auto";
+    return {
+      theme: p.theme === "light" ? "light" : "dark",
+      preferred_engine: engine,
+      hidden_engines: hidden,
+      auto_save: p.auto_save === true,
+      auto_hint_hidden: p.auto_hint_hidden === true,
+      legacy_prefs_imported: p.legacy_prefs_imported === true,
+    };
+  }
+
+  // The preferences InkDoc 1.2 and earlier left in browser storage, as a patch
+  // for settings.json; only valid values.
+  function legacyPrefsFrom(read) {
+    const patch = {};
+    const theme = read("inkdoc-theme") || read("markitdown-theme");
+    if (theme === "dark" || theme === "light") patch.theme = theme;
+    const engine = read("inkdoc-engine") || read("markitdown-engine");
+    if (ENGINES.includes(engine)) patch.preferred_engine = engine;
+    if (read(HIDE_AUTO_HINT_KEY) === "1") patch.auto_hint_hidden = true;
+    return patch;
+  }
+
+  // The engine to use now: the user's choice while it is shown and usable,
+  // otherwise Auto. isAvailable(engine) is true, false, or undefined while
+  // its status is still unknown (the choice is kept until it is known).
+  function effectiveEngine(preferred, isAvailable, hidden) {
+    if (!ENGINES.includes(preferred) || preferred === "auto" || hidden.includes(preferred)) return "auto";
+    return isAvailable(preferred) === false ? "auto" : preferred;
   }
 
   function getEngineDisplayName(engine) {
@@ -35,6 +73,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (engine === "docling") return "Docling";
     if (engine === "markit")  return "Markit";
     if (engine === "glm_ocr") return "GLM-OCR";
+    if (engine === "layout_model") return "the layout model";
     return "MarkItDown";
   }
 
@@ -62,16 +101,110 @@ document.addEventListener("DOMContentLoaded", () => {
     return { short, long: message, title, toast };
   }
 
+  // What the table check says (Auto quality Balanced/Thorough), or null: a
+  // warning when a table was left not matching the PDF, a note when InkDoc
+  // rebuilt tables from the PDF itself.
+  function formatTableNote(tables) {
+    if (!tables || !tables.checked) return null;
+    if (tables.warning) {
+      return {
+        warning: true,
+        short: "Table may be wrong",
+        title: "A table may not match the PDF",
+        long: tables.message || "A table in the result may not match the PDF.",
+        toast: "but a table may not match the PDF",
+      };
+    }
+    const count = (rows) => rows.reduce((n, r) => n + (Number(r.tables) || 0), 0);
+    const rebuilt = count(tables.repaired || []);
+    // Tables on scanned pages come from GLM-OCR's second reading, not the PDF's text.
+    const scanned = count((tables.repaired || []).filter((r) => r.source === "glm_ocr"));
+    const fromPdf = rebuilt - scanned;
+    const figures = Number(tables.figures_filled) || 0;
+    const paragraphs = Number(tables.paragraphs_restored) || 0;
+    if (!rebuilt && !figures && !paragraphs) return null;
+    const what = rebuilt === 1 ? "1 table" : `${rebuilt} tables`;
+    const pics = figures === 1 ? "1 figure" : `${figures} figures`;
+    const paras = paragraphs === 1 ? "1 paragraph" : `${paragraphs} paragraphs`;
+    const sentences = [];
+    const parts = [];
+    if (fromPdf) {
+      sentences.push(`The engine got ${fromPdf === 1 ? "a table" : `${fromPdf} tables`} wrong, so InkDoc rebuilt ` +
+        `${fromPdf === 1 ? "it" : "them"} from the PDF itself and checked the result against the PDF's text.`);
+    }
+    if (scanned) {
+      sentences.push(`On scanned pages, GLM-OCR read ${scanned === 1 ? "a table" : `${scanned} tables`} again on ` +
+        `${scanned === 1 ? "its" : "their"} own; InkDoc used that reading where it held the same words.`);
+    }
+    if (rebuilt) parts.push(`${what} rebuilt`);
+    if (figures) {
+      sentences.push(`The engine left out the text inside ${pics}; InkDoc added it from the PDF ` +
+        "(chart labels and values, as a table where the chart has them).");
+      parts.push(`${pics} filled in`);
+    }
+    if (paragraphs) {
+      sentences.push(`The engine dropped ${paras}; InkDoc put ${paragraphs === 1 ? "it" : "them"} back from the PDF.`);
+      parts.push(`${paras} restored`);
+    }
+    sentences.push("Each addition is marked with a comment in the saved file.");
+    let title = scanned ? "Improved" : "Improved from the PDF";
+    if (parts.length === 1 && rebuilt && !scanned) title = rebuilt === 1 ? "Table rebuilt from the PDF" : "Tables rebuilt from the PDF";
+    else if (parts.length === 1 && rebuilt && !fromPdf) title = rebuilt === 1 ? "Table read again" : "Tables read again";
+    else if (parts.length === 1 && rebuilt) title = "Tables rebuilt";
+    else if (parts.length === 1 && figures) title = "Figure text added from the PDF";
+    else if (parts.length === 1) title = "Text restored from the PDF";
+    return {
+      warning: false,
+      short: parts.join(" · "),
+      title,
+      long: sentences.join(" "),
+      toast: scanned ? parts.join(", ") : `${parts.join(", ")} from the PDF`,
+    };
+  }
+
   // The one-click fix a quality report suggests, as { label, engine } or
-  // { label, install: true }; null when there is nothing to offer.
-  function qualityAction(quality) {
+  // { label, install: true }; null when there is nothing to offer. An engine
+  // the user hid is never suggested for installing; re-converting with one
+  // that is installed is still offered (it changes nothing else).
+  function qualityAction(quality, hidden = []) {
     const s = quality && quality.suggestion;
     if (s === "docling" || s === "markitdown" || s === "markit" || s === "glm_ocr") {
       return { label: `Re-convert with ${getEngineDisplayName(s)}`, engine: s };
     }
-    if (s === "install_docling") return { label: "Install Docling", install: true };
-    if (s === "install_glm_ocr") return { label: "Download GLM-OCR", install: true };
+    if (s === "install_docling" && !hidden.includes("docling")) return { label: "Install Docling", install: true };
+    if (s === "install_glm_ocr" && !hidden.includes("glm_ocr")) return { label: "Download GLM-OCR", install: true };
     return null;
+  }
+
+  // A table too dense for normal detail that this computer can read in high
+  // detail (tables.high_detail: { pages, seconds }): the notice's words and
+  // buttons, or null. The normal result is already there; high detail is a
+  // choice, because it takes longer and uses more memory.
+  function highDetailOffer(tables) {
+    const offer = tables && tables.high_detail;
+    if (!offer || !Array.isArray(offer.pages) || !offer.pages.length) return null;
+    const pages = offer.pages;
+    const where = pages.length === 1 ? `page ${pages[0]}` : `pages ${pages.join(", ")}`;
+    const minutes = Math.max(1, Math.round((Number(offer.seconds) || 60) / 60));
+    const about = `about ${minutes} min`;
+    return {
+      title: pages.length === 1 ? "This table needs high detail" : "These tables need high detail",
+      long: `The table on ${where} is too dense to read in one go at normal speed, so it was left as plain text. `
+        + `High detail reads it whole, at its full size: it takes longer (${about}) and uses more memory. `
+        + "The normal result stays until you choose.",
+      highLabel: `Read in high detail (${about})`,
+      keepLabel: "Keep normal speed",
+    };
+  }
+
+  // Auto's tip, or "" when it asks to install an engine the user hid.
+  function visibleHint(hint, hidden = []) {
+    if (!hint) return "";
+    if (hint.includes("Install it in Settings")) {
+      if (hint.startsWith("Docling") && hidden.includes("docling")) return "";
+      if (hint.startsWith("GLM-OCR") && hidden.includes("glm_ocr")) return "";
+    }
+    return hint;
   }
 
   // What the queue row's engine tag says. Auto items always show where they went.
@@ -109,19 +242,25 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // The install hint appears as a toast at most once per session, and never
   // again after "Don't show again". It always stays in the item's own notice.
-  function shouldShowHintToast(hint, session, read) {
+  function shouldShowHintToast(hint, session, dismissed) {
     if (!hint || session.hintShown) return false;
-    if (read(HIDE_AUTO_HINT_KEY) === "1") return false;
+    if (dismissed) return false;
     return true;
   }
 
-  // Concrete engines only: the Switch Engine button never cycles to Auto, and
-  // reaches GLM-OCR only when it is installed and passed its self-test.
-  function getNextEngine(current, glmUsable = false) {
-    if (current === "markitdown") return "docling";
-    if (current === "docling")    return "markit";
-    if (current === "markit" && glmUsable) return "glm_ocr";
-    return "markitdown";
+  // Concrete engines only: the Switch Engine button never cycles to Auto,
+  // reaches GLM-OCR only when it is installed and passed its self-test, and
+  // skips engines hidden from the main screen. null when there is none left.
+  const SWITCH_CYCLE = ["markitdown", "docling", "markit", "glm_ocr"];
+  function getNextEngine(current, glmUsable = false, hidden = []) {
+    const start = SWITCH_CYCLE.indexOf(current);
+    for (let i = 1; i <= SWITCH_CYCLE.length; i++) {
+      const next = SWITCH_CYCLE[(start + i) % SWITCH_CYCLE.length];
+      if (next === current || hidden.includes(next)) continue;
+      if (next === "glm_ocr" && !glmUsable) continue;
+      return next;
+    }
+    return null;
   }
 
   // "45 s", "6 min", "1 h 10 min" (matches auto_engine.format_duration).
@@ -142,6 +281,40 @@ document.addEventListener("DOMContentLoaded", () => {
     if (b >= 1e6) return `${Math.round(b / 1e6)} MB`;
     if (b >= 1e3) return `${Math.round(b / 1e3)} KB`;
     return `${b} B`;
+  }
+
+  // Files of any size are converted. Over this size the page says, without
+  // stopping anything, that they can take longer: a toast when they are added
+  // and a chip on their queue row while they wait or convert.
+  const LARGE_FILE_BYTES = 100 * 1024 * 1024;
+
+  function isLargeFile(file) {
+    return Boolean(file) && Number(file.size) > LARGE_FILE_BYTES;
+  }
+
+  // The toast for files just added, or "" when none is large.
+  function largeFileNotice(files) {
+    const large = (files || []).filter(isLargeFile);
+    if (large.length === 0) return "";
+    if (large.length === 1) {
+      return `"${large[0].name}" is ${formatSize(large[0].size)}. Large files can take longer to convert.`;
+    }
+    return `${large.length} files are over 100 MB. Large files can take longer to convert.`;
+  }
+
+  // The preview draws at most this much Markdown (about 2,500 pages): drawing
+  // a 100 MB result would freeze the window. The saved file, Copy and Download
+  // always have all of it.
+  const PREVIEW_MAX_CHARS = 5 * 1000 * 1000;
+
+  // What the preview shows of `md`: all of it, or its start, ending at the last
+  // paragraph break before the limit when there is one in its second half.
+  function previewSlice(md) {
+    const text = md || "";
+    if (text.length <= PREVIEW_MAX_CHARS) return { text, cut: false };
+    const head = text.slice(0, PREVIEW_MAX_CHARS);
+    const end = head.lastIndexOf("\n\n");
+    return { text: end > PREVIEW_MAX_CHARS / 2 ? head.slice(0, end) : head, cut: true };
   }
 
   // What a converting queue row says: "Page 7 / 30 · ~8 min left" while an
@@ -214,13 +387,26 @@ document.addEventListener("DOMContentLoaded", () => {
       : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
     return `ui-${rand}`;
   }
+
+  // What a step of Auto quality (GET /settings: thorough_passes) still needs
+  // here: null when it can run, else { text: "Needs GLM-OCR", install: "glm_ocr" }.
+  // available(engine) is true, false, or undefined while not known yet, which
+  // counts as available so nothing greys out before the engines' status arrives.
+  function autoStepNeeds(step, available) {
+    const missing = (names) => (Array.isArray(names) ? names : []).filter((e) => available(e) === false);
+    const all = missing(step.needs_all);
+    if (all.length) return { text: `Needs ${all.map(getEngineDisplayName).join(" and ")}`, install: all[0] };
+    const any = Array.isArray(step.needs_any) ? step.needs_any : [];
+    if (any.length && missing(any).length === any.length) {
+      return { text: `Needs ${any.map(getEngineDisplayName).join(" or ")}`, install: any[0] };
+    }
+    return null;
+  }
   // ─── End of pure helpers ──
 
   // ─── State ───────────────────────────────────────────────────────────────
   let queue = [];
   let activeItemId = null;
-  let autoSaveToDownloads = false;
-  let selectedEngine = initialEngine(readStorage);
   const hintSession = { hintShown: false };
   // Last /engines/glm_ocr/status payload; null until the first refresh.
   let glmStatus = null;
@@ -228,6 +414,124 @@ document.addEventListener("DOMContentLoaded", () => {
   // Base path resolution for /InkDoc, /MarkItDown, or root mounting
   const pathLower = window.location.pathname.toLowerCase();
   const apiBase = pathLower.startsWith("/inkdoc") ? "/InkDoc" : (pathLower.startsWith("/markitdown") ? "/MarkItDown" : "");
+
+  // ─── Preferences ─────────────────────────────────────────────────────────
+  // Theme, engine choice, hidden engines, auto-save and Auto's tip live in
+  // settings.json. The server puts the saved values on the page before first
+  // paint (data-theme and data-hidden-engines on <html>, __INKDOC_PREFS__), so
+  // nothing here waits for a request at startup. A change applies at once and
+  // is saved after a short pause: several clicks are one write, one save is in
+  // flight at a time, and the newest value wins. A failed save is reported
+  // once and not undone: an engine click must not be taken back after a file
+  // was dropped with it.
+  const PREFS_SAVE_DELAY_MS = 250;
+  const prefsFromServer = Boolean(window.__INKDOC_PREFS__) && typeof window.__INKDOC_PREFS__ === "object";
+  const prefs = normalizePrefs({
+    ...(prefsFromServer ? window.__INKDOC_PREFS__ : {}),
+    theme: document.documentElement.getAttribute("data-theme"),
+    hidden_engines: (document.documentElement.dataset.hiddenEngines || "").split(" "),
+  });
+  let prefsPending = {};
+  let prefsTimer = null;
+  let prefsInFlight = null; // the running save, a promise of true/false
+  let prefsWarned = false;
+
+  // Records a change and saves it shortly. The caller applies it to the page.
+  function savePrefs(patch) {
+    Object.assign(prefs, patch);
+    Object.assign(prefsPending, patch);
+    clearTimeout(prefsTimer);
+    prefsTimer = setTimeout(sendPrefs, PREFS_SAVE_DELAY_MS);
+  }
+
+  // Sends what is pending. keepalive lets the request outlive the page.
+  function sendPrefs(keepalive = false) {
+    clearTimeout(prefsTimer);
+    prefsTimer = null;
+    if (prefsInFlight && !keepalive) {
+      // One save at a time; this one goes when the running one is done.
+      prefsTimer = setTimeout(sendPrefs, PREFS_SAVE_DELAY_MS);
+      return prefsInFlight;
+    }
+    const body = prefsPending;
+    prefsPending = {};
+    if (Object.keys(body).length === 0) return Promise.resolve(true);
+    const run = fetchWithToken(`${apiBase}/settings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      keepalive,
+    })
+      .then(async (resp) => {
+        if (resp.ok) return true;
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(typeof err.detail === "string" ? err.detail : "");
+      })
+      .then(() => {
+        prefsWarned = false;
+        return true;
+      }, (err) => {
+        // Kept for the next save; anything changed since is newer and wins.
+        prefsPending = { ...body, ...prefsPending };
+        if (!prefsWarned && !keepalive) {
+          prefsWarned = true;
+          showToast((err && err.message) || "Couldn't save this setting. It will be back to how it was when InkDoc restarts.", "error");
+        }
+        return false;
+      })
+      .finally(() => {
+        if (prefsInFlight === run) prefsInFlight = null;
+      });
+    prefsInFlight = run;
+    return run;
+  }
+
+  // Settings closing, or the page going away: send now rather than after the
+  // pause. Resolves when what was sent (or a save already on its way) is done.
+  function flushPrefs(keepalive = false) {
+    if (prefsTimer || (keepalive && Object.keys(prefsPending).length)) return sendPrefs(keepalive);
+    return prefsInFlight || Promise.resolve(true);
+  }
+
+  // For Restore defaults: forget unsaved changes (the reset replaces them) and
+  // wait for a save already on its way, so it can't land after the reset.
+  async function settlePrefs() {
+    clearTimeout(prefsTimer);
+    prefsTimer = null;
+    prefsPending = {};
+    if (prefsInFlight) await prefsInFlight;
+  }
+
+  // True while a change is waiting to be saved, being saved, or failed to save
+  // (it goes again with the next change); a read from the server must not
+  // overwrite it then.
+  function prefsBusy() {
+    return Boolean(prefsTimer || prefsInFlight || Object.keys(prefsPending).length);
+  }
+
+  // Once per settings.json: move what InkDoc 1.2 and earlier kept in browser
+  // storage. The desktop window has nothing there (it was cleared at every
+  // launch), so this only records that it is done. The keys are removed only
+  // after the save, so a failed one is tried again on the next load.
+  function importLegacyPrefs() {
+    if (!prefsFromServer || prefs.legacy_prefs_imported) return null;
+    const patch = legacyPrefsFrom(readStorage);
+    if (patch.preferred_engine && prefs.hidden_engines.includes(patch.preferred_engine)) {
+      delete patch.preferred_engine;
+    }
+    savePrefs({ ...patch, legacy_prefs_imported: true });
+    return sendPrefs().then((ok) => {
+      if (ok) LEGACY_PREF_KEYS.forEach(removeStorage);
+      return { ok, patch };
+    });
+  }
+  // ─── End preferences ─────────────────────────────────────────────────────
+
+  let autoSaveToDownloads = prefs.auto_save;
+  // The engine the user chose (saved) and the one used now: Auto while the
+  // choice is hidden or not usable yet, without changing the saved choice.
+  let preferredEngine = prefs.preferred_engine;
+  let selectedEngine = preferredEngine;
 
   // ─── DOM Elements ────────────────────────────────────────────────────────
   const dropZoneSection       = document.getElementById("dropZoneSection");
@@ -360,12 +664,20 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const conversionNoticeActions = document.getElementById("conversionNoticeActions");
   const conversionNoticeDetails = document.getElementById("conversionNoticeDetails");
+  const conversionNoticeClose   = document.getElementById("conversionNoticeClose");
+
+  // The item whose note was closed with ×. Opening another item or converting
+  // this one again clears it, so the note comes back; a redraw of the same
+  // result (the math switch, a click on its row) keeps it closed.
+  let noticeDismissedFor = null;
 
   // opts.actions: [{ label, onClick, primary }]; opts.details: [string] shown
-  // behind a "Details" toggle. Everything is set with textContent: messages can
-  // carry file names and server text.
+  // behind a "Details" toggle; opts.dismissible: show the × (a result's note,
+  // never a failure). Everything is set with textContent: messages can carry
+  // file names and server text.
   function showConversionNotice(type, title, detail, opts = {}) {
     conversionNoticeBar.className = `conversion-notice notice-${type} visible`;
+    if (conversionNoticeClose) conversionNoticeClose.hidden = !opts.dismissible;
     // Failures interrupt; warnings and tips wait for a pause.
     conversionNoticeBar.setAttribute("aria-live", type === "failed" ? "assertive" : "polite");
     conversionNoticeIcon.innerHTML = ICONS[type] || ICONS.failed;
@@ -417,6 +729,7 @@ document.addEventListener("DOMContentLoaded", () => {
     conversionNoticeTitle.textContent = "";
     conversionNoticeDetail.textContent = "";
     conversionNoticeIcon.innerHTML = "";
+    if (conversionNoticeClose) conversionNoticeClose.hidden = true;
     if (conversionNoticeActions) {
       conversionNoticeActions.replaceChildren();
       conversionNoticeActions.hidden = true;
@@ -425,6 +738,16 @@ document.addEventListener("DOMContentLoaded", () => {
       conversionNoticeDetails.replaceChildren();
       conversionNoticeDetails.hidden = true;
     }
+  }
+
+  if (conversionNoticeClose) {
+    conversionNoticeClose.addEventListener("click", () => {
+      const hadFocus = document.activeElement === conversionNoticeClose;
+      noticeDismissedFor = activeItemId;
+      hideConversionNotice();
+      // The button goes away with the note: keep keyboard focus in the preview.
+      if (hadFocus) (tabRaw.classList.contains("active") ? tabRaw : tabRendered).focus();
+    });
   }
 
   // ─── Engine Management & Session Security ────────────────────────────────
@@ -444,6 +767,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnDoclingVerify        = document.getElementById("btnDoclingVerify");
   const btnDoclingRemove        = document.getElementById("btnDoclingRemove");
   const btnDoclingCancel        = document.getElementById("btnDoclingCancel");
+  const btnDoclingUpdate        = document.getElementById("btnDoclingUpdate");
+  const doclingUpdateNote       = document.getElementById("doclingUpdateNote");
 
   // Recognition-model add-on (gates the two enrichment toggles above it).
   const addonTitleEl            = document.getElementById("addonTitle");
@@ -472,8 +797,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const updateDetails           = document.getElementById("updateDetails");
   const updateNewVersion        = document.getElementById("updateNewVersion");
   const updateAssetSize         = document.getElementById("updateAssetSize");
-  const updateNotesAccordion    = document.getElementById("updateNotesAccordion");
-  const updateNotesContent      = document.getElementById("updateNotesContent");
+  const updateNotes             = document.getElementById("updateNotes");
+  const updateNotesTitle        = document.getElementById("updateNotesTitle");
+  const updateNotesBody         = document.getElementById("updateNotesBody");
+  const updateNotesMore         = document.getElementById("updateNotesMore");
+  const updateNotesLink         = document.getElementById("updateNotesLink");
   const updateProgressWrapper   = document.getElementById("updateProgressWrapper");
   const updateProgressFill      = document.getElementById("updateProgressFill");
   const updateProgressText      = document.getElementById("updateProgressText");
@@ -484,6 +812,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const updateActionHelp        = document.getElementById("updateActionHelp");
   const updateErrorBox          = document.getElementById("updateErrorBox");
   const updateErrorMsg          = document.getElementById("updateErrorMsg");
+  const updateErrorDownload     = document.getElementById("updateErrorDownload");
   const dailyUpdateToggle       = document.getElementById("dailyUpdateToggle");
   const settingsUpdateDot       = document.getElementById("settingsUpdateDot");
   const aboutVersion            = document.getElementById("aboutVersion");
@@ -506,6 +835,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   let doclingState = "unknown";
   let pollInterval = null;
+  // What the running Docling download is, for the toast at the end: "install"
+  // or "update". The progress endpoint reports the same states for both.
+  let doclingOperation = "install";
+  let doclingInfo = null;
 
   // Update the single pill group to reflect selectedEngine. The group is a
   // radiogroup: exactly one pill is aria-checked, and only that pill is in the
@@ -522,10 +855,41 @@ document.addEventListener("DOMContentLoaded", () => {
     updateSpeedHint();
   }
 
-  function setEngine(engine) {
+  // The user picked an engine (pill, arrow keys, or a choice that implies one):
+  // used now and saved.
+  function chooseEngine(engine) {
+    preferredEngine = engine;
+    if (prefs.preferred_engine !== engine) savePrefs({ preferred_engine: engine });
+    selectEngine(engine);
+  }
+
+  // The engine used now. Automatic changes go through here only, so the
+  // user's saved choice survives an engine that is not ready yet.
+  function selectEngine(engine) {
+    if (selectedEngine === engine) return;
     selectedEngine = engine;
-    writeStorage("inkdoc-engine", engine);
     updateEngineUI();
+  }
+
+  // undefined while an engine's status has not been read yet.
+  function engineAvailable(engine) {
+    if (engine === "docling") {
+      if (doclingState === "installed") return true;
+      return doclingState === "unknown" ? undefined : false;
+    }
+    if (engine === "glm_ocr") return glmStatus ? Boolean(glmStatus.usable) : undefined;
+    if (engine === "layout_model") return layoutAddonStatus ? Boolean(layoutAddonStatus.usable) : undefined;
+    return true;
+  }
+
+  // Back to the user's choice once it is usable (and shown), Auto until then.
+  function restorePreferredEngine() {
+    selectEngine(effectiveEngine(preferredEngine, engineAvailable, prefs.hidden_engines));
+  }
+
+  // A pill on the main screen: not hidden by the user, and offered here.
+  function isPillShown(btn) {
+    return Boolean(btn) && !btn.classList.contains("is-hidden") && !prefs.hidden_engines.includes(btn.dataset.engine);
   }
 
   // "~12 s per page on this computer (CPU)" under the pills while GLM-OCR is selected.
@@ -541,6 +905,23 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  // Settings on the card of an engine or add-on, opened, with its buttons
+  // (Install, Download, Verify…) in the middle of the pane: GLM-OCR's card is the
+  // last and tallest, and at the bottom a toast would cover them.
+  const ENGINE_CARDS = {
+    docling: ["engines", "engineCardDocling"],
+    glm_ocr: ["engines", "engineCardGlmOcr"],
+    layout_model: ["addons", "layoutAddonCard"],
+  };
+  function openEngineCard(e, engine) {
+    const [section, cardId] = ENGINE_CARDS[engine] || ["engines", ""];
+    openSettings(e, section);
+    const card = document.getElementById(cardId);
+    if (!card) return;
+    if (card.tagName === "DETAILS") card.open = true;
+    (card.querySelector(".engine-actions") || card).scrollIntoView({ block: "center" });
+  }
+
   // Bind unified pill clicks
   allEnginePills.forEach((btn) => {
     if (btn) {
@@ -551,14 +932,7 @@ document.addEventListener("DOMContentLoaded", () => {
           return;
         }
         if (btn.dataset.engine === "glm_ocr" && btn.classList.contains("is-installable")) {
-          openSettings(e, "engines");
-          const card = document.getElementById("engineCardGlmOcr");
-          if (card) {
-            card.open = true;
-            // Its buttons (Download, Verify…) to the middle of the pane: the card
-            // is the last and tallest, and at the bottom the toast would cover them.
-            (card.querySelector(".engine-actions") || card).scrollIntoView({ block: "center" });
-          }
+          openEngineCard(e, "glm_ocr");
           showToast(
             glmStatus && glmStatus.installed
               ? "GLM-OCR didn't pass its self-test. Run it again in Settings."
@@ -567,7 +941,7 @@ document.addEventListener("DOMContentLoaded", () => {
           );
           return;
         }
-        setEngine(btn.dataset.engine);
+        chooseEngine(btn.dataset.engine);
       });
     }
   });
@@ -581,7 +955,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const keys = ["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"];
       if (!keys.includes(e.key)) return;
       const choices = allEnginePills.filter(
-        (btn) => btn && !btn.classList.contains("is-hidden") && !btn.classList.contains("is-installable")
+        (btn) => isPillShown(btn) && !btn.classList.contains("is-installable")
       );
       if (choices.length === 0) return;
       e.preventDefault();
@@ -590,10 +964,62 @@ document.addEventListener("DOMContentLoaded", () => {
       else if (e.key === "End") idx = choices.length - 1;
       else if (e.key === "ArrowRight" || e.key === "ArrowDown") idx = (idx + 1) % choices.length;
       else idx = (idx - 1 + choices.length) % choices.length;
-      setEngine(choices[idx].dataset.engine);
+      chooseEngine(choices[idx].dataset.engine);
       choices[idx].focus();
     });
   }
+
+  // ─── Engine visibility ───────────────────────────────────────────────────
+  // "Show on main screen" in each engine card (Settings → Engines). Hiding
+  // only takes the pill off the main screen: the engine stays installed, Auto
+  // still uses it, and its card keeps every control. The pills and the
+  // "Hidden" chips follow data-hidden-engines on <html> through CSS, which the
+  // server also sets before first paint, so nothing flickers.
+  const engineVisibilitySwitches = Array.from(document.querySelectorAll("input[data-engine-visibility]"));
+
+  function applyHiddenEngines(list) {
+    prefs.hidden_engines = HIDEABLE_ENGINES.filter((e) => list.includes(e));
+    const value = prefs.hidden_engines.join(" ");
+    if (document.documentElement.dataset.hiddenEngines !== value) {
+      document.documentElement.dataset.hiddenEngines = value;
+    }
+    engineVisibilitySwitches.forEach((input) => {
+      input.checked = !prefs.hidden_engines.includes(input.dataset.engineVisibility);
+    });
+  }
+
+  function setEngineHidden(engine, hidden) {
+    const list = prefs.hidden_engines.filter((e) => e !== engine);
+    if (hidden) list.push(engine);
+    applyHiddenEngines(list);
+    savePrefs({ hidden_engines: prefs.hidden_engines });
+    // Hiding the chosen engine is choosing Auto; anything else just re-checks.
+    if (hidden && preferredEngine === engine) chooseEngine("auto");
+    else restorePreferredEngine();
+    refreshSwitchEngineButton();
+  }
+
+  // An engine that can't be used on this computer at all: nothing to show or hide.
+  function setVisibilitySwitchAvailable(engine, available, reason = "") {
+    const input = engineVisibilitySwitches.find((el) => el.dataset.engineVisibility === engine);
+    if (!input) return;
+    input.disabled = !available;
+    const label = input.closest ? input.closest(".toggle-switch") : null;
+    if (label) label.title = available ? "" : reason;
+  }
+
+  // A just-installed engine the user had hidden: offer to show it.
+  function showOnMainScreenAction(engine) {
+    return prefs.hidden_engines.includes(engine)
+      ? [{ label: "Show on main screen", onClick: () => setEngineHidden(engine, false) }]
+      : [];
+  }
+
+  engineVisibilitySwitches.forEach((input) => {
+    input.addEventListener("change", () => setEngineHidden(input.dataset.engineVisibility, !input.checked));
+  });
+  applyHiddenEngines(prefs.hidden_engines);
+  // ─── End engine visibility ───────────────────────────────────────────────
 
   // Initialize
   updateEngineUI();
@@ -842,6 +1268,7 @@ document.addEventListener("DOMContentLoaded", () => {
   function showSettingsSection(name) {
     if (!settingsPanes.some((pane) => pane.dataset.settingsPane === name)) return;
     settingsSection = name;
+    settingsPopover.dataset.section = name; // the CSS hides the support heart on About
     settingsPanes.forEach((pane) => { pane.hidden = pane.dataset.settingsPane !== name; });
     settingsNavItems.forEach((item) => {
       if (item.dataset.settingsSection === name) item.setAttribute("aria-current", "page");
@@ -869,6 +1296,7 @@ document.addEventListener("DOMContentLoaded", () => {
     loadSettings();
     fetchUpdateStatus();
     refreshAddonStatus();
+    refreshLayoutAddon();
     refreshGlm(true);
   }
 
@@ -876,6 +1304,9 @@ document.addEventListener("DOMContentLoaded", () => {
   // dragged a file in): focus then stays where they put it.
   function closeSettings({ restoreFocus = true } = {}) {
     if (!isSettingsOpen()) return;
+    // Changes made in Settings are saved now rather than after their pause.
+    flushPrefs();
+    flushTextSize();
     settingsPopover.classList.remove("open", "keyboard-nav");
     document.documentElement.classList.remove("settings-open");
     settingsScrim.hidden = true;
@@ -992,7 +1423,12 @@ document.addEventListener("DOMContentLoaded", () => {
           clearInterval(pollInterval);
           pollInterval = null;
         }
-        showToast("Docling engine pack installed and ready!", "success");
+        if (doclingOperation === "update") {
+          showToast("Docling is updated.", "success");
+        } else {
+          showToast("Docling engine pack installed and ready!", "success", { actions: showOnMainScreenAction("docling") });
+        }
+        doclingOperation = "install";
         await refreshEngines();
         return;
       }
@@ -1002,7 +1438,11 @@ document.addEventListener("DOMContentLoaded", () => {
           clearInterval(pollInterval);
           pollInterval = null;
         }
-        showToast(`Installation failed: ${prog.error || "Unknown error"}`, "error");
+        const failed = doclingOperation === "update"
+          ? "Update failed; the installed Docling still works"
+          : "Installation failed";
+        showToast(`${failed}: ${prog.error_message || prog.error || "Unknown error"}`, "error");
+        doclingOperation = "install";
         await refreshEngines();
         return;
       }
@@ -1012,7 +1452,8 @@ document.addEventListener("DOMContentLoaded", () => {
           clearInterval(pollInterval);
           pollInterval = null;
         }
-        showToast("Installation cancelled.", "info");
+        showToast(doclingOperation === "update" ? "Update cancelled." : "Installation cancelled.", "info");
+        doclingOperation = "install";
         await refreshEngines();
         return;
       }
@@ -1028,10 +1469,33 @@ document.addEventListener("DOMContentLoaded", () => {
         doclingStatusBadge.className = "engine-badge engine-badge-busy";
       }
       if (btnDoclingInstall) btnDoclingInstall.style.display = "none";
+      if (btnDoclingUpdate) btnDoclingUpdate.style.display = "none";
       if (btnDoclingCancel) btnDoclingCancel.style.display = "inline-flex";
       if (btnDoclingVerify) btnDoclingVerify.style.display = "none";
       if (btnDoclingRemove) btnDoclingRemove.style.display = "none";
     } catch (_) {}
+  }
+
+  // An earlier Docling pack keeps working; the user chooses when to replace it.
+  function renderDoclingUpdate(docling) {
+    const offer = Boolean(docling && docling.status === "installed" && !docling.source_mode && docling.update_available);
+    if (btnDoclingUpdate) {
+      btnDoclingUpdate.style.display = offer ? "inline-flex" : "none";
+      btnDoclingUpdate.disabled = false;
+      btnDoclingUpdate.textContent = "Update Docling";
+    }
+    if (doclingUpdateNote) {
+      doclingUpdateNote.hidden = !offer;
+      if (offer) {
+        const from = docling.docling_version ? `Docling ${docling.docling_version}` : "Your Docling";
+        const to = docling.latest_docling_version ? `Docling ${docling.latest_docling_version}` : "A newer Docling";
+        const size = docling.download_size_bytes ? ` (${formatSize(docling.download_size_bytes)} download)` : "";
+        const security = Array.isArray(docling.security_fixes) && docling.security_fixes.length
+          ? ", with security fixes"
+          : "";
+        doclingUpdateNote.textContent = `${to} is available${size}${security}. ${from} keeps working until you update.`;
+      }
+    }
   }
 
   function startProgressPolling() {
@@ -1049,6 +1513,8 @@ document.addEventListener("DOMContentLoaded", () => {
       const engines = data.engines || data;
 
       const docling = engines.docling;
+      doclingInfo = docling || null;
+      renderDoclingUpdate(docling);
       const markitdown = engines.markitdown;
       const markit = engines.markit;
       if (engines.glm_ocr) renderGlm(engines.glm_ocr);
@@ -1078,9 +1544,8 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!docling || docling.status === "unsupported" || !docling.supported) {
         // Contract: not installable on this platform -> hidden in conversion selector
         if (pillDocling) pillDocling.classList.add("is-hidden");
-        if (selectedEngine === "docling") {
-          setEngine("markitdown");
-        }
+        doclingState = "unsupported";
+        setVisibilitySwitchAvailable("docling", false, "Docling is not available for this computer.");
         if (engineCardDocling) {
           engineCardDocling.style.display = "block";
           if (doclingStatusBadge) {
@@ -1111,6 +1576,7 @@ document.addEventListener("DOMContentLoaded", () => {
       // Supported on this platform
       if (engineCardDocling) engineCardDocling.style.display = "block";
       if (pillDocling) pillDocling.classList.remove("is-hidden");
+      setVisibilitySwitchAvailable("docling", true);
 
       if (docling.version && doclingVersionInfo) {
         doclingVersionInfo.textContent = `v${docling.version}`;
@@ -1128,7 +1594,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (docling.status === "installed") {
         if (pillDocling) {
           pillDocling.classList.remove("is-installable", "engine-unavailable");
-          pillDocling.title = "Docling — IBM AI layout & table recognition. Deep document analysis.";
+          pillDocling.title = "Docling — reads page layout and tables with AI. Best for complex PDFs.";
         }
         if (doclingStatusBadge) {
           doclingStatusBadge.textContent = docling.source_mode ? "Active (Source)" : "Installed";
@@ -1175,18 +1641,20 @@ document.addEventListener("DOMContentLoaded", () => {
         if (btnDoclingVerify) btnDoclingVerify.style.display = "none";
         if (btnDoclingRemove) btnDoclingRemove.style.display = "none";
         if (doclingProgressContainer) doclingProgressContainer.style.display = "none";
-
-        if (selectedEngine === "docling") {
-          setEngine("markitdown");
-        }
       }
     } catch (_) {
       // Existing behaviour: a failed engine refresh is silent.
     } finally {
+      // Docling's state may have changed either way: Auto while the chosen
+      // engine can't be used, the choice again once it can.
+      restorePreferredEngine();
+      updateAutoSteps();
       // The add-on's installability is derived from pack state, so it has to be
       // re-read whenever that changes. refreshEngines returns early on several
       // paths, so this belongs in finally rather than at the end of the body.
+      // The layout model add-on too: the Docling pack may carry it.
       refreshAddonStatus();
+      refreshLayoutAddon();
     }
   }
 
@@ -1287,7 +1755,9 @@ document.addEventListener("DOMContentLoaded", () => {
             ? "GLM-OCR didn't pass its self-test. Click to open Settings."
             : "GLM-OCR isn't downloaded. Click to open Settings and download it.");
     }
-    if (selectedEngine === "glm_ocr" && !st.usable) setEngine("markitdown");
+    restorePreferredEngine();
+    updateAutoSteps();
+    setVisibilitySwitchAvailable("glm_ocr", offer, st.reason || "GLM-OCR is not available for this computer.");
 
     if (glmOptions) glmOptions.style.display = st.installed ? "block" : "none";
     if (btnGlmInstall) { btnGlmInstall.disabled = false; btnGlmInstall.textContent = "Download GLM-OCR"; }
@@ -1398,7 +1868,8 @@ document.addEventListener("DOMContentLoaded", () => {
         const done = prog.operation === "selftest" ? "GLM-OCR self-test finished." :
           prog.operation === "gpu" ? "GPU runtime installed and tested." :
           prog.operation === "update" ? "GLM-OCR updated." : "GLM-OCR is downloaded and ready.";
-        showToast(done, "success");
+        const fresh = !["selftest", "gpu", "update"].includes(prog.operation);
+        showToast(done, "success", { actions: fresh ? showOnMainScreenAction("glm_ocr") : [] });
       } else if (prog.status === "error") {
         const actions = prog.can_try_mirror && (glmStatus && glmStatus.download_source) !== "mirror_only"
           ? [{ label: "Try the InkDoc mirror", onClick: () => retryGlmFromMirror() }]
@@ -1527,7 +1998,8 @@ document.addEventListener("DOMContentLoaded", () => {
       try {
         await postGlm("remove");
         showToast("GLM-OCR removed.", "info");
-        if (selectedEngine === "glm_ocr") setEngine("markitdown");
+        // Removing the chosen engine is choosing Auto.
+        if (preferredEngine === "glm_ocr") chooseEngine("auto");
       } catch (err) {
         showToast(`Could not remove GLM-OCR: ${err.message}`, "error");
       }
@@ -1920,33 +2392,56 @@ document.addEventListener("DOMContentLoaded", () => {
   async function loadSettings() {
     try {
       const resp = await fetch(`${apiBase}/settings`);
-      if (resp.ok) {
-        const s = await resp.json();
-        if (doclingFallbackToggle) {
-          doclingFallbackToggle.checked = Boolean(s.fallback_to_markitdown ?? s.docling_fallback);
-        }
-        if (dailyUpdateToggle) {
-          dailyUpdateToggle.checked = Boolean(s.check_for_updates_daily);
-        }
-        if (qualityCheckToggle) {
-          qualityCheckToggle.checked = s.quality_check_enabled !== false;
-        }
-        // Guarded by .disabled so this cannot race refreshAddonStatus() into
-        // showing a checked toggle the add-on state says is unusable. Whichever
-        // of the two lands last, the result is the same.
-        if (doclingCodeEnrichmentToggle && !doclingCodeEnrichmentToggle.disabled) {
-          doclingCodeEnrichmentToggle.checked = Boolean(s.docling_code_enrichment);
-        }
-        if (doclingFormulaEnrichmentToggle && !doclingFormulaEnrichmentToggle.disabled) {
-          doclingFormulaEnrichmentToggle.checked = Boolean(s.docling_formula_enrichment);
-        }
-        if (s.layout_width !== undefined) syncLayoutWidth(s.layout_width);
-        if (s.preview_text_size !== undefined) syncTextSize(s.preview_text_size);
-        if (s.render_math !== undefined) syncRenderMath(s.render_math);
-        // Last, so nothing in the save folder row can stop the toggles above.
-        renderSaveFolder(s.save_folder);
-      }
+      if (resp.ok) applySettings(await resp.json());
     } catch (_) {}
+  }
+
+  // A GET /settings body (or POST /settings/reset's, which is the same) onto
+  // every control. The checks below are guarded so a partial body still works.
+  function applySettings(s) {
+    if (doclingFallbackToggle) {
+      doclingFallbackToggle.checked = Boolean(s.fallback_to_markitdown ?? s.docling_fallback);
+    }
+    if (dailyUpdateToggle) {
+      dailyUpdateToggle.checked = Boolean(s.check_for_updates_daily);
+    }
+    if (qualityCheckToggle) {
+      qualityCheckToggle.checked = s.quality_check_enabled !== false;
+    }
+    // Guarded by .disabled so this cannot race refreshAddonStatus() into
+    // showing a checked toggle the add-on state says is unusable. Whichever
+    // of the two lands last, the result is the same.
+    if (doclingCodeEnrichmentToggle && !doclingCodeEnrichmentToggle.disabled) {
+      doclingCodeEnrichmentToggle.checked = Boolean(s.docling_code_enrichment);
+    }
+    if (doclingFormulaEnrichmentToggle && !doclingFormulaEnrichmentToggle.disabled) {
+      doclingFormulaEnrichmentToggle.checked = Boolean(s.docling_formula_enrichment);
+    }
+    if (s.auto_quality !== undefined) syncAutoQuality(s.auto_quality);
+    syncAutoSteps(s.thorough_passes, s.thorough_passes_off);
+    if (s.layout_width !== undefined) syncLayoutWidth(s.layout_width);
+    if (s.preview_text_size !== undefined) syncTextSize(s.preview_text_size);
+    if (s.render_math !== undefined) syncRenderMath(s.render_math);
+    if (s.theme !== undefined) syncPrefs(s);
+    // Last, so nothing in the save folder row can stop the toggles above.
+    renderSaveFolder(s.save_folder);
+  }
+
+  // Theme, engine, hidden engines, auto-save and Auto's tip from the server:
+  // another window may have changed them. Never over a change of this page's
+  // that is still being saved.
+  function syncPrefs(s) {
+    if (prefsBusy()) return;
+    const next = normalizePrefs(s);
+    if (next.theme !== prefs.theme) setThemeNow(next.theme);
+    applyHiddenEngines(next.hidden_engines);
+    prefs.preferred_engine = preferredEngine = next.preferred_engine;
+    restorePreferredEngine();
+    prefs.auto_save = autoSaveToDownloads = next.auto_save;
+    if (autoSaveToggle) autoSaveToggle.checked = next.auto_save;
+    prefs.auto_hint_hidden = next.auto_hint_hidden;
+    prefs.legacy_prefs_imported = next.legacy_prefs_imported;
+    refreshSwitchEngineButton();
   }
 
   // Both enrichment toggles persist the same way and differ only in their key
@@ -1985,8 +2480,8 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  wireEnrichmentToggle(doclingCodeEnrichmentToggle, "docling_code_enrichment", "Code Enrichment");
-  wireEnrichmentToggle(doclingFormulaEnrichmentToggle, "docling_formula_enrichment", "Formula Enrichment");
+  wireEnrichmentToggle(doclingCodeEnrichmentToggle, "docling_code_enrichment", "Code recognition");
+  wireEnrichmentToggle(doclingFormulaEnrichmentToggle, "docling_formula_enrichment", "Formula recognition");
 
   if (doclingFallbackToggle) {
     doclingFallbackToggle.addEventListener("change", async (e) => {
@@ -2069,6 +2564,317 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  // ─── Auto quality ────────────────────────────────────────────────────────
+  // Fast (as before), Balanced (tables checked against the PDF; Auto rebuilds
+  // wrong ones) or Thorough (also page splitting and GLM-OCR tables in Auto).
+  // Saved in settings.json; the server reads it for every conversion. A change
+  // applies at once and is undone if it can't be saved.
+  const AUTO_QUALITY_LEVELS = ["fast", "balanced", "thorough"];
+  const autoQualityRadios = Array.from(document.querySelectorAll('input[name="autoQuality"]'));
+  let autoQuality = applyAutoQuality("fast");
+  let autoQualitySaves = 0; // newest save wins; loadSettings waits for it
+
+  function applyAutoQuality(value) {
+    const level = AUTO_QUALITY_LEVELS.includes(value) ? value : "fast";
+    autoQualityRadios.forEach((radio) => { radio.checked = radio.value === level; });
+    return level;
+  }
+
+  function syncAutoQuality(value) {
+    if (autoQualitySaves === 0) autoQuality = applyAutoQuality(value);
+  }
+
+  autoQualityRadios.forEach((radio) => {
+    radio.addEventListener("change", async () => {
+      if (!radio.checked || radio.value === autoQuality) return;
+      const previous = autoQuality;
+      autoQuality = applyAutoQuality(radio.value);
+      const save = ++autoQualitySaves;
+      let saved = false;
+      try {
+        const resp = await fetchWithToken(`${apiBase}/settings`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ auto_quality: autoQuality }),
+        });
+        saved = resp.ok;
+      } catch (_) {}
+      if (save !== autoQualitySaves) return; // a newer choice is on its way
+      autoQualitySaves = 0;
+      if (!saved) {
+        autoQuality = applyAutoQuality(previous);
+        showToast("Couldn't save the Auto quality setting.", "error");
+      }
+    });
+  });
+  // ─── End Auto quality ────────────────────────────────────────────────────
+
+  // ─── Auto quality steps ──────────────────────────────────────────────────
+  // One switch per step of Balanced and Thorough, under Auto quality. The steps
+  // come from GET /settings (thorough_passes, app/core/thorough_passes.py), so
+  // the page keeps no list of its own. The setting is the list of steps
+  // switched off (thorough_passes_off), so a new step arrives on. A step whose
+  // engine isn't usable here is greyed out, with a button to install it. A
+  // change applies at once and is undone if it can't be saved.
+  const autoStepsBox = document.getElementById("autoSteps");
+  const autoStepsList = document.getElementById("autoStepsList");
+  const autoStepRows = new Map(); // step name -> its row's elements
+  let autoStepsOff = [];
+  let autoStepsSaves = 0; // newest save wins; loadSettings waits for it
+
+  function syncAutoSteps(steps, off) {
+    if (Array.isArray(steps)) buildAutoSteps(steps);
+    if (autoStepsSaves === 0 && Array.isArray(off)) {
+      // Names this version doesn't know would make the next save fail.
+      autoStepsOff = off.filter((name) => autoStepRows.has(name));
+    }
+    updateAutoSteps();
+  }
+
+  // Built once per list of steps, then only updated: a refresh never takes the
+  // focus away from a switch.
+  function buildAutoSteps(steps) {
+    if (!autoStepsList) return;
+    const valid = steps.filter((s) => s && typeof s.name === "string" && typeof s.title === "string")
+      // Balanced's steps first, as they run at both levels; otherwise the server's order.
+      .sort((a, b) => (b.level === "balanced") - (a.level === "balanced"));
+    if (valid.map((s) => s.name).join() === [...autoStepRows.keys()].join()) return;
+    autoStepRows.clear();
+    autoStepsList.replaceChildren(...valid.map(autoStepRow));
+    if (autoStepsBox) autoStepsBox.hidden = valid.length === 0;
+  }
+
+  function autoStepRow(step) {
+    const el = (tag, className, text) => {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text) node.textContent = text;
+      return node;
+    };
+    const input = el("input");
+    input.type = "checkbox";
+    input.dataset.autoStep = step.name;
+    const label = el("label", "toggle-switch");
+    label.append(
+      input,
+      el("span", "toggle-slider"),
+      el("span", "toggle-label", step.title),
+      el("span", "auto-step-level", step.level === "balanced" ? "Balanced and Thorough" : "Thorough"),
+    );
+    const description = el("p", "settings-caption", step.description);
+    description.id = `autoStepDesc-${step.name}`;
+    input.setAttribute("aria-describedby", description.id);
+    const needsText = el("span");
+    const separator = el("span", "", "·");
+    separator.setAttribute("aria-hidden", "true");
+    const install = el("button", "btn btn-sm btn-secondary", "Install");
+    install.type = "button";
+    const needs = el("p", "auto-step-needs");
+    needs.hidden = true;
+    needs.append(needsText, separator, install);
+    const row = el("li", "auto-step");
+    row.append(label, description, needs);
+    input.addEventListener("change", () => setAutoStep(step.name, input.checked));
+    install.addEventListener("click", (e) => openEngineCard(e, install.dataset.engine));
+    autoStepRows.set(step.name, { step, input, label, needs, needsText, install });
+    return row;
+  }
+
+  // Each switch from the setting, and greyed out while its engine isn't usable.
+  // Run again whenever an engine's status changes.
+  function updateAutoSteps() {
+    autoStepRows.forEach(({ step, input, label, needs, needsText, install }, name) => {
+      input.checked = !autoStepsOff.includes(name);
+      const missing = autoStepNeeds(step, engineAvailable);
+      input.disabled = Boolean(missing);
+      label.title = missing ? missing.text : "";
+      needs.hidden = !missing;
+      if (!missing) return;
+      needsText.textContent = missing.text;
+      install.dataset.engine = missing.install;
+      install.setAttribute("aria-label", `Install ${getEngineDisplayName(missing.install)}`);
+    });
+  }
+
+  async function setAutoStep(name, on) {
+    const previous = autoStepsOff;
+    autoStepsOff = previous.filter((n) => n !== name).concat(on ? [] : [name]);
+    updateAutoSteps();
+    const save = ++autoStepsSaves;
+    let saved = false;
+    try {
+      const resp = await fetchWithToken(`${apiBase}/settings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ thorough_passes_off: autoStepsOff }),
+      });
+      saved = resp.ok;
+    } catch (_) {}
+    if (save !== autoStepsSaves) return; // a newer change is on its way
+    autoStepsSaves = 0;
+    if (!saved) {
+      autoStepsOff = previous;
+      updateAutoSteps();
+      showToast("Couldn't save that step.", "error");
+    }
+  }
+  // ─── End Auto quality steps ──────────────────────────────────────────────
+
+  // ─── Layout model add-on ─────────────────────────────────────────────────
+  // Settings → Add-ons: the layout model for scanned tables ("layout_model" in
+  // app/core/addons.json), installed into InkDoc's own add-on folder. The Docling
+  // engine carries the same model; while it is installed nothing is downloaded.
+  // Its status also decides whether "Tables on scanned pages" is greyed out.
+  const LAYOUT_ADDON = "layout_model";
+  const layoutAddonBadge = document.getElementById("layoutAddonBadge");
+  const layoutAddonMeta = document.getElementById("layoutAddonMeta");
+  const layoutAddonReason = document.getElementById("layoutAddonReason");
+  const layoutAddonProgress = document.getElementById("layoutAddonProgress");
+  const layoutAddonProgressFill = document.getElementById("layoutAddonProgressFill");
+  const layoutAddonProgressText = document.getElementById("layoutAddonProgressText");
+  const layoutAddonButtons = {
+    install: document.getElementById("btnLayoutInstall"),
+    verify: document.getElementById("btnLayoutVerify"),
+    remove: document.getElementById("btnLayoutRemove"),
+    cancel: document.getElementById("btnLayoutCancel"),
+  };
+  let layoutAddonStatus = null;
+  let layoutAddonPoll = null;
+
+  function layoutAddonBusy(st) {
+    return ADDON_BUSY_STATES.includes(((st && st.progress) || {}).status);
+  }
+
+  function renderLayoutAddon(st) {
+    if (!layoutAddonBadge || !st) return;
+    layoutAddonStatus = st;
+    const busy = layoutAddonBusy(st);
+    const size = st.size_bytes ? formatBytes(st.size_bytes) : "";
+    let badge = ["Not available", "engine-badge-not-installed"];
+    if (busy) badge = [`${st.progress.status.charAt(0).toUpperCase()}${st.progress.status.slice(1)}…`, "engine-badge-busy"];
+    else if (st.installed) badge = ["Installed", "engine-badge-installed"];
+    else if (st.provided_by_pack) badge = ["Ready", "engine-badge-installed"];
+    else if (st.installable) badge = ["Not installed", "engine-badge-not-installed"];
+    layoutAddonBadge.textContent = badge[0];
+    layoutAddonBadge.className = `engine-badge ${badge[1]}`;
+    const where = st.provided_by_pack ? "Comes with the Docling engine" : (size ? `Download · ${size}` : "Download");
+    if (layoutAddonMeta) layoutAddonMeta.textContent = st.license ? `${where} · ${st.license}` : where;
+    if (layoutAddonReason) {
+      layoutAddonReason.textContent = st.reason || "";
+      layoutAddonReason.hidden = !st.reason || busy;
+    }
+    if (layoutAddonProgress) layoutAddonProgress.hidden = !busy;
+    if (busy) {
+      const prog = st.progress;
+      const pct = Math.round(prog.percent || 0);
+      if (layoutAddonProgressFill) layoutAddonProgressFill.style.width = `${pct}%`;
+      const done = formatBytes(prog.bytes_downloaded);
+      const total = formatBytes(prog.total_bytes);
+      if (layoutAddonProgressText) {
+        layoutAddonProgressText.textContent = `${pct}%${done && total ? ` — ${done} of ${total}` : ""}`;
+      }
+    }
+    const show = {
+      install: !busy && Boolean(st.installable),
+      verify: !busy && Boolean(st.installed || st.provided_by_pack),
+      remove: !busy && Boolean(st.installed),
+      cancel: busy,
+    };
+    Object.entries(layoutAddonButtons).forEach(([name, btn]) => { if (btn) btn.hidden = !show[name]; });
+    if (layoutAddonButtons.install) {
+      layoutAddonButtons.install.textContent = size ? `Install (${size})` : "Install";
+    }
+    updateAutoSteps();
+  }
+
+  async function refreshLayoutAddon() {
+    try {
+      const resp = await fetch(`${apiBase}/addons/${LAYOUT_ADDON}`);
+      if (!resp.ok) return null;
+      const st = await resp.json();
+      renderLayoutAddon(st);
+      return st;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async function pollLayoutAddon() {
+    const st = await refreshLayoutAddon();
+    if (!st || layoutAddonBusy(st)) return;
+    clearInterval(layoutAddonPoll);
+    layoutAddonPoll = null;
+    const prog = st.progress || {};
+    if (prog.status === "complete") showToast("Layout model installed.", "success");
+    else if (prog.status === "error") showToast(`Layout model install failed: ${prog.error_message || "unknown error"}`, "error");
+    else if (prog.status === "cancelled") showToast("Layout model install cancelled.", "info");
+  }
+
+  async function layoutAddonAction(action) {
+    return fetchWithToken(`${apiBase}/addons/${LAYOUT_ADDON}/${action}`, { method: "POST" });
+  }
+
+  if (layoutAddonButtons.install) {
+    layoutAddonButtons.install.addEventListener("click", async () => {
+      layoutAddonButtons.install.disabled = true;
+      try {
+        const resp = await layoutAddonAction("install");
+        if (resp.ok) {
+          clearInterval(layoutAddonPoll);
+          layoutAddonPoll = setInterval(pollLayoutAddon, 600);
+          pollLayoutAddon();
+        } else {
+          const err = await resp.json().catch(() => ({}));
+          showToast(`Couldn't start the download: ${err.detail || resp.status}`, "error");
+        }
+      } catch (e) {
+        showToast(`Couldn't start the download: ${e.message}`, "error");
+      } finally {
+        layoutAddonButtons.install.disabled = false;
+      }
+    });
+  }
+
+  if (layoutAddonButtons.cancel) {
+    layoutAddonButtons.cancel.addEventListener("click", () => { layoutAddonAction("cancel").catch(() => {}); });
+  }
+
+  if (layoutAddonButtons.verify) {
+    layoutAddonButtons.verify.addEventListener("click", async () => {
+      layoutAddonButtons.verify.disabled = true;
+      try {
+        const res = await (await layoutAddonAction("verify")).json();
+        if (res.valid) showToast("The layout model's files match their SHA-256 hashes.", "success");
+        else showToast(`The layout model's files failed the check: ${res.reason || "hash mismatch"}`, "error");
+      } catch (e) {
+        showToast(`Couldn't check the files: ${e.message}`, "error");
+      } finally {
+        layoutAddonButtons.verify.disabled = false;
+      }
+    });
+  }
+
+  if (layoutAddonButtons.remove) {
+    layoutAddonButtons.remove.addEventListener("click", async () => {
+      const confirmed = await confirmDialog({
+        title: "Remove the layout model?",
+        message: "Its files will be deleted. Tables on scanned pages are then read as GLM-OCR reads the whole page, unless the Docling engine is installed. You can install the model again later.",
+        confirmText: "Remove",
+        cancelText: "Cancel",
+        danger: true,
+      });
+      if (!confirmed) return;
+      try {
+        const resp = await layoutAddonAction("remove");
+        showToast(resp.ok ? "Layout model removed." : "Couldn't remove the layout model.", resp.ok ? "info" : "error");
+      } catch (e) {
+        showToast(`Couldn't remove the layout model: ${e.message}`, "error");
+      }
+      refreshLayoutAddon();
+    });
+  }
+  // ─── End layout model add-on ─────────────────────────────────────────────
+
   // ─── Layout width ────────────────────────────────────────────────────────
   // How much of a wide window InkDoc uses (Settings → General → Display). The
   // server puts the saved choice on <html> before first paint, so the page
@@ -2136,6 +2942,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let textSizeSaved = textSize; // what settings.json is known to hold
   let textSizeTimer = null;
   let textSizeSaving = false;
+  let textSizeRequest = null; // the save on its way, for Restore defaults to wait on
 
   // aria-disabled rather than disabled at the ends: a disabled button would
   // drop keyboard focus the moment it reached the limit.
@@ -2159,9 +2966,9 @@ document.addEventListener("DOMContentLoaded", () => {
     textSizeTimer = setTimeout(saveTextSize, TEXT_SIZE_SAVE_DELAY_MS);
   }
 
-  async function saveTextSize() {
+  async function saveTextSize(keepalive = false) {
     textSizeTimer = null;
-    if (textSizeSaving) {
+    if (textSizeSaving && !keepalive) {
       textSizeTimer = setTimeout(saveTextSize, TEXT_SIZE_SAVE_DELAY_MS);
       return;
     }
@@ -2170,13 +2977,16 @@ document.addEventListener("DOMContentLoaded", () => {
     textSizeSaving = true;
     let saved = false;
     try {
-      const resp = await fetchWithToken(`${apiBase}/settings`, {
+      textSizeRequest = fetchWithToken(`${apiBase}/settings`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ preview_text_size: value }),
+        keepalive,
       });
+      const resp = await textSizeRequest;
       saved = resp.ok;
     } catch (_) {}
+    textSizeRequest = null;
     textSizeSaving = false;
     if (saved) {
       textSizeSaved = value;
@@ -2193,9 +3003,79 @@ document.addEventListener("DOMContentLoaded", () => {
     textSize = textSizeSaved = applyTextSize(Number(value));
   }
 
+  // Settings closing or the page going away: save a waiting change now.
+  // Resolves when that save (or one already on its way) is done.
+  function flushTextSize(keepalive = false) {
+    if (!textSizeTimer) return textSizeRequest ? textSizeRequest.catch(() => {}) : Promise.resolve();
+    clearTimeout(textSizeTimer);
+    return saveTextSize(keepalive);
+  }
+
+  // Restore defaults replaces a waiting change, so it is never sent, and waits
+  // for one already on its way, so it can't land after the reset.
+  async function settleTextSize() {
+    clearTimeout(textSizeTimer);
+    textSizeTimer = null;
+    if (textSizeRequest) await textSizeRequest.catch(() => {});
+  }
+
   if (btnTextSmaller) btnTextSmaller.addEventListener("click", () => stepTextSize(-1));
   if (btnTextLarger) btnTextLarger.addEventListener("click", () => stepTextSize(1));
   // ─── End preview text size ───────────────────────────────────────────────
+
+  // ─── Restore defaults ────────────────────────────────────────────────────
+  // Settings → General, last. The server holds the list of what is reset
+  // (POST /settings/reset) and keeps engines, add-ons, their setup, the save
+  // folder and every file. Changes not yet saved are dropped first and a save
+  // already on its way is waited for, so neither can land after the reset.
+  // aria-disabled rather than disabled while it runs, so keyboard focus stays.
+  const btnResetDefaults = document.getElementById("btnResetDefaults");
+  let resettingDefaults = false;
+
+  async function restoreDefaults() {
+    if (resettingDefaults) return;
+    const ok = await confirmDialog({
+      title: "Restore default settings?",
+      message: "InkDoc's appearance and preferences go back to how they were when it was installed.",
+      details: [
+        "Reset: theme, engine choice and hidden engines, auto-save, Auto's tips, Docling fallback, PDF check, Auto quality and its steps, layout width, text size, math formulas and the daily update check.",
+        "Kept: installed engines and add-ons and their settings, your save folder, and every converted file.",
+      ],
+      confirmText: "Restore defaults",
+      danger: false,
+    });
+    if (!ok || resettingDefaults) return;
+    resettingDefaults = true;
+    if (btnResetDefaults) btnResetDefaults.setAttribute("aria-disabled", "true");
+    try {
+      await settlePrefs();
+      await settleTextSize();
+      const resp = await fetchWithToken(`${apiBase}/settings/reset`, { method: "POST" });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        showToast(typeof err.detail === "string" ? err.detail : "Couldn't restore the default settings.", "error");
+        return;
+      }
+      const settings = await resp.json();
+      // Nothing left in browser storage for an import to bring back.
+      LEGACY_PREF_KEYS.forEach(removeStorage);
+      try {
+        applySettings(settings);
+      } catch (_) {
+        // A control that can't be updated keeps its old look until Settings
+        // reopens; the reset itself is saved.
+      }
+      showToast("Default settings restored.", "success");
+    } catch (_) {
+      showToast("Couldn't restore the default settings.", "error");
+    } finally {
+      resettingDefaults = false;
+      if (btnResetDefaults) btnResetDefaults.removeAttribute("aria-disabled");
+    }
+  }
+
+  if (btnResetDefaults) btnResetDefaults.addEventListener("click", restoreDefaults);
+  // ─── End restore defaults ────────────────────────────────────────────────
 
   // ─── Update Management UI ─────────────────────────────────────────────────
   function formatBytes(bytes) {
@@ -2205,6 +3085,232 @@ document.addEventListener("DOMContentLoaded", () => {
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
   }
+
+  // ─── Release notes ─────────────────────────────────────────────────────────
+  // The notes are the CHANGELOG's section for the release ("### Added" and so
+  // on, each a list of "- " entries). Settings → Updates shows five entries,
+  // the first ones of each section in turn (pickHighlights), each cut to its
+  // first sentence, under their headings, and links to
+  // the release page for the rest. GitHub's generated notes ("* Fix by @x in
+  // https://…") are read too, without their links.
+  //
+  // Built from text nodes only: nothing in the notes is ever inserted as HTML,
+  // and no link in them is kept, so nothing in them can load a page in the
+  // window. The one link is the release page's, from the signed manifest.
+  const RELEASE_HIGHLIGHTS_SHOWN = 5;
+  const RELEASE_HIGHLIGHT_MAX_CHARS = 180;
+  const RELEASE_HIGHLIGHT_LEAD_IN_CHARS = 40;
+
+  // Inline Markdown as [{ text, strong, code }], links reduced to their text.
+  function inlineNoteSegments(text) {
+    const target = String.raw`\((?:[^()]|\([^()]*\))*\)`;
+    const plain = String(text)
+      .replace(new RegExp(String.raw`!\[[^\]]*\]` + target, "g"), "")
+      .replace(new RegExp(String.raw`\[([^\]]*)\]` + target, "g"), "$1")
+      .replace(/<(script|style)\b[\s\S]*?<\/\1\s*>/gi, "")
+      .replace(/<https?:\/\/[^>]*>/gi, "")
+      .replace(/<\/?[a-z][^>]*>/gi, "")
+      .replace(/\bhttps?:\/\/\S+/gi, "")
+      .replace(/\(\s*\)/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    const segments = [];
+    const emphasis = (s) => s.replace(/(^|[^\w*])[*_]([^*_\s][^*_]*?)[*_](?=[^\w*]|$)/g, "$1$2");
+    const pushText = (s, strong) => { if (s) segments.push({ text: emphasis(s), strong, code: false }); };
+    const token = /\*\*(.+?)\*\*|__(.+?)__|`([^`]+)`/g;
+    let last = 0;
+    let m;
+    while ((m = token.exec(plain))) {
+      pushText(plain.slice(last, m.index), false);
+      if (m[3] !== undefined) segments.push({ text: m[3], strong: false, code: true });
+      else pushText(m[1] !== undefined ? m[1] : m[2], true);
+      last = token.lastIndex;
+    }
+    pushText(plain.slice(last), false);
+    return segments.map((seg) => (seg.code ? seg : { ...seg, text: seg.text.replace(/[*`]/g, "") }))
+      .filter((seg) => seg.text);
+  }
+
+  // The first sentence, at most RELEASE_HIGHLIGHT_MAX_CHARS, ending on a word.
+  // A short lead-in ("Less memory while idle.") takes the next sentence too.
+  function shortenNoteSegments(segments) {
+    const full = segments.map((seg) => seg.text).join("");
+    let end = full.length;
+    const sentenceEnd = /[.!?](?=\s+["“(*`]?[A-Z0-9])/g;
+    let match;
+    while ((match = sentenceEnd.exec(full))) {
+      end = match.index + 1;
+      if (end >= RELEASE_HIGHLIGHT_LEAD_IN_CHARS) break;
+      end = full.length;
+    }
+    let ellipsis = false;
+    if (end > RELEASE_HIGHLIGHT_MAX_CHARS) {
+      const space = full.lastIndexOf(" ", RELEASE_HIGHLIGHT_MAX_CHARS);
+      end = space > RELEASE_HIGHLIGHT_MAX_CHARS / 2 ? space : RELEASE_HIGHLIGHT_MAX_CHARS;
+      ellipsis = true;
+    }
+    const out = [];
+    let used = 0;
+    for (const seg of segments) {
+      if (used >= end) break;
+      const text = seg.text.slice(0, end - used);
+      used += seg.text.length;
+      out.push({ ...seg, text });
+    }
+    if (ellipsis && out.length) {
+      const tail = out[out.length - 1];
+      tail.text = tail.text.replace(/[\s,;:(—–-]+$/, "");
+      out.push({ text: "…", strong: false, code: false });
+    }
+    return out;
+  }
+
+  // { items: [{ section, segments }], total } from the notes' Markdown.
+  function releaseHighlights(notes) {
+    const entries = [];
+    const paragraphs = [];
+    let section = "";
+    let entry = null;
+    let paragraph = null;
+    const lines = String(notes || "").replace(/\r\n?/g, "\n").split("\n");
+    for (const line of lines) {
+      const heading = line.match(/^#{1,6}\s+(.*?)\s*#*\s*$/);
+      const bullet = line.match(/^[-*+]\s+(.*)$/);
+      if (heading) {
+        section = inlineNoteSegments(heading[1]).map((seg) => seg.text).join("").trim();
+        entry = paragraph = null;
+      } else if (bullet) {
+        entry = { section, text: bullet[1] };
+        entries.push(entry);
+        paragraph = null;
+      } else if (!line.trim()) {
+        entry = paragraph = null;
+      } else if (entry && /^\s/.test(line)) {
+        entry.text += " " + line.trim();
+      } else if (paragraph) {
+        paragraph.text += " " + line.trim();
+      } else {
+        entry = null;
+        paragraph = { section, text: line.trim() };
+        paragraphs.push(paragraph);
+      }
+    }
+    const items = [];
+    for (const raw of entries.length ? entries : paragraphs) {
+      // GitHub's generated notes: "<title> by @user in <pull request URL>".
+      if (/\bmade their first contribution\b/i.test(raw.text)) continue;
+      const text = raw.text.replace(/\s+by\s+@[\w-]+(?:\s+in\s+\S+)?\s*$/, "").replace(/\s+in\s+https?:\/\/\S+\s*$/, "");
+      const segments = inlineNoteSegments(text);
+      const plain = segments.map((seg) => seg.text).join("").trim();
+      // Nothing left but a label ("Full Changelog:") once its link is gone.
+      if (!/[A-Za-z]/.test(plain) || /:$/.test(plain)) continue;
+      const generic = /^what'?s changed$/i.test(raw.section) || /^\[?v?\d+\.\d+/.test(raw.section);
+      items.push({ section: generic ? "" : raw.section, segments });
+    }
+    return { items, total: items.length };
+  }
+
+  // The highlights: each section's first entry, then each one's second, and so
+  // on, so a release with many additions still shows what it changed and fixed.
+  // Kept in the notes' own order, so each section's entries stay together.
+  function pickHighlights(items, count) {
+    const bySection = new Map();
+    items.forEach((item, index) => {
+      if (!bySection.has(item.section)) bySection.set(item.section, []);
+      bySection.get(item.section).push(index);
+    });
+    const chosen = [];
+    for (let round = 0; chosen.length < Math.min(count, items.length); round++) {
+      for (const indexes of bySection.values()) {
+        if (round < indexes.length && chosen.length < count) chosen.push(indexes[round]);
+      }
+    }
+    return chosen.sort((a, b) => a - b).map((index) => items[index]);
+  }
+
+  function releaseNotesUrl(url) {
+    return typeof url === "string" && /^https:\/\/[^\s"'<>]+$/i.test(url) ? url : "";
+  }
+
+  let renderedNotesKey = null;
+
+  function renderReleaseNotes(s) {
+    if (!updateNotes) return;
+    const key = JSON.stringify([s.latest_version || "", s.release_notes || "", s.release_url || ""]);
+    if (key === renderedNotesKey) return;
+    renderedNotesKey = key;
+
+    const { items, total } = releaseHighlights(s.release_notes);
+    const url = releaseNotesUrl(s.release_url);
+    if (!items.length && !url) {
+      updateNotes.hidden = true;
+      return;
+    }
+    if (updateNotesTitle) {
+      updateNotesTitle.textContent = s.latest_version ? `What's new in v${s.latest_version}` : "What's new";
+    }
+    if (updateNotesBody) {
+      updateNotesBody.replaceChildren();
+      let list = null;
+      let section = null;
+      for (const item of pickHighlights(items, RELEASE_HIGHLIGHTS_SHOWN)) {
+        if (!list || item.section !== section) {
+          section = item.section;
+          if (section) {
+            const label = document.createElement("p");
+            label.className = "update-notes-group";
+            label.textContent = section;
+            updateNotesBody.appendChild(label);
+          }
+          list = document.createElement("ul");
+          list.className = "update-notes-list";
+          updateNotesBody.appendChild(list);
+        }
+        const li = document.createElement("li");
+        for (const seg of shortenNoteSegments(item.segments)) {
+          const node = seg.code ? document.createElement("code") : seg.strong ? document.createElement("strong") : null;
+          if (node) {
+            node.textContent = seg.text;
+            li.appendChild(node);
+          } else {
+            li.appendChild(document.createTextNode(seg.text));
+          }
+        }
+        list.appendChild(li);
+      }
+      if (!items.length) {
+        const empty = document.createElement("p");
+        empty.className = "update-notes-empty";
+        empty.textContent = "The highlights of this version are on its release page.";
+        updateNotesBody.appendChild(empty);
+      }
+    }
+    const more = total - Math.min(total, RELEASE_HIGHLIGHTS_SHOWN);
+    if (updateNotesMore) {
+      updateNotesMore.textContent = more > 0 ? `+ ${more} more change${more === 1 ? "" : "s"}` : "";
+    }
+    if (updateNotesLink) {
+      updateNotesLink.hidden = !url;
+      updateNotesLink.setAttribute("href", url || "#");
+    }
+    updateNotes.hidden = false;
+  }
+
+  // The release page opens in the system browser, never in InkDoc's window,
+  // whichever button clicked it. In a browser tab (Web Bench) the link's own
+  // target="_blank" opens a new tab.
+  function openReleaseNotesLink(e) {
+    if (e.type === "auxclick" && e.button !== 1) return;
+    if (!window.pywebview) return;
+    e.preventDefault();
+    const url = releaseNotesUrl(updateNotesLink.getAttribute("href"));
+    if (url) withWindowApi((api) => Promise.resolve(api.open_external_link(url)).catch(() => {}));
+  }
+  if (updateNotesLink) {
+    updateNotesLink.addEventListener("click", openReleaseNotesLink);
+    updateNotesLink.addEventListener("auxclick", openReleaseNotesLink);
+  }
+  // ─── End release notes ─────────────────────────────────────────────────────
 
   function renderUpdateStatus(s) {
     if (!s) return;
@@ -2243,6 +3349,8 @@ document.addEventListener("DOMContentLoaded", () => {
           : "Last checked: Never";
       }
       if (updateDetails) updateDetails.style.display = "none";
+      if (updateNotes) updateNotes.hidden = true;
+      renderedNotesKey = null;
       if (updateErrorBox) updateErrorBox.style.display = "none";
       stopUpdatePolling();
       return;
@@ -2260,23 +3368,7 @@ document.addEventListener("DOMContentLoaded", () => {
         updateAssetSize.textContent = s.asset_size ? formatBytes(s.asset_size) : "";
       }
 
-      if (s.release_notes && s.release_notes.trim()) {
-        try {
-          if (window.DOMPurify) {
-            const cleanHtml = window.DOMPurify.sanitize(marked.parse(s.release_notes));
-            if (updateNotesContent) updateNotesContent.innerHTML = cleanHtml;
-          } else if (updateNotesContent) {
-            // No sanitiser loaded: show the notes as text, never as HTML.
-            updateNotesContent.textContent = s.release_notes;
-          }
-          if (updateNotesAccordion) updateNotesAccordion.style.display = "block";
-        } catch (_) {
-          if (updateNotesContent) updateNotesContent.textContent = s.release_notes;
-          if (updateNotesAccordion) updateNotesAccordion.style.display = "block";
-        }
-      } else if (updateNotesAccordion) {
-        updateNotesAccordion.style.display = "none";
-      }
+      renderReleaseNotes(s);
 
       if (updateProgressWrapper) updateProgressWrapper.style.display = "none";
       if (btnDownloadUpdate) {
@@ -2299,6 +3391,7 @@ document.addEventListener("DOMContentLoaded", () => {
         updateStatusTitle.textContent = state === "verifying" ? "Verifying update…" : "Downloading update…";
       }
       if (updateDetails) updateDetails.style.display = "block";
+      renderReleaseNotes(s);
       if (updateProgressWrapper) updateProgressWrapper.style.display = "block";
 
       const pct = Math.round(s.progress_percent || 0);
@@ -2327,6 +3420,7 @@ document.addEventListener("DOMContentLoaded", () => {
         updateStatusSubtitle.textContent = `Version v${s.latest_version} verified.`;
       }
       if (updateDetails) updateDetails.style.display = "block";
+      renderReleaseNotes(s);
       if (updateProgressWrapper) updateProgressWrapper.style.display = "none";
       if (btnDownloadUpdate) btnDownloadUpdate.style.display = "none";
       if (btnApplyUpdate) {
@@ -2355,6 +3449,7 @@ document.addEventListener("DOMContentLoaded", () => {
         updateStatusSubtitle.textContent = `Version v${s.latest_version} verified and saved to Downloads.`;
       }
       if (updateDetails) updateDetails.style.display = "block";
+      renderReleaseNotes(s);
       if (updateProgressWrapper) updateProgressWrapper.style.display = "none";
       if (btnDownloadUpdate) btnDownloadUpdate.style.display = "none";
       if (btnApplyUpdate) btnApplyUpdate.style.display = "none";
@@ -2384,6 +3479,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (updateErrorMsg) {
           updateErrorMsg.textContent = s.error || "An error occurred during update check.";
         }
+        if (updateErrorDownload) updateErrorDownload.hidden = s.offer_download !== true;
       }
       stopUpdatePolling();
     }
@@ -2540,6 +3636,39 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  if (btnDoclingUpdate) {
+    btnDoclingUpdate.addEventListener("click", async () => {
+      const d = doclingInfo || {};
+      const to = d.latest_docling_version ? `Docling ${d.latest_docling_version}` : "the new Docling";
+      const ok = await confirmDialog({
+        title: "Update Docling?",
+        message: `Downloads ${to} (${formatSize(d.download_size_bytes)}) and replaces the installed pack once it is verified. If anything fails, the installed Docling keeps working. A Docling conversion in progress finishes first.`,
+        confirmText: "Update",
+        cancelText: "Not now",
+        danger: false,
+        focusCancel: true,
+      });
+      if (!ok) return;
+      btnDoclingUpdate.disabled = true;
+      btnDoclingUpdate.textContent = "Starting…";
+      try {
+        const resp = await fetchWithToken(`${apiBase}/engines/docling/install`, { method: "POST" });
+        if (resp.ok) {
+          doclingOperation = "update";
+          showToast("Downloading the Docling update...", "info");
+          startProgressPolling();
+        } else {
+          const err = await resp.json().catch(() => ({ detail: "Failed to start the update" }));
+          showToast(`Error: ${err.detail}`, "error");
+          renderDoclingUpdate(doclingInfo);
+        }
+      } catch (e) {
+        showToast(`Error starting the update: ${e.message}`, "error");
+        renderDoclingUpdate(doclingInfo);
+      }
+    });
+  }
+
   if (btnDoclingCancel) {
     btnDoclingCancel.addEventListener("click", async () => {
       try {
@@ -2559,7 +3688,9 @@ document.addEventListener("DOMContentLoaded", () => {
           method: "POST",
         });
         const res = await resp.json();
-        if (res.valid) {
+        if (res.valid && res.outdated) {
+          showToast(res.note, "info");
+        } else if (res.valid) {
           showToast(`Integrity check passed! All ${res.files_checked} files verified against SHA-256 signatures.`, "success");
         } else {
           showToast(`Integrity check failed: ${res.reason || "Hash mismatch"}`, "error");
@@ -2591,9 +3722,8 @@ document.addEventListener("DOMContentLoaded", () => {
         });
         if (resp.ok) {
           showToast("Docling engine pack removed.", "info");
-          if (selectedEngine === "docling") {
-            setEngine("markitdown");
-          }
+          // Removing the chosen engine is choosing Auto.
+          if (preferredEngine === "docling") chooseEngine("auto");
           await refreshEngines();
         } else {
           showToast("Failed to remove Docling pack.", "error");
@@ -2605,13 +3735,28 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ─── Health Check ────────────────────────────────────────────────────────
+  // A theme and engine chosen in InkDoc 1.2 or earlier, moved into settings.json
+  // by importLegacyPrefs(): use them now. The head script already painted the theme.
+  function adoptLegacyPrefs(imported) {
+    if (!imported) return;
+    if (prefs.theme !== requestedTheme) setThemeNow(prefs.theme);
+    if (prefs.preferred_engine !== preferredEngine) {
+      preferredEngine = prefs.preferred_engine;
+      restorePreferredEngine();
+    }
+  }
+
   async function checkServerHealth() {
     try {
       const resp = await fetch(`${apiBase}/health`);
       if (resp.ok) {
         connectionErrorBar.classList.remove("visible");
+        adoptLegacyPrefs(importLegacyPrefs());
         await refreshEngines();
-        await loadSettings();
+        // The saved preferences came with the page; the rest of the settings
+        // only fill controls in the Settings drawer, which reads them when it
+        // opens. A page served without them (no session script) asks now.
+        if (!prefsFromServer) await loadSettings();
         await fetchUpdateStatus();
       } else {
         connectionErrorBar.classList.add("visible");
@@ -2638,24 +3783,36 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // ─── Links in converted documents and release notes ─────────────────────
+  // ─── Links in converted documents ───────────────────────────────────────
   // In the desktop app a plain link would load the other page inside InkDoc's
   // own window. Web links open in the system browser instead, and no other
   // link may replace the app; links to a heading in the same document still
-  // scroll. In a browser tab (Web Bench) links behave as before.
+  // scroll. A middle click (auxclick, which never fires "click") is handled
+  // the same way: left alone, WebView2 would hand any link, file: ones too, to
+  // the system to open. In a browser tab (Web Bench) links behave as before.
+  // Release notes have no links of their own (renderReleaseNotes).
   function handleContentLinkClick(e) {
     if (!window.pywebview) return;
-    const link = e.target && e.target.closest ? e.target.closest("a[href]") : null;
+    if (e.type === "auxclick" && e.button !== 1) return;
+    // Image-map areas and SVG links (xlink:href) navigate too; the sanitiser keeps both.
+    const link = e.target && e.target.closest ? e.target.closest("a, area") : null;
     if (!link) return;
-    const href = link.getAttribute("href") || "";
-    if (href.startsWith("#")) return;
+    const href = link.getAttribute("href") || link.getAttributeNS("http://www.w3.org/1999/xlink", "href") || "";
+    if (!href) return;
+    if (href.startsWith("#")) {
+      // A click scrolls; a middle click would open InkDoc itself in the browser.
+      if (e.type === "auxclick") e.preventDefault();
+      return;
+    }
     e.preventDefault();
     if (/^https?:\/\//i.test(href)) {
       withWindowApi((api) => Promise.resolve(api.open_external_link(href)).catch(() => {}));
     }
   }
-  if (renderedOutput) renderedOutput.addEventListener("click", handleContentLinkClick);
-  if (updateNotesContent) updateNotesContent.addEventListener("click", handleContentLinkClick);
+  if (renderedOutput) {
+    renderedOutput.addEventListener("click", handleContentLinkClick);
+    renderedOutput.addEventListener("auxclick", handleContentLinkClick);
+  }
   // ─── End content links ───────────────────────────────────────────────────
 
   // ─── External Links (Settings) ─────────────────────────────────────────────
@@ -2672,6 +3829,29 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     });
   }
+
+  // Links that open one fixed address: in the desktop app the system browser opens
+  // `url`, never whatever href the link carries; in a browser tab the link works as written.
+  function openFixedAddress(link, url) {
+    link.addEventListener("click", (e) => {
+      if (!window.pywebview) return;
+      e.preventDefault();
+      withWindowApi((api) => Promise.resolve(api.open_external_link(url)).catch(() => {}));
+    });
+  }
+
+  // When an update can't be checked or downloaded here, the website's download section
+  // still has it.
+  const WEBSITE_DOWNLOAD_URL = "https://abdoslamb.github.io/InkDoc/#download";
+  if (updateErrorDownload) openFixedAddress(updateErrorDownload, WEBSITE_DOWNLOAD_URL);
+
+  // The support links (Settings sidebar heart, About) open the website's /support/
+  // page, which forwards to the support platform, so released apps never need to
+  // change when the platform does.
+  const SUPPORT_URL = "https://abdoslamb.github.io/InkDoc/support/";
+  document.querySelectorAll("[data-support-link]").forEach((link) => openFixedAddress(link, SUPPORT_URL));
+
+  // ─── End external links ──────────────────────────────────────────────────
 
   // ─── Custom title bar (frameless desktop window only) ────────────────────
   // The flag is injected into the page before first paint, so the controls never
@@ -2755,38 +3935,89 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     if (maximizeBtn) maximizeBtn.addEventListener("click", toggleMaximize);
     if (closeBtn) {
-      closeBtn.addEventListener("click", () =>
-        withWindowApi((api) => api.close_window().catch(() => {}))
-      );
+      // The web view goes the moment the window closes, taking any change still
+      // in its short save pause with it (pagehide can't get a request out of a
+      // closing pywebview window). Send those first, waiting at most 600 ms;
+      // with nothing waiting the window closes at once, as before.
+      closeBtn.addEventListener("click", async () => {
+        await Promise.race([
+          Promise.all([flushPrefs(true), flushTextSize(true)]).catch(() => {}),
+          new Promise((resolve) => setTimeout(resolve, 600)),
+        ]);
+        withWindowApi((api) => api.close_window().catch(() => {}));
+      });
     }
-
-    // Double-clicking the title bar toggles maximise, as every platform expects.
-    document.querySelectorAll(".pywebview-drag-region").forEach((region) => {
-      region.addEventListener("dblclick", toggleMaximize);
-    });
+    // Dragging the header and double-clicking it are Windows' own: the header
+    // is a native caption region (app-region in style.css).
   }
 
   // ─── Theme Toggle ────────────────────────────────────────────────────────
-  const savedTheme = readStorage("inkdoc-theme") || readStorage("markitdown-theme") || "dark";
-  document.documentElement.setAttribute("data-theme", savedTheme);
+  // The server puts the saved theme on <html> before first paint; it is saved
+  // in settings.json (browser storage doesn't survive the desktop window).
   // The theme the last click asked for. A View Transition applies it a frame
   // later, so a quick second click must not read it back from the page.
   let requestedTheme = document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";
+  let themeRun = 0; // the newest switch; only it may clean up after itself
 
-  function applyTheme(theme) {
-    document.documentElement.setAttribute("data-theme", theme);
-    writeStorage("inkdoc-theme", theme);
-    // The maximise button is drawn natively, so it can't pick up the new
-    // palette from CSS on its own.
+  // The maximise button is drawn natively, so it can't pick up the new
+  // palette from CSS on its own.
+  function syncTitlebar() {
     if (window.__inkdocSyncTitlebar) window.__inkdocSyncTitlebar();
   }
 
-  // The new theme grows as a circle from the button, as on the website, where
-  // the web engine supports View Transitions. Without them, or with reduced
-  // motion, it switches at once as before.
+  function applyTheme(theme, sync = true) {
+    document.documentElement.setAttribute("data-theme", theme);
+    if (sync) syncTitlebar();
+  }
+
+  // The natively drawn maximise button sits outside the page, so the circle
+  // can't reveal it: it switches all at once, when told. Tell it when the
+  // circle's edge reaches its centre, one frame early for the trip to Windows
+  // and its repaint (about 15 ms). Shrinking, that is near the end of the
+  // circle, since the button is close to its centre.
+  function syncTitlebarAsCircleCrosses(circle, cx, cy, radius, shrinking, sync) {
+    const button = document.getElementById("winMaximize");
+    if (!button || !window.__inkdocSyncTitlebar || typeof window.requestAnimationFrame !== "function") {
+      sync();
+      return;
+    }
+    const b = button.getBoundingClientRect();
+    const reach = Math.hypot(b.left + b.width / 2 - cx, b.top + b.height / 2 - cy) / radius;
+    // The eased progress at which the edge is at the button. A window with no
+    // size has none; the transition's end syncs it then.
+    const at = shrinking ? 1 - reach : reach;
+    if (!Number.isFinite(at)) return;
+    let last = null;
+    const step = () => {
+      const timing = circle.effect && circle.effect.getComputedTiming();
+      const progress = timing ? timing.progress : null;
+      // Ended, cancelled or never started: the transition's end syncs it.
+      if (typeof progress !== "number") return;
+      const next = last === null ? progress : progress + (progress - last);
+      if (next >= at) {
+        sync();
+        return;
+      }
+      last = progress;
+      window.requestAnimationFrame(step);
+    };
+    window.requestAnimationFrame(step);
+  }
+
+  // Without the circle: Restore defaults, another window's change, an import.
+  function setThemeNow(theme) {
+    requestedTheme = theme === "light" ? "light" : "dark";
+    prefs.theme = requestedTheme;
+    applyTheme(requestedTheme);
+  }
+
+  // Switching to light, the light theme grows as a circle from the button;
+  // switching to dark, the light theme shrinks back into it. Where the web
+  // engine has no View Transitions, or with reduced motion, it switches at once.
   themeToggle.addEventListener("click", () => {
     requestedTheme = requestedTheme === "dark" ? "light" : "dark";
     const next = requestedTheme;
+    savePrefs({ theme: next });
     const root = document.documentElement;
     const reduceMotion = typeof window.matchMedia === "function"
       && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -2799,34 +4030,77 @@ document.addEventListener("DOMContentLoaded", () => {
     const x = r.left + r.width / 2;
     const y = r.top + r.height / 2;
     const radius = Math.hypot(Math.max(x, window.innerWidth - x), Math.max(y, window.innerHeight - y));
+    const toDark = next === "dark";
+    const run = ++themeRun;
     // Pause the colour fades, or the circle would reveal half-faded colours.
+    // theme-to-dark puts the old (light) view above the new one (style.css).
     root.classList.add("theme-switching");
-    const finish = () => root.classList.remove("theme-switching");
+    if (toDark) root.classList.add("theme-to-dark");
+    else root.classList.remove("theme-to-dark");
+    let circle = null;
+    // The title bar button gets this switch's palette once: when the circle
+    // reaches it, or at the end if the circle never ran. Only while this is
+    // the newest switch; a newer one syncs for itself.
+    let synced = false;
+    const syncOnce = () => {
+      if (synced || run !== themeRun) return;
+      try {
+        syncTitlebar();
+        synced = true;
+      } catch (_) {
+        // Left for the transition's end to try again.
+      }
+    };
+    // A newer click starts its own transition and skips this one; this one's
+    // end must not take the classes away from it. The circle is cancelled
+    // either way: held at its end (below), it would otherwise clip the next
+    // switch's views, which have the same pseudo-element names.
+    const finish = () => {
+      if (circle) circle.cancel();
+      if (run !== themeRun) return;
+      root.classList.remove("theme-switching");
+      root.classList.remove("theme-to-dark");
+      syncOnce();
+    };
 
     let transition;
     try {
-      transition = document.startViewTransition(() => applyTheme(next));
+      transition = document.startViewTransition(() => applyTheme(next, false));
     } catch (_) {
-      applyTheme(next);
+      applyTheme(next, false);
       finish();
       return;
     }
     // Short on purpose: while a View Transition plays, the engine sends clicks
     // and drops to the page background, where they are ignored.
+    const small = `circle(0px at ${x}px ${y}px)`;
+    const full = `circle(${radius}px at ${x}px ${y}px)`;
     transition.ready
       .then(() => {
-        root.animate(
-          { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${radius}px at ${x}px ${y}px)`] },
-          { duration: 350, easing: "cubic-bezier(.2,.8,.2,1)", pseudoElement: "::view-transition-new(root)" }
+        circle = root.animate(
+          { clipPath: toDark ? [full, small] : [small, full] },
+          {
+            duration: 350,
+            // The same curve played backwards when shrinking.
+            easing: toDark ? "cubic-bezier(.8,0,.8,.2)" : "cubic-bezier(.2,.8,.2,1)",
+            // A shrunk light view is held at nothing until the transition
+            // ends, so it can't show again for a frame.
+            fill: toDark ? "forwards" : "none",
+            pseudoElement: toDark ? "::view-transition-old(root)" : "::view-transition-new(root)",
+          }
         );
+        syncTitlebarAsCircleCrosses(circle, x, y, radius, toDark, syncOnce);
       })
       .catch(() => {});
     transition.finished.then(finish, finish);
   });
 
   // ─── Auto-save Toggle ────────────────────────────────────────────────────
+  // Saved like the theme; each conversion request carries it.
+  autoSaveToggle.checked = autoSaveToDownloads;
   autoSaveToggle.addEventListener("change", (e) => {
     autoSaveToDownloads = e.target.checked;
+    savePrefs({ auto_save: autoSaveToDownloads });
     showToast(
       autoSaveToDownloads
         ? `Converted files will also be saved to ${saveFolderState ? saveFolderState.path : "Downloads"}`
@@ -2834,6 +4108,39 @@ document.addEventListener("DOMContentLoaded", () => {
       "info"
     );
   });
+
+  // The page closing (where the web view reports it): send waiting changes.
+  window.addEventListener("pagehide", () => {
+    flushPrefs(true);
+    flushTextSize(true);
+  });
+
+  // ─── MarkItDown warm-up ──────────────────────────────────────────────────
+  // MarkItDown runs in a worker process that starts on demand and stops after
+  // a few idle minutes, so InkDoc doesn't hold ~95 MB it isn't using. A sign
+  // that a file or URL is on its way (a drag over the window, the file or
+  // folder button, the URL box) starts it now, so the conversion doesn't wait
+  // for it. Once per WARMUP_INTERVAL_MS at most; the server ignores repeats.
+  // Docling and GLM-OCR don't use it.
+  const WARMUP_INTERVAL_MS = 20000;
+  let lastWarmup = -Infinity;
+
+  function warmMarkItDown() {
+    if (selectedEngine === "docling" || selectedEngine === "glm_ocr") return;
+    const now = Date.now();
+    if (now - lastWarmup < WARMUP_INTERVAL_MS) return;
+    lastWarmup = now;
+    fetchWithToken(`${apiBase}/convert/warmup`, { method: "POST" }).catch(() => {});
+  }
+
+  window.addEventListener("dragenter", warmMarkItDown, { passive: true });
+  [btnBrowseFiles, btnBrowseFolder].forEach((btn) => {
+    if (!btn) return;
+    btn.addEventListener("pointerdown", warmMarkItDown, { passive: true });
+    btn.addEventListener("focus", warmMarkItDown);
+  });
+  if (urlInput) urlInput.addEventListener("focus", warmMarkItDown);
+  // ─── End MarkItDown warm-up ──────────────────────────────────────────────
 
   // ─── File Browsing ───────────────────────────────────────────────────────
   btnBrowseFiles.addEventListener("click", () => fileInput.click());
@@ -3076,6 +4383,8 @@ document.addEventListener("DOMContentLoaded", () => {
       return { item, file };
     });
     renderQueue();
+    const largeNotice = largeFileNotice(files);
+    if (largeNotice) showToast(largeNotice, "info", { duration: 8000 });
     const start = () => pending.forEach(({ item, file }) => convertFileItem(item, file));
     if (selectedEngine === "glm_ocr") {
       confirmGlmJob(files).then((ok) => {
@@ -3138,12 +4447,14 @@ document.addEventListener("DOMContentLoaded", () => {
     item.engine          = engine;
     item.status          = "converting";
     item.jobId           = newJobId();
+    if (noticeDismissedFor === item.id) noticeDismissedFor = null; // a new result, a new note
     item.progressMessage = "";
     item.cancelRequested = false;
     item.error           = "";
     item.errorType       = "";
     item.auto            = null;
     item.quality         = null;
+    item.tables          = null;
     item.warnings        = [];
     renderQueue();
     startProgressPoll(item);
@@ -3205,14 +4516,15 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function maybeShowHintToast(hint) {
-    if (!shouldShowHintToast(hint, hintSession, readStorage)) return false;
+  function maybeShowHintToast(rawHint) {
+    const hint = visibleHint(rawHint, prefs.hidden_engines);
+    if (!shouldShowHintToast(hint, hintSession, prefs.auto_hint_hidden)) return false;
     hintSession.hintShown = true;
     showToast(hint, "info", {
       duration: 9000,
       actions: [
         { label: hint.includes("Docling") ? "Install Docling" : "Open Settings", onClick: (e) => openSettings(e, "engines") },
-        { label: "Don't show again", onClick: () => writeStorage(HIDE_AUTO_HINT_KEY, "1") },
+        { label: "Don't show again", onClick: () => savePrefs({ auto_hint_hidden: true }) },
       ],
     });
     return true;
@@ -3225,12 +4537,14 @@ document.addEventListener("DOMContentLoaded", () => {
     item.fallbackReason   = data.fallback_reason || "";
     item.auto             = data.auto || null;
     item.quality          = data.quality || null;
+    item.tables           = data.tables || null;
     item.warnings         = Array.isArray(data.warnings) ? data.warnings : [];
     item.engine           = item.engineUsed;
     setItemMarkdown(item, data.markdown);
     item.savedTo          = data.saved_to_downloads || "";
 
-    const warning = formatQualityWarning(item.quality);
+    const tableNote = formatTableNote(item.tables);
+    const warning = formatQualityWarning(item.quality) || (tableNote && tableNote.warning ? tableNote : null);
     const via = item.engineRequested === "auto"
       ? `Auto → ${getEngineDisplayName(item.engineUsed)}`
       : getEngineDisplayName(item.engineUsed);
@@ -3251,6 +4565,8 @@ document.addEventListener("DOMContentLoaded", () => {
         showToast(`Converted ${label} via MarkItDown (Docling fallback)`, "success");
       } else if (warning) {
         showToast(`Converted ${label}, ${warning.toast}`, "info");
+      } else if (tableNote) {
+        showToast(`Converted ${label} via ${via} (${tableNote.toast})`, "success");
       } else if (item.warnings.length) {
         showToast(`Converted ${label} via ${via} (${item.warnings.length} note${item.warnings.length === 1 ? "" : "s"})`, "info");
       } else if (!(item.auto && maybeShowHintToast(item.auto.hint))) {
@@ -3274,7 +4590,7 @@ document.addEventListener("DOMContentLoaded", () => {
     );
   }
 
-  async function convertFileItem(item, file, engine = item.engine || selectedEngine) {
+  async function convertFileItem(item, file, engine = item.engine || selectedEngine, extra = {}) {
     const jobId = beginConversion(item, engine);
 
     const formData = new FormData();
@@ -3285,6 +4601,7 @@ document.addEventListener("DOMContentLoaded", () => {
       engine:            engine,
       job_id:            jobId,
     });
+    if (extra.tableDetail === "high") params.set("table_detail", "high");
 
     try {
       const resp = await fetch(`${apiBase}/convert/file?${params.toString()}`, {
@@ -3324,7 +4641,7 @@ document.addEventListener("DOMContentLoaded", () => {
     return runUrlConversion(item, item.engine);
   }
 
-  async function runUrlConversion(item, engine) {
+  async function runUrlConversion(item, engine, extra = {}) {
     const jobId = beginConversion(item, engine);
     const payload = {
       url:               item.sourceUrl,
@@ -3332,6 +4649,7 @@ document.addEventListener("DOMContentLoaded", () => {
       engine:            engine,
       job_id:            jobId,
     };
+    if (extra.tableDetail === "high") payload.table_detail = "high";
 
     try {
       const resp = await fetch(`${apiBase}/convert/url?response_format=json`, {
@@ -3359,14 +4677,31 @@ document.addEventListener("DOMContentLoaded", () => {
   // A user-initiated re-run with a specific engine. It never changes the
   // engine pill: re-converting one file with Docling must not quietly move
   // someone off Auto for everything they drop next.
-  async function reconvertItem(item, engine) {
+  async function reconvertItem(item, engine, extra = {}) {
     if (!item || item.status === "converting") return;
     if (engine === "glm_ocr" && item.fileRef && !(await confirmGlmJob([item.fileRef]))) return;
     if (item.fileRef) {
-      convertFileItem(item, item.fileRef, engine);
+      convertFileItem(item, item.fileRef, engine, extra);
     } else if (item.sourceUrl) {
-      runUrlConversion(item, engine);
+      runUrlConversion(item, engine, extra);
     }
+  }
+
+  // The high-detail offer's buttons: read again in high detail (Auto, as the
+  // result was made), or keep the normal result and close the notice.
+  function highDetailActions(item, offer) {
+    if (!(item.fileRef || item.sourceUrl)) return [];
+    return [
+      { label: offer.highLabel, onClick: () => reconvertItem(item, item.engineRequested || "auto", { tableDetail: "high" }) },
+      {
+        label: offer.keepLabel,
+        primary: false,
+        onClick: () => {
+          noticeDismissedFor = item.id;
+          hideConversionNotice();
+        },
+      },
+    ];
   }
 
   // ─── Render Queue ────────────────────────────────────────────────────────
@@ -3417,7 +4752,10 @@ document.addEventListener("DOMContentLoaded", () => {
         const warnChip = warning
           ? `<span class="status-warn" title="${escapeHtml(warning.long)}" aria-label="Warning: ${escapeHtml(warning.long)}"><span aria-hidden="true">⚠</span> ${escapeHtml(warning.short)}</span>`
           : "";
-        const subLine = engineTag || warnChip ? `<div class="item-sub">${engineTag}${warnChip}</div>` : "";
+        const largeChip = (item.status === "pending" || item.status === "converting") && isLargeFile(item.fileRef)
+          ? `<span class="status-warn" title="Large files can take longer to convert" aria-label="Large file, ${escapeHtml(formatSize(item.fileRef.size))}: it can take longer to convert"><span aria-hidden="true">⚠</span> Large file · ${escapeHtml(formatSize(item.fileRef.size))}</span>`
+          : "";
+        const subLine = engineTag || warnChip || largeChip ? `<div class="item-sub">${engineTag}${warnChip}${largeChip}</div>` : "";
 
         const cancelBtn = item.status === "converting" && item.jobId && !item.cancelRequested
           ? `<button type="button" class="btn btn-icon queue-cancel" data-cancel="${item.id}" title="Cancel conversion" aria-label="Cancel converting ${escapeHtml(item.name)}">
@@ -3927,6 +5265,10 @@ document.addEventListener("DOMContentLoaded", () => {
     const q = item.quality;
     if (item.auto) {
       if (item.auto.reason) lines.push(`Auto: ${item.auto.reason}`);
+      if (Array.isArray(item.auto.segments) && item.auto.segments.length) {
+        lines.push("Pages read by: " + item.auto.segments
+          .map((s) => `${s.pages} ${getEngineDisplayName(s.engine)}`).join(" · "));
+      }
       const esc = item.auto.escalation;
       if (esc && esc.error) {
         lines.push(`Retry with ${getEngineDisplayName(esc.to)} failed: ${esc.error}`);
@@ -3945,11 +5287,16 @@ document.addEventListener("DOMContentLoaded", () => {
       if (q.scan_pages && q.scan_pages.length) lines.push(`Scanned pages not read: ${list(q.scan_pages)}`);
       if (q.skipped_reason) lines.push(`Comparison skipped: ${q.skipped_reason.replace(/_/g, " ")}.`);
     }
+    const t = item.tables;
+    if (t) {
+      (t.details || []).forEach((line) => lines.push(line));
+      if (t.skipped_reason) lines.push(`Table check skipped: ${t.skipped_reason.replace(/_/g, " ")}.`);
+    }
     return lines;
   }
 
   function qualityNoticeActions(item) {
-    const action = qualityAction(item.quality);
+    const action = qualityAction(item.quality, prefs.hidden_engines);
     if (!action) return [];
     if (action.install) return [{ label: action.label, onClick: (e) => openSettings(e, "engines") }];
     if (!(item.fileRef || item.sourceUrl)) return [];
@@ -3975,7 +5322,8 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
     if (previewQualityBadge) {
-      const warning = formatQualityWarning(item.quality);
+      const tableNote = formatTableNote(item.tables);
+      const warning = formatQualityWarning(item.quality) || (tableNote && tableNote.warning ? tableNote : null);
       if (warning) {
         previewQualityBadge.style.display = "inline-flex";
         previewQualityBadge.textContent = `⚠ ${warning.short}`;
@@ -3996,22 +5344,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function selectItem(id) {
     cancelMath(); // formulas still being drawn belong to the previous preview
+    if (id !== activeItemId) noticeDismissedFor = null;
     activeItemId = id;
     const item = queue.find((i) => i.id === id);
     if (!item) return;
 
     previewFilename.textContent = item.name;
+    rawEditor.readOnly = false;
 
-    // Update re-convert button tooltip
-    if (btnSwitchEngine) {
-      if (item.fileRef || item.sourceUrl) {
-        btnSwitchEngine.style.display = "inline-flex";
-        const nextEng = getNextEngine(item.engine, glmIsUsable());
-        btnSwitchEngine.title = `Re-convert with ${getEngineDisplayName(nextEng)}`;
-      } else {
-        btnSwitchEngine.style.display = "none";
-      }
-    }
+    refreshSwitchEngineButton(item);
+    showSourceFor(item);
 
     // Always reset the notice bar first
     hideConversionNotice();
@@ -4103,40 +5445,63 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    const md = item.markdown || "";
+    // A very large result is previewed in part. The Raw view is then read-only,
+    // since an edit couldn't reach the part not shown; Copy and Download take
+    // the whole result (fullMarkdownFor).
+    const shown = previewSlice(item.markdown);
+    const md = shown.text;
+    item.previewCut = shown.cut;
     rawEditor.value = md;
+    rawEditor.readOnly = shown.cut;
 
     const words = item.wordCount || 0;
     previewStats.textContent = words > 0 ? `${words.toLocaleString()} words` : "";
+    if (shown.cut) previewStats.textContent += ` · preview shows the first ${formatSize(md.length)}`;
 
     updatePreviewBadges(item);
 
-    // One notice, most important first: a missing-text warning, then a
-    // Docling fallback, then Auto's install tip, then plain information.
+    // One notice, most important first: a missing-text warning, a table that
+    // may be wrong, then a Docling fallback, then Auto's install tip, then
+    // plain information (tables rebuilt, engine notes). Each can be closed with
+    // × (noticeDismissedFor), since there is a result to read below it.
     const warning = formatQualityWarning(item.quality);
+    const tableNote = formatTableNote(item.tables);
+    const highDetail = highDetailOffer(item.tables);
     const details = conversionDetailLines(item);
+    const notice = noticeDismissedFor === item.id
+      ? () => {}
+      : (type, title, detail, opts) => showConversionNotice(type, title, detail, { ...opts, dismissible: true });
     if (warning) {
-      showConversionNotice("warning", warning.title, warning.long, {
+      notice("warning", warning.title, warning.long, {
         actions: qualityNoticeActions(item),
         details,
       });
+    } else if (highDetail) {
+      notice("warning", highDetail.title, highDetail.long, {
+        actions: highDetailActions(item, highDetail),
+        details,
+      });
+    } else if (tableNote && tableNote.warning) {
+      notice("warning", tableNote.title, tableNote.long, { details });
     } else if (item.fallbackOccurred) {
-      showConversionNotice(
+      notice(
         "unsupported",
         "Docling Fallback: Converted with MarkItDown",
         `Docling was unable to parse this document${item.fallbackReason ? " (" + item.fallbackReason + ")" : ""}. Conversion automatically fell back to MarkItDown.`,
         { details }
       );
-    } else if (item.auto && item.auto.hint) {
-      showConversionNotice("info", "Tip", item.auto.hint, {
+    } else if (item.auto && visibleHint(item.auto.hint, prefs.hidden_engines)) {
+      notice("info", "Tip", item.auto.hint, {
         actions: [{ label: item.auto.hint.includes("Docling") ? "Install Docling" : "Open Settings", onClick: (e) => openSettings(e, "engines") }],
         details,
       });
+    } else if (tableNote) {
+      notice("info", tableNote.title, tableNote.long, { details });
     } else if (item.warnings && item.warnings.length) {
-      showConversionNotice("info", "Note", item.warnings[0], { details });
+      notice("info", "Note", item.warnings[0], { details });
     } else if (item.quality && item.quality.image_pages && item.quality.image_pages.length) {
       const note = (item.quality.details || []).find((line) => line.includes("full-page image"));
-      if (note) showConversionNotice("info", "Note", note, { details });
+      if (note) notice("info", "Note", note, { details });
     }
 
     // Rendered HTML (Sanitized against DOM XSS)
@@ -4158,18 +5523,45 @@ document.addEventListener("DOMContentLoaded", () => {
     wrapTables(renderedOutput);
     highlightCodeBlocks(renderedOutput);
     typesetMath(renderedOutput);
+    if (shown.cut) {
+      const note = document.createElement("p");
+      note.className = "preview-cut-note";
+      note.textContent = `The preview ends here: it shows the first ${formatSize(md.length)} of ${formatSize(item.markdown.length)}. `
+        + `${item.savedTo ? "The saved file, Copy and Download have" : "Copy and Download have"} all of it.`;
+      renderedOutput.appendChild(note);
+    }
 
     renderQueue();
+  }
+
+  // What Copy and Download take: the Raw view (it may have been edited), or the
+  // whole result when the preview shows only part of it.
+  function fullMarkdownFor(item) {
+    return item.previewCut ? item.markdown : (rawEditor.value || item.markdown);
   }
 
   // ─── Switch Engine (Re-convert) ──────────────────────────────────────────
   // Files and URLs go through the same request and result handling, so a URL
   // re-convert reports its engine, fallback, Auto choice and warnings too.
+  // Engines hidden from the main screen are skipped; with none left, the
+  // button goes away.
+  function nextEngineFor(item) {
+    return getNextEngine(item.engine, glmIsUsable(), prefs.hidden_engines);
+  }
+
+  function refreshSwitchEngineButton(item = queue.find((i) => i.id === activeItemId)) {
+    if (!btnSwitchEngine) return;
+    const nextEng = item && (item.fileRef || item.sourceUrl) ? nextEngineFor(item) : null;
+    btnSwitchEngine.style.display = nextEng ? "inline-flex" : "none";
+    if (nextEng) btnSwitchEngine.title = `Re-convert with ${getEngineDisplayName(nextEng)}`;
+  }
+
   if (btnSwitchEngine) {
     btnSwitchEngine.addEventListener("click", () => {
       const item = queue.find((i) => i.id === activeItemId);
       if (!item) return;
-      reconvertItem(item, getNextEngine(item.engine, glmIsUsable()));
+      const nextEng = nextEngineFor(item);
+      if (nextEng) reconvertItem(item, nextEng);
     });
   }
 
@@ -4182,7 +5574,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     try {
-      await navigator.clipboard.writeText(rawEditor.value || item.markdown);
+      await navigator.clipboard.writeText(fullMarkdownFor(item));
       copyText.textContent = "Copied!";
       btnCopyMarkdown.style.borderColor = "var(--mark)";
       setTimeout(() => {
@@ -4294,7 +5686,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    const content  = rawEditor.value || item.markdown;
+    const content  = fullMarkdownFor(item);
     const baseName = item.name.replace(/\.[^/.]+$/, "");
     const fileName = `${baseName || "document"}.md`;
     if (window.pywebview) {
@@ -4329,8 +5721,206 @@ document.addEventListener("DOMContentLoaded", () => {
     renderedContainer.classList.remove("active");
   });
 
+  // ─── Original view ───────────────────────────────────────────────────────
+  // The Original switch shows the document itself beside the Rendered or Raw
+  // view, to check a result against its source. An image is shown from the
+  // file the page already holds; a PDF is kept by the server once
+  // (POST /preview/pdf) and each page is drawn there as it scrolls into view,
+  // a few at a time, and let go again once well out of view. No frame and no
+  // PDF viewer: the page's policy stays as it is, and WebView2, WebKit and
+  // every browser show the same thing. Nothing is loaded while the switch is
+  // off. Other files and web addresses say why there is nothing to show.
+  const btnSplitView = document.getElementById("btnSplitView");
+  const previewPanes = document.getElementById("previewPanes");
+  const sourcePane   = document.getElementById("sourcePane");
+  const SOURCE_IMAGE = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i;
+  const SOURCE_PAGE_LOADS = 2;   // pages asked for at once; the server draws one at a time
+  let splitOn = false;
+  let sourceShown = null;        // what the pane shows: { item, urls, observer, waiting, loads }
+
+  function sourceKind(item) {
+    const file = item && item.fileRef;
+    if (!file) return null;
+    const name = file.name || item.name || "";
+    if (file.type === "application/pdf" || /\.pdf$/i.test(name)) return "pdf";
+    if (SOURCE_IMAGE.test(name)) return "image";
+    return null;
+  }
+
+  function sourceNote(text) {
+    const note = document.createElement("p");
+    note.className = "source-note";
+    note.textContent = text;
+    sourcePane.replaceChildren(note);
+  }
+
+  function closeSource() {
+    const shown = sourceShown;
+    sourceShown = null;
+    if (!shown) return;
+    if (shown.observer) shown.observer.disconnect();
+    shown.loads.forEach((ctrl) => ctrl.abort());
+    shown.urls.forEach((url) => URL.revokeObjectURL(url));
+    sourcePane.replaceChildren();
+  }
+
+  function showSourceFor(item) {
+    if (!splitOn || (sourceShown && sourceShown.item === item)) return;
+    closeSource();
+    sourcePane.scrollTop = 0;
+    if (!item) {
+      sourceNote("Select an item from the queue to see its original.");
+      return;
+    }
+    const shown = sourceShown = { item, urls: [], observer: null, waiting: [], loads: new Map() };
+    const kind = sourceKind(item);
+    if (kind === "image") {
+      const img = document.createElement("img");
+      img.className = "source-image";
+      img.alt = `Original: ${item.name}`;
+      img.addEventListener("error", () => {
+        if (sourceShown === shown) sourceNote("This image can't be shown here.");
+      }, { once: true });
+      const url = URL.createObjectURL(item.fileRef);
+      shown.urls.push(url);
+      img.src = url;
+      sourcePane.replaceChildren(img);
+    } else if (kind === "pdf") {
+      sourceNote("Opening the PDF…");
+      sourcePdfFor(item).then((doc) => {
+        if (sourceShown === shown) layOutSourcePages(shown, doc);
+      }, (err) => {
+        if (sourceShown === shown) sourceNote(err.message);
+      });
+    } else if (item.sourceUrl) {
+      sourceNote("The original of a web address isn't kept: InkDoc read the page on the server.");
+    } else {
+      sourceNote("The original can be shown for PDFs and images (PNG, JPEG, GIF, WebP, BMP, SVG).");
+    }
+  }
+
+  // The item's PDF as the server keeps it: { id, pages: [[width, height], …] }.
+  // One upload per item, shared by every page; `stale` is an id the server no
+  // longer knows (idle for 30 minutes, or eight newer PDFs), uploaded again once.
+  function sourcePdfFor(item, stale = null) {
+    if (!item.sourcePdf || (stale && item.sourcePdfId === stale)) {
+      item.sourcePdfId = null;
+      const form = new FormData();
+      form.append("file", item.fileRef, item.fileRef.name || item.name);
+      item.sourcePdf = fetchWithToken(`${apiBase}/preview/pdf`, { method: "POST", body: form })
+        .then(async (resp) => {
+          const data = await resp.json().catch(() => ({}));
+          if (!resp.ok) throw new Error(typeof data.detail === "string" ? data.detail : "The PDF's pages can't be shown.");
+          item.sourcePdfId = data.id;
+          return data;
+        })
+        .catch((err) => {
+          item.sourcePdf = null;
+          throw err instanceof TypeError ? new Error("The PDF's pages can't be shown: InkDoc's server didn't answer.") : err;
+        });
+    }
+    return item.sourcePdf;
+  }
+
+  function layOutSourcePages(shown, doc) {
+    const pages = doc.pages.map(([w, h], i) => {
+      const page = document.createElement("div");
+      page.className = "source-page";
+      page.dataset.page = String(i + 1);
+      page.style.aspectRatio = `${w} / ${h}`;
+      return page;
+    });
+    sourcePane.replaceChildren(...pages);
+    // Pages within a screen of the visible part are drawn; farther ones let go.
+    shown.observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => (entry.isIntersecting ? wantPage(shown, entry.target) : dropPage(shown, entry.target)));
+    }, { root: sourcePane, rootMargin: "100% 0px" });
+    pages.forEach((page) => shown.observer.observe(page));
+  }
+
+  function wantPage(shown, page) {
+    if (page.querySelector("img") || shown.loads.has(page) || shown.waiting.includes(page)) return;
+    shown.waiting.push(page);
+    pumpPages(shown);
+  }
+
+  function dropPage(shown, page) {
+    shown.waiting = shown.waiting.filter((p) => p !== page);
+    const ctrl = shown.loads.get(page);
+    if (ctrl) ctrl.abort();
+    const img = page.querySelector("img");
+    if (img) {
+      URL.revokeObjectURL(img.src);
+      shown.urls = shown.urls.filter((url) => url !== img.src);
+      img.remove();
+    }
+    page.classList.remove("is-failed");
+  }
+
+  function pumpPages(shown) {
+    while (sourceShown === shown && shown.loads.size < SOURCE_PAGE_LOADS && shown.waiting.length) {
+      loadPage(shown, shown.waiting.shift());
+    }
+  }
+
+  async function loadPage(shown, page) {
+    const ctrl = new AbortController();
+    shown.loads.set(page, ctrl);
+    const n = page.dataset.page;
+    // Drawn for the pane's width on this screen, in steps so a resize reuses sizes.
+    const width = Math.min(2400, Math.max(400, Math.ceil(sourcePane.clientWidth * (window.devicePixelRatio || 1) / 200) * 200));
+    try {
+      let doc = await sourcePdfFor(shown.item);
+      let resp = await fetchWithToken(`${apiBase}/preview/pdf/${encodeURIComponent(doc.id)}/page/${n}?width=${width}`, { signal: ctrl.signal });
+      if (resp.status === 404) {
+        doc = await sourcePdfFor(shown.item, doc.id);
+        resp = await fetchWithToken(`${apiBase}/preview/pdf/${encodeURIComponent(doc.id)}/page/${n}?width=${width}`, { signal: ctrl.signal });
+      }
+      if (!resp.ok) throw new Error(String(resp.status));
+      const blob = await resp.blob();
+      if (ctrl.signal.aborted || sourceShown !== shown) return;
+      const img = document.createElement("img");
+      img.alt = `Page ${n}`;
+      img.decoding = "async";
+      const url = URL.createObjectURL(blob);
+      shown.urls.push(url);
+      img.src = url;
+      page.appendChild(img);
+    } catch (_) {
+      if (!ctrl.signal.aborted && sourceShown === shown) page.classList.add("is-failed");
+    } finally {
+      if (shown.loads.get(page) === ctrl) shown.loads.delete(page);
+      pumpPages(shown);
+    }
+  }
+
+  // Let the server delete its copies (Clear, or the page closing).
+  function releaseSourcePdfs(items) {
+    items.forEach((item) => {
+      if (!item.sourcePdfId) return;
+      fetchWithToken(`${apiBase}/preview/pdf/${encodeURIComponent(item.sourcePdfId)}`, { method: "DELETE", keepalive: true }).catch(() => {});
+      item.sourcePdf = null;
+      item.sourcePdfId = null;
+    });
+  }
+
+  function setSplitView(on) {
+    splitOn = on;
+    btnSplitView.setAttribute("aria-pressed", on ? "true" : "false");
+    previewPanes.classList.toggle("is-split", on);
+    sourcePane.hidden = !on;
+    if (on) showSourceFor(queue.find((i) => i.id === activeItemId) || null);
+    else closeSource();
+  }
+
+  btnSplitView.addEventListener("click", () => setSplitView(!splitOn));
+  window.addEventListener("pagehide", () => releaseSourcePdfs(queue));
+  // ─── End Original view ───────────────────────────────────────────────────
+
   // ─── Clear Queue ─────────────────────────────────────────────────────────
   btnClearQueue.addEventListener("click", () => {
+    releaseSourcePdfs(queue);
+    closeSource();
     queue = [];
     activeItemId = null;
     previewFilename.textContent = "No file selected";

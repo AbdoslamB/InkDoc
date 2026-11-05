@@ -22,10 +22,13 @@ This file was last checked against upstream sources on 2026-10-01. Where an upst
 | Component | Used for | Upstream | Copyright holder | License | Distribution | Text |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | MarkItDown (code) | Core file-to-Markdown conversion | [microsoft/markitdown](https://github.com/microsoft/markitdown) | Microsoft Corporation | MIT | Bundled | [MarkItDown-MIT.txt](LICENSES/MarkItDown-MIT.txt) |
-| CPython 3.11 | Python runtime inside the executable | [python.org](https://www.python.org/) | Python Software Foundation and others (see text) | PSF-2.0, plus licenses of bundled libraries | Bundled | [CPython-PSF-2.0.txt](LICENSES/CPython-PSF-2.0.txt) |
+| CPython 3.14 | Python runtime inside the executable | [python.org](https://www.python.org/) | Python Software Foundation and others (see text) | PSF-2.0, plus licenses of bundled libraries | Bundled | [CPython-PSF-2.0.txt](LICENSES/CPython-PSF-2.0.txt) |
 | FastAPI | Local REST API | [fastapi/fastapi](https://github.com/fastapi/fastapi) | Sebastián Ramírez | MIT | Bundled | [python-packages-desktop.txt](LICENSES/python-packages-desktop.txt) |
 | Uvicorn, Starlette | Local web server | [encode/uvicorn](https://github.com/encode/uvicorn), [Kludex/starlette](https://github.com/Kludex/starlette) | Encode OSS Ltd. | BSD-3-Clause | Bundled | [python-packages-desktop.txt](LICENSES/python-packages-desktop.txt) |
 | pywebview | Desktop window | [r0x0r/pywebview](https://github.com/r0x0r/pywebview) | Roman Sirokov | BSD-3-Clause | Bundled | [python-packages-desktop.txt](LICENSES/python-packages-desktop.txt) |
+| PyGObject 3.58.1 (Linux only) | Connects the window to your system's GTK and WebKit2GTK | [GNOME/pygobject](https://gitlab.gnome.org/GNOME/pygobject) | James Henstridge and the PyGObject contributors | LGPL-2.1-or-later | Bundled | [LGPL-2.1.txt](LICENSES/LGPL-2.1.txt) |
+| libgirepository-2.0 from GLib 2.80 (Linux only) | Reads your system's GObject introspection data for PyGObject | [GNOME/glib](https://gitlab.gnome.org/GNOME/glib) | The GLib authors | LGPL-2.1-or-later | Bundled | [LGPL-2.1.txt](LICENSES/LGPL-2.1.txt) |
+| AppImage runtime (type2-runtime 20251108), with statically linked musl, libfuse, squashfuse, zstd and zlib (Linux only) | Starts the Linux AppImage | [AppImage/type2-runtime](https://github.com/AppImage/type2-runtime) | probonopd and the AppImage contributors; see text for each library | MIT (runtime, musl), LGPL-2.1 (libfuse), BSD-2-Clause (squashfuse), BSD-3-Clause (zstd), Zlib (zlib) | Bundled | [AppImage-runtime.txt](LICENSES/AppImage-runtime.txt), [LGPL-2.1.txt](LICENSES/LGPL-2.1.txt) |
 | pypdfium2 and PDFium | PDF probing and the missing-text check | [pypdfium2-team/pypdfium2](https://github.com/pypdfium2-team/pypdfium2) | pypdfium2: not named in its license text; PDFium: The PDFium Authors; bundled libraries: see text | BSD-3-Clause, Apache-2.0, plus the licenses of PDFium's bundled libraries | Bundled | [python-packages-desktop.txt](LICENSES/python-packages-desktop.txt) |
 | Magika (code and its built-in model) | File-type detection inside MarkItDown | [google/magika](https://github.com/google/magika) | Not named in its LICENSE | Apache-2.0 | Bundled | [python-packages-desktop.txt](LICENSES/python-packages-desktop.txt) |
 | SpeechRecognition | Audio transcription inside MarkItDown | [Uberi/speech_recognition](https://github.com/Uberi/speech_recognition) | Anthony Zhang | BSD-3-Clause | Bundled | [python-packages-desktop.txt](LICENSES/python-packages-desktop.txt) |
@@ -38,11 +41,11 @@ This file was last checked against upstream sources on 2026-10-01. Where an upst
 | highlight.js 11.12.0 (custom build) | Code highlighting in the preview | [highlightjs/highlight.js](https://github.com/highlightjs/highlight.js) | Ivan Sagalaev | BSD-3-Clause | Bundled | [highlight.js-BSD-3-Clause.txt](LICENSES/highlight.js-BSD-3-Clause.txt) |
 | KaTeX 0.19.0 (code and fonts) | Math formulas in the preview, loaded only for documents that contain math | [KaTeX/KaTeX](https://github.com/KaTeX/KaTeX), fonts from [KaTeX/katex-fonts](https://github.com/KaTeX/katex-fonts) | Khan Academy and other contributors | MIT | Bundled | [KaTeX-MIT.txt](LICENSES/KaTeX-MIT.txt) |
 
-The package list in [python-packages-desktop.txt](LICENSES/python-packages-desktop.txt) was generated from a clean Windows build environment. macOS builds also bundle pyobjc packages, and Linux builds bundle PyGObject and GTK/WebKitGTK libraries from the build machine. Those are not yet listed (see [CONTRIBUTING.md](CONTRIBUTING.md#licenses-for-new-dependencies-models-and-binaries)).
+The package list in [python-packages-desktop.txt](LICENSES/python-packages-desktop.txt) was generated from a clean Windows build environment. macOS builds also bundle pyobjc packages, which are not yet listed (see [CONTRIBUTING.md](CONTRIBUTING.md#licenses-for-new-dependencies-models-and-binaries)). The Linux AppImage bundles PyGObject and libgirepository-2.0 (rows above) but no GTK, WebKit2GTK or other GLib libraries: the window uses the ones installed on your system, which InkDoc does not distribute.
 
 ## 2. Docling engine pack (optional, re-hosted by InkDoc)
 
-InkDoc builds this pack from the upstream projects and publishes it on its GitHub release [`docling-pack-v1`](https://github.com/AbdoslamB/InkDoc/releases/tag/docling-pack-v1). It is downloaded only when you install Docling from Settings. The full list of its 107 Python packages and their licenses is in [LICENSES/docling-pack-packages.md](LICENSES/docling-pack-packages.md).
+InkDoc builds this pack from the upstream projects and publishes it on its GitHub release [`docling-pack-v2`](https://github.com/AbdoslamB/InkDoc/releases/tag/docling-pack-v2). It is downloaded only when you install Docling from Settings. The full list of its 107 Python packages and their licenses is in [LICENSES/docling-pack-packages.md](LICENSES/docling-pack-packages.md).
 
 | Component | Used for | Upstream | Copyright holder | License | Distribution | Text |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -57,11 +60,12 @@ InkDoc builds this pack from the upstream projects and publishes it on its GitHu
 
 The Docling pack does not include EasyOCR. If you run InkDoc from source with your own `pip install docling`, the OCR engines and models Docling uses depend on your installation, and Docling may download models from Hugging Face itself.
 
-## 3. Code & Formula Recognition add-on (optional, re-hosted by InkDoc)
+## 3. Add-ons (optional, re-hosted by InkDoc)
 
 | Component | Used for | Upstream | Copyright holder | License | Distribution | Text |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | CodeFormulaV2 (weights) | Reading code blocks and formulas in Docling | [docling-project/CodeFormulaV2](https://huggingface.co/docling-project/CodeFormulaV2) @ `ecedbe1` | UNVERIFIED (not stated on the model card) | CDLA-Permissive-2.0 | Re-hosted on [`docling-addon-v1`](https://github.com/AbdoslamB/InkDoc/releases/tag/docling-addon-v1) | [Docling-models-CDLA-Permissive-2.0.txt](LICENSES/Docling-models-CDLA-Permissive-2.0.txt) |
+| Docling layout model "heron", ONNX export (weights) | Finding tables on scanned pages (layout model add-on) | [docling-project/docling-layout-heron-onnx](https://huggingface.co/docling-project/docling-layout-heron-onnx) @ `40bde04` | UNVERIFIED (not stated on the model card) | Apache-2.0 | Re-hosted on a `layout-addon-v*` release once published, with its license text in the archive; the Docling engine pack carries the same file | [Docling-layout-heron-Apache-2.0.txt](LICENSES/Docling-layout-heron-Apache-2.0.txt) |
 
 ## 4. GLM-OCR (optional download)
 

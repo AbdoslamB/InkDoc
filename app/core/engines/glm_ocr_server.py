@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import base64
 import collections
+import dataclasses
 import hashlib
 import json
 import logging
@@ -48,6 +49,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from app.core.engines.process_guard import WindowsJob, linux_parent_death_preexec
+
 logger = logging.getLogger(__name__)
 
 IDLE_TIMEOUT_SECONDS = 300.0
@@ -55,6 +58,9 @@ READY_TIMEOUT_CPU_S = 90.0
 READY_TIMEOUT_GPU_S = 120.0
 PAGE_TIMEOUT_CPU_S = 300.0
 PAGE_TIMEOUT_GPU_S = 60.0
+# One area read on its own (a table's HTML is longer than a page's text): this many times the
+# page's limit, never more than the CPU's.
+AREA_TIMEOUT_FACTOR = 2.5
 PORT_RETRIES = 3
 DEFAULT_CTX_SIZE = 8192
 TEMPERATURE = 0.02
@@ -63,6 +69,14 @@ TEMPERATURE = 0.02
 SEED = 3407
 GPU_ALL_LAYERS = 999
 LOW_MEMORY_BYTES = 16 * 1024**3
+# High detail (a dense table read whole, at its full size): a context this large, an answer up
+# to HIGH_DETAIL_MAX_OUTPUT tokens, and this long to finish. Measured on Vulkan: about 1 GB more
+# than the default context (1,040 MiB more committed at 24,576 than at 8,192, the working set
+# 3 MiB more), so it is offered only with that much to allocate and half a gigabyte to spare.
+HIGH_DETAIL_CTX_SIZE = 24576
+HIGH_DETAIL_MAX_OUTPUT = 16384
+HIGH_DETAIL_TIMEOUT_S = 900.0
+HIGH_DETAIL_FREE_BYTES = 1536 * 1024**2
 STDERR_TAIL_LINES = 40
 GPU_CRASH_LIMIT = 2
 
@@ -297,6 +311,42 @@ def total_memory_bytes() -> int | None:
         return None
 
 
+def available_memory_bytes() -> int | None:
+    """Memory a new allocation can still get, with no new dependency. None when unknown.
+
+    On Windows the commit charge left (what llama-server's larger context draws on: on
+    a graphics card its buffers are committed but barely touch physical memory), on
+    Linux MemAvailable.
+    """
+    try:
+        if sys.platform == "win32":
+            import ctypes
+
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            stat = MEMORYSTATUSEX()
+            stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+                return int(stat.ullAvailPageFile)
+            return None
+        if sys.platform.startswith("linux"):
+            with open("/proc/meminfo", encoding="ascii") as fh:
+                for line in fh:
+                    if line.startswith("MemAvailable:"):
+                        return int(line.split()[1]) * 1024
+            return None
+        return None   # macOS has no cheap, honest figure; the caller decides without one
+    except Exception:
+        return None
+
+
 def is_low_memory_machine() -> bool:
     total = total_memory_bytes()
     return total is not None and total < LOW_MEMORY_BYTES
@@ -307,90 +357,10 @@ def image_to_data_uri(png_bytes: bytes) -> str:
 
 
 # ─── Process containment ─────────────────────────────────────────────────────
-class _WindowsJob:
-    """A Job Object with kill-on-close: the child dies when InkDoc does, even on a crash."""
-
-    def __init__(self) -> None:
-        import ctypes
-        from ctypes import wintypes
-
-        self._k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        self._k32.CreateJobObjectW.restype = wintypes.HANDLE
-        self.handle = self._k32.CreateJobObjectW(None, None)
-        if not self.handle:
-            raise OSError("CreateJobObjectW failed")
-
-        class IO_COUNTERS(ctypes.Structure):
-            _fields_ = [(n, ctypes.c_ulonglong) for n in (
-                "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
-                "ReadTransferCount", "WriteTransferCount", "OtherTransferCount")]
-
-        class BASIC(ctypes.Structure):
-            _fields_ = [
-                ("PerProcessUserTimeLimit", ctypes.c_longlong), ("PerJobUserTimeLimit", ctypes.c_longlong),
-                ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
-                ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
-                ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD),
-                ("SchedulingClass", wintypes.DWORD),
-            ]
-
-        class EXTENDED(ctypes.Structure):
-            _fields_ = [
-                ("BasicLimitInformation", BASIC), ("IoInfo", IO_COUNTERS),
-                ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
-                ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t),
-            ]
-
-        info = EXTENDED()
-        info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-        ok = self._k32.SetInformationJobObject(
-            self.handle, 9, ctypes.byref(info), ctypes.sizeof(info)  # JobObjectExtendedLimitInformation
-        )
-        if not ok:
-            self._k32.CloseHandle(self.handle)
-            raise OSError("SetInformationJobObject failed")
-
-    def assign(self, proc: subprocess.Popen) -> None:
-        import ctypes
-        from ctypes import wintypes
-
-        self._k32.OpenProcess.restype = wintypes.HANDLE
-        h = self._k32.OpenProcess(0x0100 | 0x0001, False, proc.pid)  # SET_QUOTA | TERMINATE
-        if not h:
-            raise OSError("OpenProcess failed")
-        try:
-            if not self._k32.AssignProcessToJobObject(self.handle, h):
-                raise OSError(f"AssignProcessToJobObject failed ({ctypes.get_last_error()})")
-        finally:
-            self._k32.CloseHandle(h)
-
-    def close(self) -> None:
-        if self.handle:
-            self._k32.CloseHandle(self.handle)
-            self.handle = None
-
-
-def _linux_parent_death_preexec() -> Callable[[], None] | None:
-    """preexec_fn asking the kernel to SIGKILL the child when InkDoc exits.
-
-    libc and prctl are resolved here, in the parent, so the child only calls an
-    already-loaded function pointer between fork and exec.
-    """
-    if not sys.platform.startswith("linux"):
-        return None
-    try:
-        import ctypes
-        import signal
-
-        prctl = ctypes.CDLL("libc.so.6", use_errno=True).prctl
-        sigkill = int(signal.SIGKILL)
-
-        def _preexec() -> None:
-            prctl(1, sigkill, 0, 0, 0)  # PR_SET_PDEATHSIG
-
-        return _preexec
-    except Exception:
-        return None
+# Moved to app/core/engines/process_guard.py so the MarkItDown worker shares
+# them; the old names stay for this module's callers.
+_WindowsJob = WindowsJob
+_linux_parent_death_preexec = linux_parent_death_preexec
 
 
 def reap_stale_process(run_dir: Path, runtime_root: Path) -> bool:
@@ -726,6 +696,8 @@ class GlmOcrServer:
         self.force_cpu = False           # set after repeated GPU crashes, for this session
         self.notices: list[str] = []     # user-facing notes for the next result
         self.on_metal_fallback: Callable[[], None] | None = None
+        self._min_ctx = 0                # a high-detail reading's context, while it runs
+        self._aborted = False            # abort_request() stopped the request in flight
 
     @classmethod
     def get_instance(cls) -> GlmOcrServer:
@@ -754,6 +726,42 @@ class GlmOcrServer:
     def accel(self) -> str:
         proc = self._proc
         return proc.spec.accel if proc else "cpu"
+
+    def running_context(self) -> int:
+        proc = self._proc
+        return proc.spec.ctx_size if proc is not None and proc.is_alive() else 0
+
+    def use_context(self, ctx_size: int) -> None:
+        """Run with at least `ctx_size` tokens of context from the next request on (0: the default).
+
+        A running server with less is restarted for it; a larger one is kept until it stops
+        (idle, or for memory), and the next start is the default again.
+        """
+        with self._lock:
+            self._min_ctx = int(ctx_size)
+            proc = self._proc
+            if self._min_ctx and proc is not None and proc.is_alive() and proc.spec.ctx_size < self._min_ctx:
+                self._stop_locked()
+
+    def abort_request(self) -> None:
+        """Stop the request in flight now (a cancelled job): its process is stopped, without the lock.
+
+        The request then raises ConversionCancelledError instead of restarting and
+        retrying. For a high-detail reading, which may run for many minutes; a normal
+        page ends within a minute and a cancel waits for it. While the server is still
+        starting there is no process to stop yet: the request is then cancelled as soon
+        as the server is ready, before it is sent.
+        """
+        if not self._busy:
+            return
+        self._aborted = True
+        proc = self._proc
+        if proc is None:
+            return
+        try:
+            proc.stop()
+        except Exception as exc:
+            logger.debug("Stopping GLM-OCR for a cancel: %s", exc)
 
     def take_notices(self) -> list[str]:
         notes, self.notices = self.notices, []
@@ -786,6 +794,8 @@ class GlmOcrServer:
                 self._proc = None
             self._coordinate_memory()
             spec = self._factory()(self._want_gpu())
+            if spec.ctx_size < self._min_ctx:
+                spec = dataclasses.replace(spec, ctx_size=self._min_ctx)
             if spec.run_dir is not None:
                 reap_stale_process(spec.run_dir, spec.runtime_dir.parent)
             self._proc = self._start_with_fallbacks(spec)
@@ -886,15 +896,29 @@ class GlmOcrServer:
         max_tokens: int,
         *,
         repeat_penalty: float | None = None,
+        area: bool = False,
+        timeout_s: float | None = None,
     ) -> OcrResult:
-        """Recognise one page. Restarts once and retries if the server dies mid-request."""
+        """Recognise one page (or, `area`, one area of one: a longer time limit). Restarts once
+        and retries if the server dies mid-request."""
         with self._lock:
+            self._aborted = False
             self._busy = True
             try:
                 attempt = 0
                 while True:
                     proc = self.ensure_running()
+                    if self._aborted:            # cancelled while the server was starting
+                        from app.core.jobs import ConversionCancelledError
+
+                        self._aborted = False
+                        self._stop_locked()
+                        raise ConversionCancelledError("conversion_cancelled")
                     timeout = PAGE_TIMEOUT_GPU_S if proc.spec.uses_gpu else PAGE_TIMEOUT_CPU_S
+                    if area:
+                        timeout = min(PAGE_TIMEOUT_CPU_S, timeout * AREA_TIMEOUT_FACTOR)
+                    if timeout_s is not None:
+                        timeout = float(timeout_s)
                     started = time.time()
                     try:
                         resp = proc.chat(
@@ -903,6 +927,12 @@ class GlmOcrServer:
                         )
                         return parse_ocr_response(resp, time.time() - started)
                     except (urllib.error.URLError, ConnectionError, TimeoutError, OSError, GlmOcrServerError) as exc:
+                        if self._aborted:
+                            from app.core.jobs import ConversionCancelledError
+
+                            self._aborted = False
+                            self._stop_locked()
+                            raise ConversionCancelledError("conversion_cancelled") from exc
                         timed_out = isinstance(exc, TimeoutError) or "timed out" in str(exc).lower()
                         if not timed_out and not isinstance(exc, GlmOcrServerError) and proc.proc is not None:
                             # A crash resets the connection a moment before the

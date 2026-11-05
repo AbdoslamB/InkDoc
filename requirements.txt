@@ -1,4 +1,7 @@
-markitdown[all]>=0.1.7
+# Pinned exactly: the release build installs from this file with no lock, so a
+# floor would ship whichever MarkItDown is newest on the day of the tag, untested.
+# Dependabot proposes newer versions.
+markitdown[all]==0.1.8
 # Imported directly by app/core/pdf_probe.py (missing-text check and Auto routing).
 # Already installed through markitdown's PDF extra; listed so it is not lost if
 # that extra ever changes.
@@ -6,9 +9,20 @@ pypdfium2>=4.30.0
 # Imported directly by GLM-OCR (page images: EXIF rotation, scaling). Already
 # installed through markitdown/pdfplumber; listed for the same reason.
 Pillow>=10.1
+# Imported directly by the layout model add-on's runner (app/core/engines/layout_model.py,
+# in the MarkItDown worker). Already installed through markitdown's magika, with
+# these same lower bounds; listed for the same reason.
+onnxruntime>=1.17.0
+numpy>=1.24
+# The packaged app's certificate fallback (app/core/tls_trust.py). Already installed
+# through requests; listed for the same reason.
+certifi>=2024.2.2
 markdown>=3.6
 fastapi>=0.110.0
 uvicorn[standard]>=0.28.0
 python-multipart>=0.0.9
-pywebview>=5.0
+# Pinned exactly: app/desktop/webview_bridge.py replaces two parts of this version's page
+# bridge so it works under the page's policy (no eval); tests/test_webview_bridge.py
+# checks them. Move the pin only together with that file.
+pywebview==6.2.1
 cryptography>=42.0.0

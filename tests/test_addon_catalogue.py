@@ -149,6 +149,18 @@ def test_shipped_catalogue_passes_the_release_guard():
     assert ok, "\n".join(messages)
 
 
+def test_a_build_checks_only_the_add_on_it_built():
+    """build_addon.py's release check must pass while another add-on is unreleased."""
+    from scripts import build_addon
+    from scripts.verify_addon_catalogue import verify
+
+    ok, messages = build_addon._verify(am.ADDONS_CATALOGUE_PATH, require_published=True)
+    assert ok, "\n".join(messages)
+    assert len(messages) == 1 and "code_enrichment" in messages[0]
+    ok, messages = verify(am.ADDONS_CATALOGUE_PATH, require_published=False, names=["no_such_addon"])
+    assert not ok and "does not declare no_such_addon" in messages[0]
+
+
 # ─── Pack drift ──────────────────────────────────────────────────────────────
 
 def test_pack_drift_makes_an_installed_addon_unusable(tmp_path, monkeypatch):

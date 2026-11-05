@@ -54,6 +54,7 @@ if _repo_root not in sys.path:
 import uvicorn
 
 from app.core.converter import sanitize_filename
+from app.core.linux_host import is_frozen_linux, open_on_host
 from app.core.save_location import check_usable, folder_state, store_save_dir
 from app.server.server import app
 
@@ -190,20 +191,85 @@ def verify_inkdoc_server(host: str, port: int) -> bool:
 # can resize would be a far worse bug than a title bar that does not match.
 USE_CUSTOM_TITLEBAR = sys.platform == "win32"
 
+# The window's colour before the page paints: each theme's --paper (style.css),
+# so a light-theme user doesn't see a dark window first.
+_WINDOW_BACKGROUND = {"dark": "#101614", "light": "#f1f3f0"}
+
+
+def _window_background(settings: dict) -> str:
+    """The saved theme's paper colour; dark for anything unexpected."""
+    theme = settings.get("theme")
+    return _WINDOW_BACKGROUND[theme] if theme in ("dark", "light") else _WINDOW_BACKGROUND["dark"]
+
+
 _WS_THICKFRAME = 0x00040000
 _WS_MINIMIZEBOX = 0x00020000
 _GWL_STYLE = -16
 _SWP_FLAGS = 0x0002 | 0x0001 | 0x0004 | 0x0020  # NOMOVE|NOSIZE|NOZORDER|FRAMECHANGED
 
 
+def _pick_own_window(windows, title: str, pid: int) -> int:
+    """The first of (hwnd, owner pid, visible, title) rows that is this process's
+    visible window with this title, or 0."""
+    for hwnd, owner, visible, text in windows:
+        if owner == pid and visible and text == title:
+            return hwnd
+    return 0
+
+
+def _top_level_windows():
+    """(hwnd, owner pid, visible, title) for every top-level window, in z-order.
+
+    Titles are read only for this process's visible windows, and with
+    InternalGetWindowText, which reads the stored text: GetWindowTextW sends
+    WM_GETTEXT to a window of this process owned by another thread, and this
+    runs on pywebview's event thread, so it would wait on the UI thread.
+    """
+    import ctypes
+    import ctypes.wintypes as wt
+
+    # A private handle, so these argtypes don't change ctypes.windll.user32 for
+    # the rest of the process.
+    user32 = ctypes.WinDLL("user32")
+    user32.GetWindowThreadProcessId.argtypes = [wt.HWND, ctypes.POINTER(wt.DWORD)]
+    user32.IsWindowVisible.argtypes = [wt.HWND]
+    user32.InternalGetWindowText.argtypes = [wt.HWND, wt.LPWSTR, ctypes.c_int]
+    me = os.getpid()
+    rows = []
+
+    @ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+    def visit(hwnd, _):
+        try:
+            owner = wt.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+            visible = bool(user32.IsWindowVisible(hwnd))
+            text = ""
+            if owner.value == me and visible:
+                buf = ctypes.create_unicode_buffer(256)
+                user32.InternalGetWindowText(hwnd, buf, 256)
+                text = buf.value
+            rows.append((hwnd or 0, owner.value, visible, text))
+        except Exception:
+            pass  # one window that can't be read; keep going
+        return True
+
+    user32.EnumWindows(visit, 0)
+    return rows
+
+
 def _find_window_handle(title: str) -> int:
-    """Return the top-level HWND for our window, or 0."""
+    """Return the top-level HWND for our window, or 0.
+
+    Only a window of this process counts. FindWindowW matched the title in any
+    process, and every InkDoc window has the same title: with a second InkDoc
+    open (another copy, or a window attached to this one's server) the chrome
+    could be installed on that window instead, or fail on it when it runs
+    elevated, leaving this one without Snap Layouts or its native button.
+    """
     if not USE_CUSTOM_TITLEBAR:
         return 0
     try:
-        import ctypes
-
-        return ctypes.windll.user32.FindWindowW(None, title) or 0
+        return _pick_own_window(_top_level_windows(), title, os.getpid())
     except Exception:
         return 0
 
@@ -457,7 +523,11 @@ class WindowControls:
         try:
             if urlparse(url).scheme not in ("http", "https"):
                 return False
-            webbrowser.open(url)
+            if is_frozen_linux():
+                # Not webbrowser.open: the browser would inherit the bundle's LD_LIBRARY_PATH.
+                open_on_host(["xdg-open", url])
+            else:
+                webbrowser.open(url)
             return True
         except Exception:
             return False
@@ -665,6 +735,78 @@ def close_desktop_window() -> None:
             pass
 
 
+LINUX_WEBKIT_HELP = (
+    "InkDoc's window needs WebKit2GTK 4.1 and GTK 3 with their typelibs "
+    "(Ubuntu/Debian: sudo apt install gir1.2-webkit2-4.1; Fedora: sudo dnf install webkit2gtk4.1)."
+)
+
+
+def linux_webview_problem() -> str | None:
+    """Why pywebview's GTK window can't be shown on this Linux system, or None.
+
+    The window is the system's own WebKit2GTK (scripts/linux_host_libs.py), which the
+    user may not have installed. Asked the way pywebview's GTK backend asks.
+    """
+    try:
+        import gi
+
+        gi.require_version("Gtk", "3.0")
+        try:
+            gi.require_version("WebKit2", "4.1")
+        except ValueError:
+            gi.require_version("WebKit2", "4.0")
+        from gi.repository import Gtk, WebKit2  # noqa: F401
+    except Exception as exc:  # ImportError, ValueError ("Namespace ... not available"), GLib.Error
+        return f"{type(exc).__name__}: {exc}"
+    return None
+
+
+def _open_for_user(args: list[str]) -> bool:
+    """Start a desktop program (xdg-open, notify-send) for the user; False when it isn't installed."""
+    try:
+        if is_frozen_linux():
+            open_on_host(args)
+        else:
+            import subprocess
+
+            subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        return True
+    except OSError:
+        return False
+
+
+def run_in_browser(app_url: str, server_thread: EmbeddedServer | None, problem: str) -> int:
+    """Linux without a usable WebKit2GTK: the same UI in the default browser.
+
+    The server keeps running (no window to close), like headless mode, until it is
+    stopped; launching InkDoc again finds it and just opens the browser again.
+    """
+    print(f"[Warn] {LINUX_WEBKIT_HELP} ({problem})", file=sys.stderr)
+    print(f"[Info] Opening InkDoc in your web browser instead: {app_url}", file=sys.stderr)
+    os.environ["INKDOC_DESKTOP_RUNNER"] = "0"  # a browser tab, not the desktop window
+    from app.server.server import get_update_manager
+
+    get_update_manager().set_desktop_runner(False)
+    _open_for_user(["notify-send", "--app-name=InkDoc", "InkDoc opened in your browser",
+                    f"{LINUX_WEBKIT_HELP} InkDoc keeps running until you stop it: pkill -f inkdoc"])
+    if not _open_for_user(["xdg-open", app_url]):
+        webbrowser.open(app_url)
+    if server_thread is None:  # another InkDoc already serves the page
+        return 0
+    print("[Info] InkDoc keeps running without a window; stop it with Ctrl+C or `pkill -f inkdoc`.",
+          file=sys.stderr)
+    try:
+        while server_thread.is_alive():
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server_thread.stop()
+        stop_engine_processes()
+    return 0
+
+
 def run_desktop(
     port: int | None = None,
     headless: bool = False,
@@ -713,17 +855,11 @@ def run_desktop(
 
     app_url = f"http://{host}:{target_port}/InkDoc"
 
-    def start_markitdown_prewarm() -> None:
-        # Only our own embedded server converts in this process; when we attached
-        # to an already-running instance there is nothing here to warm.
-        if server_thread is None:
-            return
-        from app.core.converter import prewarm_markitdown
-
-        threading.Thread(target=prewarm_markitdown, daemon=True, name="InkDocPrewarm").start()
-
+    # markitdown is not loaded here at startup any more: it runs in a worker
+    # process that starts on the first conversion, or when the page signals one
+    # is coming (POST /convert/warmup), and stops when idle
+    # (app/core/engines/markitdown_worker_client.py).
     if headless:
-        start_markitdown_prewarm()
         print(f"InkDoc headless server running at {app_url}")
         print("Press Ctrl+C to stop.")
         try:
@@ -755,6 +891,17 @@ def run_desktop(
         if server_thread:
             server_thread.stop()
         return 1
+
+    # Before any window: the page's policy forbids eval, which pywebview's bridge uses.
+    from app.desktop.webview_bridge import apply as apply_webview_bridge
+
+    apply_webview_bridge()
+
+    # The release only: a source checkout may use pywebview's Qt backend instead of GTK.
+    if is_frozen_linux():
+        problem = linux_webview_problem()
+        if problem:
+            return run_in_browser(app_url, server_thread, problem)
 
     # Locate icon
     icon_path: str | None = None
@@ -820,12 +967,14 @@ def run_desktop(
         width=1240,
         height=820,
         min_size=(960, 640),
-        background_color="#101614",  # Matches dark theme paper color to avoid white flash
+        background_color=_window_background(settings),  # no flash of the other theme
         text_select=True,
         frameless=USE_CUSTOM_TITLEBAR,
-        # Only elements marked .pywebview-drag-region move the window. easy_drag would
-        # make the whole surface draggable, so selecting text or dragging a file onto
-        # the drop zone would move the window instead.
+        # The header moves the window as a native caption region (app-region in
+        # style.css), so the page carries no .pywebview-drag-region and pywebview's
+        # JavaScript move loop never runs. easy_drag would make the whole surface
+        # draggable, so selecting text or dragging a file onto the drop zone would
+        # move the window instead.
         easy_drag=False,
     )
     window_controls._attach(window, app_url, owns_server=server_thread is not None)
@@ -833,18 +982,6 @@ def run_desktop(
     # open_external_link() is also used for regular in-page links.
     window.expose(*_page_functions(window_controls))
     _desktop_window = window
-
-    # Warm markitdown only after the page has loaded, so the ~2s import does not
-    # compete with the server for the GIL while it is still serving the UI.
-    prewarm_started = False
-
-    def on_loaded():
-        nonlocal prewarm_started
-        if not prewarm_started:
-            prewarm_started = True
-            start_markitdown_prewarm()
-
-    window.events.loaded += on_loaded
 
     if USE_CUSTOM_TITLEBAR:
         window.events.shown += lambda: _setup_window_chrome(
@@ -900,15 +1037,129 @@ def run_selftest() -> int:
         return 1
 
 
+BRIDGE_PAGE = """<!doctype html>
+<html><head><meta charset="utf-8"><title>InkDoc bridge self-test</title></head>
+<body><p>InkDoc bridge self-test</p>
+<script nonce="{nonce}">
+window.addEventListener("pywebviewready", function () {{
+  window.pywebview.api.bridge_echo("inkdoc").then(function (value) {{
+    window.pywebview.api.bridge_done(value);
+  }}, function (error) {{
+    window.pywebview.api.bridge_done("rejected: " + (error && error.message));
+  }});
+}});
+</script></body></html>"""
+
+
+def run_bridge_selftest(timeout: float = 30.0) -> int:
+    """Open a window on a page under InkDoc's own policy and make one page -> app -> page
+    round trip: 0 when it completes. The page calls bridge_echo, gets its result back, and
+    reports it through bridge_done, so both directions of the bridge are checked.
+
+    Ends with os._exit: pywebview runs each page call on a thread that is not a daemon,
+    and one still waiting on the closed window (macOS) would keep the process alive."""
+    import http.server
+    import secrets
+
+    def say(line: str) -> None:
+        print(line, file=sys.stderr, flush=True)
+
+    def hung() -> None:
+        time.sleep(timeout + 20)
+        say(f"[FAIL] Page bridge self-test: still running after {timeout + 20:.0f} s.")
+        os._exit(1)
+
+    threading.Thread(target=hung, daemon=True).start()
+    print("[*] Running InkDoc page bridge self-test...")
+    patched = False
+    try:
+        import webview
+
+        from app.desktop.webview_bridge import apply as apply_webview_bridge
+        from app.server.server import page_csp
+
+        patched = apply_webview_bridge()
+        nonce = secrets.token_hex(16)
+        body = BRIDGE_PAGE.format(nonce=nonce).encode("utf-8")
+        policy = page_csp(nonce)
+
+        class Page(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Security-Policy", policy)
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Page)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        result: dict[str, str] = {}
+        window = webview.create_window(
+            "InkDoc bridge self-test", f"http://127.0.0.1:{server.server_port}/", width=480, height=240
+        )
+
+        def bridge_echo(value):
+            say("[*] The page called the window.")
+            return f"echo:{value}"
+
+        def bridge_done(value):
+            result["value"] = str(value)
+            # Closed only once this call has returned: pywebview sends its result to the
+            # page afterwards.
+            threading.Timer(0.5, window.destroy).start()
+
+        def give_up():
+            time.sleep(timeout)
+            if "value" not in result:
+                window.destroy()
+
+        window.events.loaded += lambda: say("[*] The page loaded.")
+        window.expose(bridge_echo, bridge_done)
+        threading.Thread(target=give_up, daemon=True).start()
+        webview.start(debug=False)
+        server.shutdown()
+        value = result.get("value")
+        if value == "echo:inkdoc":
+            print(f"[ALL PASS] Page bridge self-test succeeded (pywebview patched: {patched}).", flush=True)
+            code = 0
+        else:
+            say(f"[FAIL] Page bridge self-test: the page's call "
+                f"{'returned ' + repr(value) if value else 'never returned'} within {timeout:.0f} s "
+                f"(pywebview patched: {patched}).")
+            code = 1
+    except Exception as e:
+        say(f"[FAIL] Page bridge self-test failed: {e}")
+        import traceback
+        traceback.print_exc()
+        code = 1
+    for stream in (sys.stdout, sys.stderr):  # None in a windowed Windows build
+        if stream:
+            stream.flush()
+    os._exit(code)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="InkDoc Multi-Engine Workbench")
     parser.add_argument("--port", type=int, default=None, help="Port to run the local server on")
     parser.add_argument("--headless", action="store_true", help="Run in headless server mode without window")
     parser.add_argument("--selftest", action="store_true", help="Run self-test importing GUI backend and exit 0")
+    parser.add_argument("--selftest-bridge", action="store_true",
+                        help="Open a window under the page's policy and check one page -> app call; exit 0 on success")
+    parser.add_argument("--selftest-https", action="store_true",
+                        help="Fetch and verify the update manifest over HTTPS, as the updater does; exit 0 on success")
 
     args = parser.parse_args()
     if args.selftest:
         return run_selftest()
+    if args.selftest_bridge:
+        return run_bridge_selftest()
+    if args.selftest_https:
+        from app.core.tls_trust import https_selftest
+
+        return https_selftest()
     return run_desktop(port=args.port, headless=args.headless)
 
 

@@ -1,0 +1,4 @@
+{
+  "about": "CI's measurements for scripts/perf_baseline.py check, one entry per runner. Copy an entry from the CI log it prints; never edit the numbers by hand.",
+  "machines": {}
+}

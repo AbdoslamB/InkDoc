@@ -9,14 +9,18 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+import errno
 import hmac
+import json
 import logging
 import os
 import re
 import secrets
+import shutil
 import sys
 import tempfile
 import threading
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, Literal
@@ -62,17 +66,22 @@ try:
     )
     from app.core.download_utils import SecurityError
     from app.core.engine_manager import (
+        HIDEABLE_ENGINES,
         LAYOUT_WIDTHS,
         PREVIEW_TEXT_SIZES,
         EngineManager,
         EngineStatus,
+        SettingsWriteError,
+        sanitize_ui_preferences,
     )
     from app.core.engines.docling_engine import get_docling_version, is_docling_available
     from app.core.engines.markit_engine import get_markit_version, is_markit_available
     from app.core.queue_model import EngineKind, QueueItem, SourceKind
     from app.core.save_location import folder_state, save_markdown
     from app.core.security import SSRFValidationError, validate_url_for_ssrf
+    from app.core.thorough_passes import PASS_NAMES, catalogue, known_names
     from app.core.url_fetcher import (
+        UrlBlockedError,
         UrlFetchError,
         UrlFetchSizeExceededError,
         UrlFetchTimeoutError,
@@ -253,6 +262,25 @@ def _quality_check_enabled(override: bool | None) -> bool:
         return True
 
 
+def _auto_quality_options(override: str | None, table_detail: str | None = None) -> dict[str, Any]:
+    """ConversionOptions' "Auto quality" fields: the level (the per-request override,
+    else the user's setting; default fast), the steps the user switched off, and the
+    table detail a request asks for ("high" only when the user took the offer)."""
+    from app.core.table_stage import normalize_level
+
+    try:
+        settings = EngineManager.get_instance().get_settings()
+    except Exception as exc:
+        logger.warning("Could not read the Auto quality settings: %s", exc)
+        settings = {}
+    level = override if override is not None else settings.get("auto_quality")
+    return {
+        "auto_quality": normalize_level(level),
+        "passes_off": known_names(settings.get("thorough_passes_off")),
+        "table_detail": "high" if table_detail == "high" else "normal",
+    }
+
+
 def _start_job(job_id: str | None) -> Any:
     """A progress/cancel handle for `job_id`, or a no-op one when none was sent."""
     from app.core.jobs import JOBS, NULL_JOB, is_valid_job_id
@@ -267,24 +295,34 @@ def _start_job(job_id: str | None) -> Any:
     return JOBS.start(job_id)
 
 
-def _assess_in_thread(source_path: str, markdown: str, engine_used: EngineKind) -> Any:
-    """Missing-text check for an explicit engine. Never raises; None for non-PDFs."""
+def _assess_in_thread(
+    source_path: str, markdown: str, engine_used: EngineKind, check_text: bool = True
+) -> tuple[Any, Any]:
+    """(missing-text report or None, probe or None) for an explicit engine. Never raises.
+
+    The probe is returned so the table check reuses it rather than reading the
+    PDF twice; both are None for anything that is not a PDF.
+    """
     try:
         from app.core.auto_engine import ocr_install_target, ocr_status
-        from app.core.pdf_probe import is_pdf
+        from app.core.pdf_probe import is_pdf, probe_pdf
         from app.core.quality_check import assess
 
         if not is_pdf(source_path):
-            return None
+            return None, None
+        probe = probe_pdf(source_path)
+        if not check_text:
+            return None, probe
         ocr_engine, installable = ocr_status()
         target = ocr_install_target() if installable else None
-        return assess(
-            source_path, markdown, engine_used, ocr_engine=ocr_engine, ocr_installable=installable,
-            ocr_install_engine=target or "docling",
+        report = assess(
+            source_path, markdown, engine_used, probe=probe, ocr_engine=ocr_engine,
+            ocr_installable=installable, ocr_install_engine=target or "docling",
         )
+        return report, probe
     except Exception as exc:
         logger.warning("Missing-text check failed: %s", exc)
-        return None
+        return None, None
 
 
 async def _run_quality_check(source_path: str, markdown: str, options: ConversionOptions, job: Any) -> None:
@@ -292,9 +330,14 @@ async def _run_quality_check(source_path: str, markdown: str, options: Conversio
 
     Runs outside the engine lane and inside the probe lane, so it neither holds
     a conversion slot nor a thread while it waits. Only adds information to the
-    response; the saved file is never touched.
+    response; the saved file is never touched. At the Balanced and Thorough
+    "Auto quality" levels the PDF's tables are checked too (report only: an
+    explicit engine's output is never changed).
     """
-    if not options.quality_check:
+    from app.core.table_stage import checks_tables
+
+    check_tables = checks_tables(options.auto_quality, options.passes_off)
+    if not options.quality_check and not check_tables:
         return
     engine_used = options.engine_used or (
         EngineKind.MARKITDOWN if options.fallback_occurred else options.engine
@@ -302,9 +345,20 @@ async def _run_quality_check(source_path: str, markdown: str, options: Conversio
     if job is not None:
         job.set_phase("checking", "Checking…")
     async with get_probe_semaphore():
-        options.quality_report = await asyncio.to_thread(
-            _assess_in_thread, source_path, markdown, engine_used
+        options.quality_report, probe = await asyncio.to_thread(
+            _assess_in_thread, source_path, markdown, engine_used, options.quality_check
         )
+    if check_tables and probe is not None:
+        from app.core.table_stage import run_table_stage
+
+        if job is not None:
+            job.set_phase("checking", "Checking tables…")
+        # The file is already saved: no job handle, so a late cancel cannot turn
+        # a finished conversion into a cancelled one.
+        async with get_conversion_semaphore(EngineKind.MARKITDOWN):
+            _unchanged, options.table_report = await asyncio.to_thread(
+                run_table_stage, source_path, markdown, probe, repair_allowed=False
+            )
 
 
 async def _convert_explicit(
@@ -384,6 +438,7 @@ def _conversion_payload(options: ConversionOptions, engine_kind: EngineKind) -> 
         engine_used = EngineKind.MARKITDOWN
     decision = getattr(options, "auto_decision", None)
     report = getattr(options, "quality_report", None)
+    tables = getattr(options, "table_report", None)
     return {
         "engine_requested": engine_kind.value,
         "engine_used": engine_used.value,
@@ -391,6 +446,9 @@ def _conversion_payload(options: ConversionOptions, engine_kind: EngineKind) -> 
         "fallback_reason": fallback_reason,
         "auto": decision.to_dict(engine_used) if engine_kind == EngineKind.AUTO and decision else None,
         "quality": report.to_dict() if report is not None else None,
+        # The table check (Auto quality Balanced/Thorough): tables compared with
+        # the PDF, the ones InkDoc rebuilt and where from, and any left wrong.
+        "tables": tables.to_dict() if tables is not None else None,
         # Notes that are not failures, e.g. a GLM-OCR page cut short because the
         # model repeated itself, or GPU acceleration falling back to the CPU.
         "warnings": list(getattr(options, "engine_warnings", None) or []),
@@ -419,6 +477,10 @@ def _markdown_response(markdown_text: str, payload: dict[str, Any]) -> PlainText
         resp.headers["X-Quality-Warning"] = str(bool(quality.get("warning"))).lower()
         if quality.get("missing_pct") is not None:
             resp.headers["X-Quality-Missing-Pct"] = str(quality["missing_pct"])
+    tables = payload.get("tables")
+    if tables and tables.get("checked"):
+        resp.headers["X-Tables-Rebuilt"] = str(sum(r.get("tables", 0) for r in tables.get("repaired", [])))
+        resp.headers["X-Tables-Warning"] = str(bool(tables.get("warning"))).lower()
     return resp
 
 
@@ -496,11 +558,17 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         logger.warning("Add-on settings reconciliation failed: %s", exc)
     yield
     _shutdown_engine_processes()
+    try:
+        # It waits for the pdfium lock: off the event loop.
+        await asyncio.to_thread(_remove_preview_files, _take_stale_previews(time.monotonic(), keep=0))
+    except Exception as exc:
+        logger.debug("Preview cleanup: %s", exc)
 
 
 def _shutdown_engine_processes() -> None:
-    """Stop llama-server and the Docling worker when the server stops (window
-    closed, Ctrl+C in --headless). Only instances that exist are touched."""
+    """Stop llama-server, the Docling worker and the MarkItDown worker when the
+    server stops (window closed, Ctrl+C in --headless). Only instances that
+    exist are touched."""
     try:
         from app.core.engines.glm_ocr_server import GlmOcrServer
 
@@ -517,6 +585,14 @@ def _shutdown_engine_processes() -> None:
             client.shutdown()
     except Exception as exc:
         logger.debug("Docling worker shutdown: %s", exc)
+    try:
+        from app.core.engines.markitdown_worker_client import MarkItDownWorker
+
+        worker = MarkItDownWorker._instance
+        if worker is not None:
+            worker.shutdown()
+    except Exception as exc:
+        logger.debug("MarkItDown worker shutdown: %s", exc)
 
 
 app = FastAPI(
@@ -694,6 +770,20 @@ CHECK_QUALITY_DESCRIPTION = (
     "Run the missing-text check on PDFs (overrides the user's setting for this request). "
     "Omit to use the setting."
 )
+AUTO_QUALITY_DESCRIPTION = (
+    "'fast', 'balanced' or 'thorough' (overrides the user's 'Auto quality' setting for this "
+    "request; omit to use it). Balanced and Thorough check a PDF's tables against the PDF and "
+    "report them in `tables`; with engine=auto, tables an engine got wrong are replaced by the "
+    "PDF's own, each marked with a comment. Thorough also lets Auto split mixed PDFs by page "
+    "and read hard tables with GLM-OCR."
+)
+AutoQuality = Literal["fast", "balanced", "thorough"]
+TableDetail = Literal["normal", "high"]
+TABLE_DETAIL_DESCRIPTION = (
+    "'high' reads the tables a Thorough conversion found too dense for normal detail whole, at "
+    "their full size (slower, more memory; only when tables.high_detail offered it). Default 'normal'."
+)
+PassName = Literal[PASS_NAMES]  # the steps of app/core/thorough_passes.py
 JOB_ID_DESCRIPTION = (
     "Optional client-generated id (8-100 chars of letters, digits, - _ . :) for "
     "GET /convert/progress/{job_id} and POST /convert/cancel/{job_id}"
@@ -717,6 +807,8 @@ class UrlConvertRequest(BaseModel):
         description=ENGINE_PARAM_DESCRIPTION,
     )
     check_quality: bool | None = Field(default=None, description=CHECK_QUALITY_DESCRIPTION)
+    auto_quality: AutoQuality | None = Field(default=None, description=AUTO_QUALITY_DESCRIPTION)
+    table_detail: TableDetail | None = Field(default=None, description=TABLE_DETAIL_DESCRIPTION)
     job_id: str | None = Field(default=None, description=JOB_ID_DESCRIPTION)
 
 
@@ -750,6 +842,23 @@ class SettingsPayload(BaseModel):
             "of it is missing. Read-only; never changes the saved file."
         ),
     )
+    auto_quality: AutoQuality | None = Field(
+        default=None,
+        description=(
+            "'fast' (the default: convert as before), 'balanced' (check PDF tables against "
+            "the PDF; Auto replaces the ones an engine got wrong) or 'thorough' (also page "
+            "splitting and GLM-OCR table reading in Auto)."
+        ),
+    )
+    thorough_passes_off: list[PassName] | None = Field(
+        default=None,
+        max_length=len(PASS_NAMES),
+        description=(
+            "Steps of Balanced and Thorough not to run, by name (default: none). GET /settings "
+            "lists every step in `thorough_passes`; `tables.passes` in a conversion says what "
+            "each did."
+        ),
+    )
     glm_ocr_download_source: str | None = Field(
         default=None,
         description=(
@@ -778,11 +887,57 @@ class SettingsPayload(BaseModel):
             "bundled KaTeX (default true). Never changes saved files or API output."
         ),
     )
+    theme: Literal["dark", "light"] | None = Field(
+        default=None,
+        description="Interface theme: 'dark' (the default) or 'light'. Applied before first paint.",
+    )
+    preferred_engine: Literal["auto", "markitdown", "docling", "markit", "glm_ocr"] | None = Field(
+        default=None,
+        description=(
+            "The engine selected on the main screen (default 'auto'). While it is not "
+            "usable, the page uses Auto for the session and keeps this choice."
+        ),
+    )
+    hidden_engines: list[Literal["markitdown", "docling", "markit", "glm_ocr"]] | None = Field(
+        default=None,
+        max_length=len(HIDEABLE_ENGINES),
+        description=(
+            "Engines whose button is hidden on the main screen. Hiding never uninstalls "
+            "an engine, and Auto and explicit API requests ignore this list."
+        ),
+    )
+    auto_save: bool | None = Field(
+        default=None,
+        description=(
+            "The Auto-save switch (default false). The page sends it with each conversion "
+            "as save_to_downloads; the conversion endpoints never read this setting."
+        ),
+    )
+    auto_hint_hidden: bool | None = Field(
+        default=None,
+        description="\"Don't show again\" on Auto's install tip.",
+    )
+    legacy_prefs_imported: bool | None = Field(
+        default=None,
+        description=(
+            "Set by the page once preferences kept in browser storage by InkDoc 1.2 and "
+            "earlier have been moved into settings.json."
+        ),
+    )
 
 
-# Resource and DoS protection limits
-MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024  # 100 MB per file limit
+# Resource and DoS protection limits. There is no per-file size limit: Starlette
+# has already spooled the whole upload to disk before a handler runs, so refusing
+# a large file saved nothing and only threw the upload away. The page warns about
+# large files instead (LARGE_FILE_BYTES in app.js); what is refused is a copy the
+# temp disk can't hold.
 MAX_BATCH_FILES = 50                     # Maximum files per batch request
+DISK_FULL_DETAIL = "Not enough free disk space to convert this file. Free some space and try again."
+# A large upload (over 100 MB, the size the page warns about) is only copied when
+# that leaves this much free on the temp disk, so other programs aren't starved.
+# Smaller files only need room for the copy, as before.
+LARGE_UPLOAD_BYTES = 100 * 1024 * 1024
+LARGE_UPLOAD_FREE_SPACE_BYTES = 1024 * 1024 * 1024
 
 # MarkItDown plugin permissions (disabled by default to prevent arbitrary Python code execution)
 ALLOW_PLUGINS = os.environ.get("INKDOC_ALLOW_PLUGINS", "").lower() in ("1", "true")
@@ -798,6 +953,30 @@ def _check_plugin_permission(enable_plugins: bool) -> None:
                 "Set environment variable INKDOC_ALLOW_PLUGINS=1 to enable."
             ),
         )
+
+
+SAVE_PAGE_IN_BROWSER = (
+    "Open the page in your browser, print it to PDF (or save it as \"Webpage, Complete\"), "
+    "then drop that file into InkDoc."
+)
+
+
+def url_fetch_failure(exc: Exception) -> str:
+    """Why a URL couldn't be fetched, in words for the user.
+
+    A site that refuses the request (UrlBlockedError) gets a sentence saying so
+    and how to get the page anyway, through the user's own browser; InkDoc
+    never retries or disguises the request. Any other failure is worded as before.
+    """
+    if not isinstance(exc, UrlBlockedError):
+        return str(exc)
+    if exc.challenge:
+        return f"This site blocks automated downloads, so InkDoc can't fetch this page. {SAVE_PAGE_IN_BROWSER}"
+    if exc.status == 429:
+        return "The site is limiting requests (HTTP 429). Try again in a few minutes."
+    if exc.status == 401:
+        return f"This page needs you to sign in (HTTP 401), so InkDoc can't fetch it. {SAVE_PAGE_IN_BROWSER}"
+    return f"The site refused access to this page (HTTP {exc.status}), so InkDoc can't fetch it. {SAVE_PAGE_IN_BROWSER}"
 
 
 def sanitize_conversion_error(exc: Exception, context_name: str = "document") -> str:
@@ -836,70 +1015,130 @@ def sanitize_conversion_error(exc: Exception, context_name: str = "document") ->
     return f"Conversion failed: {clean_msg}"
 
 
+def _disk_full_exception(detail: str = DISK_FULL_DETAIL) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_507_INSUFFICIENT_STORAGE, detail=detail)
+
+
 async def _save_upload_to_temp(file: UploadFile, ext: str) -> str:
-    """Stream an uploaded file to a temporary file while strictly validating size limits."""
+    """Stream an uploaded file to a temporary file. Any size is accepted.
+
+    Raises a 507 HTTPException when the temp disk can't hold the copy: up front
+    when the upload is larger than the free space (so a huge file fails at once,
+    not after writing gigabytes), or when a large upload would leave less than
+    LARGE_UPLOAD_FREE_SPACE_BYTES free; and on a disk-full error during the copy.
+    """
     # Sanitize extension to prevent extension-spoofing or traversal
     safe_ext = re.sub(r"[^a-zA-Z0-9_\.]", "", ext)[:10] if ext else ""
 
+    size = getattr(file, "size", None)
+    if size:
+        try:
+            free = shutil.disk_usage(tempfile.gettempdir()).free
+        except OSError:
+            free = None
+        if free is not None and size > free:
+            raise _disk_full_exception()
+        if free is not None and size > LARGE_UPLOAD_BYTES and free - size < LARGE_UPLOAD_FREE_SPACE_BYTES:
+            raise _disk_full_exception(
+                "Not enough free disk space for a file this large: converting it would leave "
+                "less than 1 GB free. Free some space and try again."
+            )
+
     with tempfile.NamedTemporaryFile(delete=False, suffix=safe_ext) as tmp:
         tmp_path = tmp.name
-        bytes_written = 0
-        chunk_size = 64 * 1024  # 64 KB chunks
+        chunk_size = 1024 * 1024  # 1 MB chunks
 
         try:
             while True:
                 chunk = await file.read(chunk_size)
                 if not chunk:
                     break
-                bytes_written += len(chunk)
-                if bytes_written > MAX_FILE_SIZE_BYTES:
-                    raise HTTPException(
-                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                        detail=f"File exceeds maximum allowed size of {MAX_FILE_SIZE_BYTES // (1024 * 1024)} MB.",
-                    )
                 tmp.write(chunk)
-        except Exception:
+            tmp.flush()
+        except Exception as exc:
+            tmp.close()
             if os.path.exists(tmp_path):
                 try:
                     os.remove(tmp_path)
                 except OSError:
                     pass
+            if isinstance(exc, OSError) and exc.errno == errno.ENOSPC:
+                raise _disk_full_exception() from exc
             raise
     return tmp_path
 
 
-def _initial_layout_width() -> str:
+def _initial_layout_width(settings: dict[str, Any]) -> str:
     """The saved layout width, or "standard" for anything unexpected.
 
     It is written into a script on the page, so only one of the known values
     may ever come out of here, whatever a hand-edited settings.json holds.
     """
-    try:
-        value = EngineManager.get_instance().get_settings().get("layout_width")
-    except Exception:
-        return "standard"
+    value = settings.get("layout_width")
     return value if value in LAYOUT_WIDTHS else "standard"
 
 
-def _initial_preview_text_size() -> int:
+def _initial_preview_text_size(settings: dict[str, Any]) -> int:
     """The saved preview text size, or 100 for anything unexpected (see above)."""
-    try:
-        value = EngineManager.get_instance().get_settings().get("preview_text_size")
-    except Exception:
-        return 100
+    value = settings.get("preview_text_size")
     # bool is an int in Python; True must not pass for 1.
     if isinstance(value, bool) or value not in PREVIEW_TEXT_SIZES:
         return 100
     return int(value)
 
 
-def _initial_render_math() -> str:
+def _initial_render_math(settings: dict[str, Any]) -> str:
     """'off' only when math rendering was switched off; anything else is 'on'."""
+    return "off" if settings.get("render_math") is False else "on"
+
+
+# The keys of window.__INKDOC_PREFS__: the saved preferences app.js needs at
+# startup that are not a data-* attribute on <html>.
+_PAGE_PREFS = ("preferred_engine", "auto_save", "auto_hint_hidden", "legacy_prefs_imported")
+
+
+def _script_json(value: Any) -> str:
+    """JSON that is safe inside an inline <script>.
+
+    The values written today are all from fixed sets, so this changes nothing;
+    it keeps a future free-text preference from closing the script (the one
+    that holds the session token) or breaking it with a line separator.
+    """
+    # ensure_ascii (json.dumps' default) already writes U+2028 and U+2029 as
+    # \u escapes, so only "<" (as in </script>) needs replacing.
+    return json.dumps(value, separators=(",", ":")).replace("<", "\\u003c")
+
+
+def _initial_page_state() -> str:
+    """Script statements that put the saved settings on the page before first paint.
+
+    One read of the in-memory settings per page load. Every value written is
+    one of a fixed set, never text copied from settings.json.
+    """
     try:
-        value = EngineManager.get_instance().get_settings().get("render_math")
+        settings = EngineManager.get_instance().get_settings()
     except Exception:
-        return "on"
-    return "off" if value is False else "on"
+        settings = {}
+    ui = sanitize_ui_preferences(settings)
+    prefs = _script_json({key: ui[key] for key in _PAGE_PREFS})
+    root = "document.documentElement.dataset"
+    script = (
+        f"{root}.layoutWidth = '{_initial_layout_width(settings)}';"
+        f"{root}.textSize = '{_initial_preview_text_size(settings)}';"
+        f"{root}.renderMath = '{_initial_render_math(settings)}';"
+        f"{root}.theme = '{ui['theme']}';"
+        f"{root}.hiddenEngines = '{' '.join(ui['hidden_engines'])}';"
+        f"window.__INKDOC_PREFS__ = {prefs};"
+    )
+    if not ui["legacy_prefs_imported"]:
+        # Until app.js moves it into settings.json (once), a theme chosen in
+        # InkDoc 1.2 or earlier is still in this browser's storage. Read it here
+        # as well, so that one page load is painted in the right theme too.
+        script += (
+            "try{var t=localStorage.getItem('inkdoc-theme')||localStorage.getItem('markitdown-theme');"
+            f"if(t==='light'||t==='dark'){root}.theme=t;}}catch(e){{}}"
+        )
+    return script
 
 
 def _serve_bench_html() -> HTMLResponse:
@@ -923,19 +1162,14 @@ def _serve_bench_html() -> HTMLResponse:
             if custom_titlebar
             else ""
         )
-        # The layout width and preview text size likewise, or the page would
-        # render at the defaults and then jump.
-        layout_width = _initial_layout_width()
-        text_size = _initial_preview_text_size()
-        render_math = _initial_render_math()
+        # The saved settings likewise (theme, layout width, text size, hidden
+        # engines...), or the page would render at the defaults and then jump.
         token_injection = (
             f'<script id="inkdoc-session-token" nonce="{nonce}">'
             f'window.__INKDOC_SESSION_TOKEN__ = "{SESSION_TOKEN}";'
             f'window.__INKDOC_CUSTOM_TITLEBAR__ = {"true" if custom_titlebar else "false"};'
             f'{titlebar_class}'
-            f"document.documentElement.dataset.layoutWidth = '{layout_width}';"
-            f"document.documentElement.dataset.textSize = '{text_size}';"
-            f"document.documentElement.dataset.renderMath = '{render_math}';"
+            f'{_initial_page_state()}'
             f'</script>'
         )
         if "<head>" in html_content:
@@ -943,21 +1177,27 @@ def _serve_bench_html() -> HTMLResponse:
         elif "</head>" in html_content:
             html_content = html_content.replace("</head>", f"  {token_injection}\n</head>", 1)
 
-        csp_policy = (
-            "default-src 'self'; "
-            f"script-src 'self' 'nonce-{nonce}'; "
-            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-            "font-src 'self' https://fonts.gstatic.com data:; "
-            "img-src 'self' data: blob: https:; "
-            "connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; "
-            "frame-ancestors 'none'; "
-            "base-uri 'self'; "
-            "form-action 'self';"
-        )
         response = HTMLResponse(html_content)
-        response.headers["Content-Security-Policy"] = csp_policy
+        response.headers["Content-Security-Policy"] = page_csp(nonce)
         return response
     raise HTTPException(status_code=404, detail="Web UI static files not found.")
+
+
+def page_csp(nonce: str) -> str:
+    """The page's Content-Security-Policy. Scripts only from InkDoc and the nonce, never
+    eval: app/desktop/webview_bridge.py makes pywebview work without it, and
+    `--selftest-bridge` checks that under this exact policy."""
+    return (
+        "default-src 'self'; "
+        f"script-src 'self' 'nonce-{nonce}'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com data:; "
+        "img-src 'self' data: blob: https:; "
+        "connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; "
+        "frame-ancestors 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self';"
+    )
 
 
 @app.get("/InkDoc", tags=["Web UI"], response_class=HTMLResponse)
@@ -1333,6 +1573,8 @@ def get_settings():
     # The folder auto-save writes to now. Read-only here: it is chosen in the
     # desktop app's folder dialog, never through POST /settings.
     settings["save_folder"] = folder_state()
+    # The steps of Balanced and Thorough, for their switches (read-only).
+    settings["thorough_passes"] = catalogue()
     return settings
 
 
@@ -1363,7 +1605,45 @@ def update_settings(payload: SettingsPayload, request: Request):
                 ),
             )
 
-    return EngineManager.get_instance().update_settings(updates)
+    if "hidden_engines" in updates:
+        # One entry per engine, in a fixed order, whatever order the page sent.
+        updates["hidden_engines"] = [
+            name for name in HIDEABLE_ENGINES if name in updates["hidden_engines"]
+        ]
+    if "thorough_passes_off" in updates:
+        updates["thorough_passes_off"] = list(known_names(updates["thorough_passes_off"]))
+
+    try:
+        return EngineManager.get_instance().update_settings(updates, strict=True)
+    except SettingsWriteError as exc:
+        raise _settings_write_failed() from exc
+
+
+def _settings_write_failed() -> HTTPException:
+    # The cause (and the file's path) is in the server log; the page only needs
+    # to say that the change won't survive a restart.
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="InkDoc couldn't write its settings file, so this change will be lost when InkDoc restarts.",
+    )
+
+
+@api_router.post("/settings/reset", tags=["Settings"])
+def reset_settings(request: Request):
+    """Restore the default preferences. Requires session token.
+
+    Resets the theme, the engine choice and which engines are hidden, auto-save,
+    Auto's tip, the Docling fallback, the PDF check, Auto quality and its steps,
+    layout width, text size, math formulas and the daily update check. Keeps
+    installed engines and add-ons and their setup, the save folder, and every
+    file. Returns the same body as GET /settings.
+    """
+    require_session_token(request)
+    try:
+        EngineManager.get_instance().reset_preferences()
+    except SettingsWriteError as exc:
+        raise _settings_write_failed() from exc
+    return get_settings()
 
 
 # ─── Update Management Endpoints ──────────────────────────────────────────────
@@ -1500,6 +1780,8 @@ async def convert_file(
         description="Output format: 'text' returns raw Markdown; 'json' returns JSON metadata and content",
     ),
     check_quality: bool | None = Query(None, description=CHECK_QUALITY_DESCRIPTION),
+    auto_quality: AutoQuality | None = Query(None, description=AUTO_QUALITY_DESCRIPTION),
+    table_detail: TableDetail | None = Query(None, description=TABLE_DETAIL_DESCRIPTION),
     job_id: str | None = Query(None, description=JOB_ID_DESCRIPTION),
 ):
     """Convert an uploaded file (PDF, DOCX, XLSX, PPTX, Images, Audio, HTML, etc.) to Markdown."""
@@ -1512,7 +1794,13 @@ async def convert_file(
     _guard_engine_availability(engine_kind)
     job = _start_job(job_id)
 
-    tmp_path = await _save_upload_to_temp(file, ext)
+    try:
+        tmp_path = await _save_upload_to_temp(file, ext)
+    except HTTPException:
+        # Disk full: end the job now, as /convert/batch does, so its progress
+        # doesn't report a conversion running until the registry expires it.
+        job.finish("error")
+        raise
     try:
         item = QueueItem(
             source=tmp_path,
@@ -1525,6 +1813,7 @@ async def convert_file(
             keep_data_uris=keep_data_uris,
             engine=engine_kind,
             quality_check=_quality_check_enabled(check_quality),
+            **_auto_quality_options(auto_quality, table_detail),
             **_docling_enrichment_options(engine_kind),
         )
         if engine_kind == EngineKind.AUTO:
@@ -1622,6 +1911,7 @@ async def convert_url(
             keep_data_uris=payload.keep_data_uris,
             engine=engine_kind,
             quality_check=_quality_check_enabled(payload.check_quality),
+            **_auto_quality_options(payload.auto_quality, payload.table_detail),
             **_docling_enrichment_options(engine_kind),
         )
         # Fetched first, in a thread but outside any lane: the fetch has its own
@@ -1632,6 +1922,8 @@ async def convert_url(
         job.set_phase("fetching", "Downloading…")
         fetched = await asyncio.to_thread(open_url_source, item)
         job.raise_if_cancelled()
+        if fetched.notes:
+            options.engine_warnings = [*options.engine_warnings, *fetched.notes]
 
         if engine_kind == EngineKind.AUTO:
             markdown_text, saved_path_str = await _convert_auto(
@@ -1686,15 +1978,19 @@ async def convert_url(
         job.finish("error")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"URL fetch failed: {exc}",
+            detail=f"URL fetch failed: {url_fetch_failure(exc)}",
         ) from exc
     except Exception as exc:
         from app.core.jobs import ConversionCancelledError
+        from app.core.web_shell import JavaScriptPageError
 
         if isinstance(exc, ConversionCancelledError):
             job.finish("cancelled")
             raise _cancelled_exception() from exc
         job.finish("error")
+        if isinstance(exc, JavaScriptPageError):
+            # Not a failure of InkDoc's: the page needs a browser. Said as worded.
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
         logger.exception("URL conversion failed for '%s': %s", url, exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1714,6 +2010,7 @@ async def convert_batch(
     enable_plugins: bool = Query(False, description="Enable MarkItDown plugins"),
     engine: str = Query("markitdown", description=ENGINE_PARAM_DESCRIPTION),
     check_quality: bool | None = Query(None, description=CHECK_QUALITY_DESCRIPTION),
+    auto_quality: AutoQuality | None = Query(None, description=AUTO_QUALITY_DESCRIPTION),
     job_id: str | None = Query(
         None,
         description=JOB_ID_DESCRIPTION + "; each file reports under '<job_id>-<index>' (0-based)",
@@ -1738,6 +2035,7 @@ async def convert_batch(
         enable_plugins=enable_plugins,
         engine=engine_kind,
         quality_check=_quality_check_enabled(check_quality),
+        **_auto_quality_options(auto_quality),
         **_docling_enrichment_options(engine_kind),
     )
 
@@ -1829,6 +2127,155 @@ async def convert_estimate(
                 pass
 
 
+# ─── The original pages, for the preview ──────────────────────────────────
+# The preview's "Original" view shows a PDF's pages as images drawn here with
+# pdfium, so the page needs no PDF viewer and its policy allows no frames: every
+# window (WebView2, WebKit on macOS and Linux) and browser shows the same thing.
+# The page uploads the PDF once and asks for each page as it scrolls into view.
+SOURCE_PREVIEW_MAX = 8            # PDFs kept at once; the least recently used goes first
+SOURCE_PREVIEW_IDLE_S = 30 * 60   # a PDF not looked at for this long is removed
+
+
+@dataclasses.dataclass
+class _SourcePreview:
+    path: str
+    pages: int
+    used: float
+
+
+_source_previews: dict[str, _SourcePreview] = {}
+_source_previews_lock = threading.Lock()
+
+
+def _take_stale_previews(now: float, keep: int | None = None) -> list[str]:
+    """Drop idle previews, and the least recently used beyond `keep` (SOURCE_PREVIEW_MAX);
+    return their files."""
+    keep = SOURCE_PREVIEW_MAX if keep is None else keep
+    with _source_previews_lock:
+        stale = [pid for pid, p in _source_previews.items() if now - p.used > SOURCE_PREVIEW_IDLE_S]
+        by_use = sorted((p.used, pid) for pid, p in _source_previews.items() if pid not in stale)
+        stale += [pid for _, pid in by_use[: max(0, len(by_use) - keep)]]
+        return [_source_previews.pop(pid).path for pid in stale]
+
+
+def _remove_preview_files(paths: list[str]) -> None:
+    """Delete preview copies. Blocking: run it in a thread.
+
+    Done under the pdfium lock, so none of them has a page being drawn: Windows
+    refuses to delete an open file.
+    """
+    if not paths:
+        return
+    from app.core.pdf_probe import pdfium_lock
+
+    with pdfium_lock():
+        for path in paths:
+            try:
+                os.remove(path)
+            except OSError as exc:
+                logger.debug("Could not remove preview copy %s: %s", os.path.basename(path), exc)
+
+
+@api_router.post("/preview/pdf", tags=["Preview"])
+async def preview_pdf_open(
+    request: Request,
+    file: UploadFile = File(..., description="The PDF to show next to its result"),
+):
+    """Keep a PDF for the preview's Original view. Requires session token. Converts nothing.
+
+    Returns its `id` and each page's `[width, height]` in points, so the page can
+    lay out every page before drawing any. Kept until `DELETE /preview/pdf/{id}`,
+    30 minutes without use, or eight newer PDFs.
+    """
+    require_session_token(request)
+    tmp_path = await _save_upload_to_temp(file, ".pdf")
+    try:
+        with open(tmp_path, "rb") as fh:
+            if b"%PDF-" not in fh.read(1024):
+                raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="This file is not a PDF.")
+        from app.core.pdf_pages import page_sizes
+
+        async with get_probe_semaphore():
+            sizes = await asyncio.to_thread(page_sizes, tmp_path)
+    except Exception as exc:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        if isinstance(exc, HTTPException):
+            raise
+        detail = (
+            "This PDF is password-protected, so its pages can't be shown."
+            if "password" in str(exc).lower()
+            else "This PDF's pages can't be shown: it could not be opened."
+        )
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail) from exc
+    except BaseException:
+        # The page gave up on it (the request was cancelled, maybe while its pages were
+        # being counted): delete it once pdfium is done with it, without waiting here.
+        threading.Thread(target=_remove_preview_files, args=([tmp_path],), daemon=True).start()
+        raise
+
+    preview_id = secrets.token_urlsafe(16)
+    now = time.monotonic()
+    with _source_previews_lock:
+        _source_previews[preview_id] = _SourcePreview(tmp_path, len(sizes), now)
+    await asyncio.to_thread(_remove_preview_files, _take_stale_previews(now))
+    return {"id": preview_id, "pages": [[round(w, 2), round(h, 2)] for w, h in sizes]}
+
+
+@api_router.get("/preview/pdf/{preview_id}/page/{page}", tags=["Preview"])
+async def preview_pdf_page(
+    request: Request,
+    preview_id: str,
+    page: int,
+    width: int = Query(1200, ge=1, le=10000, description="Wanted width in pixels (drawn at 200-2400)"),
+):
+    """One page of a kept PDF as a PNG. Requires session token.
+
+    `404` once the PDF is no longer kept: the page uploads it again.
+    """
+    require_session_token(request)
+    now = time.monotonic()
+    with _source_previews_lock:
+        entry = _source_previews.get(preview_id)
+        if entry is not None:
+            entry.used = now
+    if entry is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="This PDF is no longer kept for the preview.")
+    if not 1 <= page <= entry.pages:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"This PDF has no page {page}.")
+
+    from app.core.pdf_pages import render_page_png
+
+    async with get_probe_semaphore():
+        # A page scrolled past while it waited is not drawn.
+        if await request.is_disconnected():
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+        try:
+            png = await asyncio.to_thread(render_page_png, entry.path, page, width)
+        except Exception as exc:
+            with _source_previews_lock:
+                gone = preview_id not in _source_previews
+            if gone:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="This PDF is no longer kept for the preview.") from exc
+            logger.warning("Preview page %d could not be drawn: %s", page, exc)
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Page {page} could not be drawn.") from exc
+    await asyncio.to_thread(_remove_preview_files, _take_stale_previews(now))
+    return Response(content=png, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+
+@api_router.delete("/preview/pdf/{preview_id}", tags=["Preview"])
+async def preview_pdf_close(request: Request, preview_id: str):
+    """Forget a kept PDF and delete its copy. Requires session token. Harmless to repeat."""
+    require_session_token(request)
+    with _source_previews_lock:
+        entry = _source_previews.pop(preview_id, None)
+    if entry is not None:
+        await asyncio.to_thread(_remove_preview_files, [entry.path])
+    return {"status": "closed" if entry is not None else "not_open"}
+
+
 @api_router.get("/convert/progress/{job_id}", tags=["Conversion"])
 def conversion_progress(job_id: str):
     """Current phase of a conversion started with `job_id` (kept for one hour).
@@ -1857,6 +2304,22 @@ def cancel_conversion(job_id: str):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid job_id.")
     running = JOBS.cancel(job_id)
     return {"status": "cancelling" if running else "not_running", "job_id": job_id}
+
+
+@api_router.post("/convert/warmup", tags=["Conversion"])
+def warmup_conversion(request: Request):
+    """Start the MarkItDown worker ahead of a conversion. Requires session token.
+
+    The UI sends this when a conversion looks imminent (a file dragged over the
+    window, the file picker opened, the URL box focused), so the worker is warm
+    by the time the file arrives. Returns at once; calling it again is harmless.
+    `status` is `ready`, `starting` or `unavailable` (conversions then run in
+    InkDoc's own process).
+    """
+    require_session_token(request)
+    from app.core.engines.markitdown_worker_client import MarkItDownWorker
+
+    return {"status": MarkItDownWorker.get_instance().warm()}
 
 
 # Mount API routes at root, /InkDoc, and /MarkItDown (alias)

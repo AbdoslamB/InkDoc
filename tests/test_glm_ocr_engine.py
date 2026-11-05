@@ -33,19 +33,23 @@ class FakeServer:
         self.replies = list(replies or [])
         self.finish = finish
         self.calls: list[dict] = []
+        self.contexts: list[int] = []
         self.running = True
         self.before_call = None
 
     def is_running(self):
         return self.running
 
-    def ocr(self, data_uri, prompt, max_tokens, *, repeat_penalty=None):
+    def use_context(self, ctx_size):
+        self.contexts.append(ctx_size)
+
+    def ocr(self, data_uri, prompt, max_tokens, *, repeat_penalty=None, area=False, timeout_s=None):
         if self.before_call:
             self.before_call(len(self.calls))
         png = base64.b64decode(data_uri.split(",", 1)[1])
         img = Image.open(io.BytesIO(png))
         img.load()
-        self.calls.append({"prompt": prompt, "max_tokens": max_tokens, "repeat_penalty": repeat_penalty,
+        self.calls.append({"prompt": prompt, "max_tokens": max_tokens, "repeat_penalty": repeat_penalty, "area": area, "timeout_s": timeout_s,
                            "size": img.size, "image": img, "uri_prefix": data_uri[:22]})
         text = self.replies.pop(0) if self.replies else f"Page text {len(self.calls)}"
         return OcrResult(text=text, finish_reason=self.finish, prompt_tokens=0, completion_tokens=10, seconds=0.01)
@@ -206,6 +210,50 @@ def test_length_limit_triggers_the_retry(fake, tmp_path):
     assert len(server.calls) == 2 and opts.engine_warnings
 
 
+def test_a_page_subset_reads_only_those_pages_and_keeps_their_numbers(fake, tmp_path):
+    # Auto's page split: pages 2 and 4 of a five-page PDF.
+    server, _ = fake
+    loop = "Header\n" + "same line\n" * 20
+    server.replies = ["second", loop, loop]
+    registry = JobRegistry()
+    job = registry.start("job-subset-1")
+    pdf = write_pdf(tmp_path / "doc.pdf", [prose_page(30, i) for i in range(5)])
+    md, opts = convert(pdf, ConversionOptions(engine=EngineKind.GLM_OCR, job=job, page_subset=[2, 4, 9]))
+    assert len(server.calls) == 3  # page 2, then page 4 twice (the repeat retry); 9 doesn't exist
+    assert md.startswith("second\n\nHeader")
+    assert any(w.startswith("Page 4:") for w in opts.engine_warnings), "the real page number"
+    final = registry.get("job-subset-1")
+    assert final["page"] == 2 and final["pages"] == 2
+
+
+# ─── One table area (the table check's second reading) ───────────────────────
+def test_a_table_area_is_read_with_the_table_prompt(fake, tmp_path):
+    server, _ = fake
+    server.replies = ['<table border="1"><tr><th rowspan="2">Region</th><th colspan="2">Sales</th></tr>'
+                      "<tr><td>Q1</td><td>Q2</td></tr><tr><td>North</td><td>10</td><td>12</td></tr></table>"]
+    pdf = write_pdf(tmp_path / "doc.pdf", [prose_page()])
+    rows = ge.read_table_region(str(pdf), 1, [100, 100, 300, 160])
+    assert server.calls[0]["prompt"] == "Table Recognition:"
+    assert server.calls[0]["area"], "an area's reading has the longer time limit"
+    # InkDoc's rules: the stacked header is flattened, merged cells repeated.
+    assert rows == [["Region", "Sales Q1", "Sales Q2"], ["North", "10", "12"]]
+    # Only the area (plus a small margin) is rendered, at about the render size.
+    width, height = server.calls[0]["size"]
+    assert abs(width / height - (200 + 12) / (60 + 12)) < 0.05
+    assert max(width, height) <= 1600
+
+
+def test_a_looping_or_tableless_answer_is_no_reading(fake, tmp_path):
+    server, _ = fake
+    pdf = write_pdf(tmp_path / "doc.pdf", [prose_page()])
+    server.replies = ["| a | b |\n|---|---|\n" + "| 1 | 2 |\n" * 12]
+    assert ge.read_table_region(str(pdf), 1, [100, 100, 300, 160]) is None
+    server.replies = ["Just some text."]
+    assert ge.read_table_region(str(pdf), 1, [100, 100, 300, 160]) is None
+    server.replies = ["```markdown\n| a | b |\n|---|---|\n| 1 | 2 |\n```"]
+    assert ge.read_table_region(str(pdf), 1, [100, 100, 300, 160]) == [["a", "b"], ["1", "2"]]
+
+
 def test_progress_is_reported_after_each_page(fake, tmp_path):
     server, _ = fake
     registry = JobRegistry()
@@ -279,3 +327,60 @@ def test_cold_first_page_is_not_counted_as_page_speed(fake, tmp_path):
     pdf = write_pdf(tmp_path / "doc.pdf", [prose_page(), prose_page(), prose_page()])
     convert(pdf)
     assert manager.measured and manager.measured[0][1] == 2, "only the two warm pages count"
+
+
+# ─── The model starting a page over ──────────────────────────────────────────
+_ENTRIES = [f"Town number {i}, Daily Gazette of the district" for i in range(1, 13)]
+
+
+def test_a_second_pass_over_the_page_is_dropped_but_its_new_end_kept():
+    first = _ENTRIES[:10]                     # the first pass stops before the last two entries
+    second = _ENTRIES[:3] + ["Town numbr 4, Daily Gazete of the district"] + _ENTRIES[4:]
+    text = "\n".join(["Baden", *first, *second])
+    assert ge.find_repetition_start(text) is not None, "the retry is asked for"
+    assert ge.drop_replay(text) == "\n".join(["Baden", *_ENTRIES[:10], *_ENTRIES[10:]])
+
+
+def test_lines_a_page_repeats_on_purpose_are_not_a_replay():
+    rows = [f"Paper {i} Siehe Anzeige S. 135" for i in range(20)]
+    table = "\n".join(line for row in rows for line in (row, "Siehe Anzeige S. 135"))
+    assert ge.drop_replay(table) == table and ge.find_repetition_start(table) is None
+    short = "\n".join(["Total"] * 30 + _ENTRIES)
+    assert ge.drop_replay(short) == short, "short lines repeat in any document"
+
+
+def test_a_page_read_twice_is_mended_without_asking_again(fake, tmp_path):
+    server, _ = fake
+    server.replies = ["\n".join(["Baden", *_ENTRIES[:10], *_ENTRIES])]
+    png = tmp_path / "p.png"
+    Image.new("RGB", (500, 700), "white").save(png)
+    md, opts = convert(png)
+    assert len(server.calls) == 1, "no retry: the first reading is mended"
+    assert md.strip() == "\n".join(["Baden", *_ENTRIES])
+    assert any("read part of the page twice" in w for w in opts.engine_warnings)
+
+
+# ─── High detail: a dense table read whole ───────────────────────────────────
+def test_a_table_too_long_to_finish_says_so(fake, tmp_path):
+    server, _ = fake
+    server.finish = "length"
+    server.replies = ["<table><tr><td>a</td>"]
+    pdf = write_pdf(tmp_path / "doc.pdf", [prose_page()])
+    reading = ge.read_table_area(str(pdf), 1, [100, 100, 300, 160])
+    assert reading.rows is None and reading.too_large
+    assert ge.read_table_region(str(pdf), 1, [100, 100, 300, 160]) is None, "the old answer stays: no reading"
+    assert server.contexts == [], "normal detail keeps the default context"
+
+
+def test_high_detail_reads_larger_with_room_and_time(fake, tmp_path):
+    from app.core.engines.glm_ocr_server import HIGH_DETAIL_CTX_SIZE, HIGH_DETAIL_TIMEOUT_S
+
+    server, _ = fake
+    server.replies = ["<table><tr><td>Region</td><td>Q1</td></tr><tr><td>North</td><td>10</td></tr></table>"]
+    pdf = write_pdf(tmp_path / "doc.pdf", [prose_page()])
+    reading = ge.read_table_area(str(pdf), 1, [100, 100, 500, 400], detail="high")
+    assert reading.rows == [["Region", "Q1"], ["North", "10"]] and not reading.too_large
+    call = server.calls[0]
+    assert server.contexts == [HIGH_DETAIL_CTX_SIZE, 0], "the larger context only while it reads"
+    assert call["timeout_s"] == HIGH_DETAIL_TIMEOUT_S and call["max_tokens"] > 4096
+    assert max(call["size"]) > 1600, "read larger than a normal reading"
